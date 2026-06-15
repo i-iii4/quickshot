@@ -33,6 +33,16 @@ enum TrayPosition: String {
     }
 }
 
+/// Окно-хост всего трея: ОДНА прозрачная nonactivating-панель на весь экран. Карточки и хаб —
+/// её сабвью. Так стекло рисуется в активном виде (активный вид даёт только key-окно — публичного
+/// способа показать активное стекло в не-key окне нет, подтверждено Apple DevForums), клики по
+/// стеклянным кнопкам диспатчатся штатно, нет флаппинга между панелями и обрезки press-lift.
+/// По прозрачным пикселям borderless-окно пропускает клики в приложения под треем (per-pixel hit),
+/// поэтому полноэкранный хост не перехватывает мышь в пустых областях.
+final class TrayHostPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
 /// Менеджер трея миниатюр. Карточки выкладываются у угла (колонка/ряд), у самого угла —
 /// круглый Liquid Glass хаб со счётчиком. Клик по хабу растворяет карточки в него
 /// (сворачивание) или проявляет обратно (разворачивание). Новый снимок авто-разворачивает.
@@ -44,12 +54,29 @@ final class ThumbnailManager {
     private var anchorScreen: NSScreen?
     private let hub = HubWindow()
 
+    private let host: TrayHostPanel
+    private let hostContent = NSView()
+
     private let defaults = UserDefaults.standard
     private let widthKey = "thumbnailCardWidth"
 
     private(set) var cardWidth: CGFloat = ThumbStyle.defaultWidth
 
     init() {
+        host = TrayHostPanel(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        host.isOpaque = false
+        host.backgroundColor = .clear                 // прозрачный фон → клики сквозь пустоту проходят
+        host.hasShadow = false                        // тень несёт каждая карточка слоем, не окно
+        host.level = .statusBar
+        host.isFloatingPanel = true
+        host.hidesOnDeactivate = false
+        host.becomesKeyOnlyIfNeeded = false           // makeKey должен срабатывать для активного стекла
+        host.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        hostContent.wantsLayer = true
+        host.contentView = hostContent
+        hostContent.addSubview(hub.view)              // хаб — верхний сабвью; карточки кладём под него
+
         let saved = defaults.double(forKey: widthKey)
         if saved > 0 {
             cardWidth = min(ThumbStyle.maxWidth, max(ThumbStyle.minWidth, CGFloat(saved)))
@@ -66,14 +93,38 @@ final class ThumbnailManager {
 
     private var anchorHeight: CGFloat { (anchorScreen ?? NSScreen.main)?.frame.height ?? 900 }
 
+    // MARK: окно-хост (одно key-окно на весь трей)
+
+    /// Подогнать хост под экран привязки: занимает весь frame экрана, координаты сабвью —
+    /// это глобальные минус origin экрана.
+    private func ensureHost(on screen: NSScreen) {
+        anchorScreen = screen
+        if host.frame != screen.frame { host.setFrame(screen.frame, display: true) }
+    }
+
+    /// Глобальная точка экрана → координаты хоста.
+    private func toLocal(_ g: NSPoint) -> NSPoint {
+        NSPoint(x: g.x - host.frame.minX, y: g.y - host.frame.minY)
+    }
+
+    private func showHost() {
+        host.orderFrontRegardless()
+        host.makeKey()                                // одно окно — без флаппинга; стекло активно
+    }
+
+    /// Запрос key у хоста (вызывает карточка на ховере): стеклянные кнопки светлеют без клика.
+    func hostBecomeKey() { if host.isVisible { host.makeKey() } }
+
     // MARK: добавление/удаление
 
     func add(image: CGImage, on screen: NSScreen) {
-        anchorScreen = screen
+        ensureHost(on: screen)
         let t = ThumbnailWindow(image: image, screen: screen, manager: self,
                                 width: cardWidth, screenHeight: screen.frame.height)
         items.append(t)
+        hostContent.addSubview(t.hostView, positioned: .below, relativeTo: hub.view)  // новейшая — поверх старых, под хабом
         for it in items { it.applyWidth(cardWidth, screenHeight: screen.frame.height) }
+        showHost()
         if collapsed { expand() }                 // новый снимок авто-разворачивает трей
         else { layout(animateNewest: true) }      // новейшая карточка влетает scale+fade
     }
@@ -81,7 +132,7 @@ final class ThumbnailManager {
     func remove(_ t: ThumbnailWindow) {
         items.removeAll { $0 === t }
         t.close()
-        layout()
+        if items.isEmpty { host.orderOut(nil) } else { layout() }
     }
 
     /// Копирование НЕ закрывает карточку — только короткий фидбэк.
@@ -110,7 +161,7 @@ final class ThumbnailManager {
         collapsed = true
         positionHub(on: screen)
         for t in items { t.setCollapsed(true) }
-        let c = hub.center
+        let c = hub.center                            // уже в координатах хоста
         let (visible, hidden) = cardLayout(on: screen)
         for t in hidden { t.hide() }
         let n = visible.count
@@ -125,11 +176,11 @@ final class ThumbnailManager {
         collapsed = false
         positionHub(on: screen)
         for t in items { t.setCollapsed(false) }
-        let c = hub.center
+        let c = hub.center                            // уже в координатах хоста
         let (visible, hidden) = cardLayout(on: screen)
         for t in hidden { t.hide() }
         for (i, pair) in visible.enumerated() {        // ближняя (новейшая) выходит первой
-            pair.0.emerge(fromHubCenter: c, toOrigin: pair.1, duration: TrayAnim.collapse, delay: Double(i) * TrayAnim.stagger)
+            pair.0.emerge(fromHubCenter: c, toOrigin: toLocal(pair.1), duration: TrayAnim.collapse, delay: Double(i) * TrayAnim.stagger)
         }
         hub.setState(count: items.count, collapsed: collapsed)
     }
@@ -137,10 +188,10 @@ final class ThumbnailManager {
     // MARK: раскладка (добавление/ресайз/смена положения)
 
     /// Расставить карточки по местам. animateNewest=true — новейшая карточка (i=0 у хаба)
-    /// влетает scale+fade, остальные ставятся мгновенно (иначе fade повторялся бы при
-    /// каждом ресайзе/перемещении трея).
+    /// влетает scale+fade, остальные ставятся мгновенно.
     private func layout(animateNewest: Bool = false) {
         guard let screen = anchorScreen ?? NSScreen.main else { return }
+        ensureHost(on: screen)
         positionHub(on: screen)
         for t in items { t.setCollapsed(collapsed) }
         let (visible, hidden) = cardLayout(on: screen)
@@ -149,14 +200,15 @@ final class ThumbnailManager {
             for (t, _) in visible { t.hide() }
         } else {
             for (i, pair) in visible.enumerated() {
-                if animateNewest && i == 0 { pair.0.appear(at: pair.1) }
-                else { pair.0.placeInstant(origin: pair.1) }
+                let localOrigin = toLocal(pair.1)
+                if animateNewest && i == 0 { pair.0.appear(at: localOrigin) }
+                else { pair.0.placeInstant(origin: localOrigin) }
             }
         }
     }
 
     private func positionHub(on screen: NSScreen) {
-        hub.setOrigin(hubOrigin(on: screen))
+        hub.setOrigin(toLocal(hubOrigin(on: screen)))
         hub.setState(count: items.count, collapsed: collapsed)
         if items.count >= 2 { hub.show() } else { hub.hide() }
     }
@@ -172,7 +224,8 @@ final class ThumbnailManager {
         }
     }
 
-    /// Позиции видимых карточек (новейшая у хаба) + список переполнения (прячем).
+    /// Позиции видимых карточек (новейшая у хаба) + список переполнения (прячем). В ГЛОБАЛЬНЫХ
+    /// координатах экрана; вызывающий конвертирует в координаты хоста через toLocal.
     private func cardLayout(on screen: NSScreen) -> (visible: [(ThumbnailWindow, NSPoint)], hidden: [ThumbnailWindow]) {
         let vf = screen.visibleFrame
         let pos = TrayPosition.current

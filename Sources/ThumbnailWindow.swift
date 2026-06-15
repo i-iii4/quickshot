@@ -13,7 +13,6 @@ private func easeOutBack(_ f: CGFloat) -> CGFloat {        // лёгкий overs
 }
 
 /// Покадровая анимация поверх CADisplayLink (синхронно с дисплеем, корректно на ProMotion).
-/// Нужна, потому что panel.animator().setFrame не двигает borderless .nonactivatingPanel.
 final class FrameAnimator: NSObject {
     private weak var hostView: NSView?
     private var link: CADisplayLink?
@@ -57,15 +56,6 @@ final class FrameAnimator: NSObject {
     deinit { link?.invalidate() }
 }
 
-/// Панель одной миниатюры. Одна санкционированная тень плавающего слоя (hasShadow).
-/// isKeyWindow=true — контролы (стеклянные кнопки) всегда рисуются в активном виде, без
-/// makeKey-флаппинга между панелями. Это только self-report для отрисовки: системное key-окно
-/// и ввод с клавиатуры у активного приложения не трогаются.
-final class ThumbnailPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-    override var isKeyWindow: Bool { true }
-}
-
 private final class PassthroughImageView: NSImageView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
@@ -74,10 +64,9 @@ private final class PassthroughView: NSView {
 }
 
 /// Тело карточки: только сам скриншот, скруглённый на radiusCard, без рамки. Контролы —
-/// нативные Liquid Glass кнопки (NSButton .glass) в верхнем ряду: [Копировать] [развернуть]
-/// [закрыть]. Появляются по ховеру через isHidden (чётко, на полном контрасте). Копирование
-/// только по кнопке, даблклик и кнопка «развернуть» — полный кадр. Жесты: drag-out, ресайз
-/// за левый/правый край. Сворачивание — хабом.
+/// нативные Liquid Glass кнопки (NSButton .glass) в верхнем ряду: [Копировать] [закрыть].
+/// Появляются по ховеру через isHidden (чётко, на полном контрасте). Копирование только по кнопке,
+/// даблклик — полный кадр. Жесты: drag-out, ресайз за левый/правый край. Сворачивание — хабом.
 private final class ThumbnailView: NSView, NSDraggingSource {
 
     static let feedbackHold: TimeInterval = 1.2     // сколько держать галочку «Скопировано»
@@ -113,7 +102,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         self.displayNSImage = nsImage
         super.init(frame: .zero)
 
-        // Карточка = сам скриншот, скруглённый. Без рамки/подложки.
+        // Карточка = сам скриншот, скруглённый. Без рамки/подложки. Тень несёт контейнер снаружи.
         wantsLayer = true
         layer?.cornerRadius = QS.radiusCard
         layer?.masksToBounds = true
@@ -183,8 +172,6 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         fadeGradient.frame = fade.bounds
 
         // Верхний ряд: [Копировать] слева … [закрыть] справа. Размеры — нативные (fittingSize).
-        // Круглая кнопка квадратная rowH×rowH (диаметр из её собственной метрики, не из чужой).
-        // Развернуть на полный кадр — двойным кликом по телу (отдельная кнопка не нужна).
         let inset = QS.s2, gap = QS.s2
         let rowH = ceil(max(copyButton.fittingSize.height, closeButton.fittingSize.height))
         let rowY = height - inset - rowH
@@ -208,7 +195,8 @@ private final class ThumbnailView: NSView, NSDraggingSource {
 
     override func mouseEntered(with event: NSEvent) {
         guard !collapsed else { return }
-        setControlsVisible(true)      // активный вид даёт isKeyWindow=true панели, makeKey не нужен (он ломал reveal)
+        manager?.hostBecomeKey()      // одно key-окно: стеклянные кнопки светлеют на ховере без клика
+        setControlsVisible(true)
     }
     override func mouseExited(with event: NSEvent) { setControlsVisible(false) }
 
@@ -321,17 +309,23 @@ private final class ThumbnailView: NSView, NSDraggingSource {
                          sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
 }
 
-/// Обёртка над панелью. Геометрия по варианту D (CardSizing).
+/// Обёртка над одной карточкой. Раньше держала отдельную панель; теперь это САБВЬЮ общего
+/// окна-хоста трея. `hostView` (контейнер) несёт тень слоем (не клипует), внутри — скруглённая
+/// `ThumbnailView`. Анимации двигают frame/alpha контейнера, а не окна (одно окно на весь трей —
+/// стекло активно, клики диспатчатся, нет флаппинга и обрезки press-lift). Геометрия — вариант D
+/// (CardSizing); все координаты — в системе координат хоста.
 final class ThumbnailWindow {
 
     let image: CGImage
     let screen: NSScreen
     private(set) var cardWidth: CGFloat
     private(set) var cardHeight: CGFloat = 0
-    private let panel: ThumbnailPanel
+    private let container = NSView()
     private let view: ThumbnailView
     private let animator: FrameAnimator
 
+    /// Вью, которую хост добавляет в свою иерархию и двигает.
+    var hostView: NSView { container }
     var cardSize: NSSize { NSSize(width: cardWidth, height: cardHeight) }
 
     init(image: CGImage, screen: NSScreen, manager: ThumbnailManager, width: CGFloat, screenHeight: CGFloat) {
@@ -340,17 +334,18 @@ final class ThumbnailWindow {
         self.cardWidth = width
 
         view = ThumbnailView(image: image)
-        panel = ThumbnailPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: width),
-                               styleMask: [.borderless, .nonactivatingPanel],
-                               backing: .buffered, defer: false)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.level = .statusBar
-        panel.isFloatingPanel = true
-        panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        panel.contentView = view
+
+        // Контейнер несёт тень плавающего слоя (раньше — panel.hasShadow). masksToBounds=false,
+        // чтобы тень не обрезалась; скругление и клип изображения — внутри самой ThumbnailView.
+        container.wantsLayer = true
+        if let l = container.layer {
+            l.masksToBounds = false
+            l.shadowColor = NSColor.black.cgColor
+            l.shadowOpacity = 0.32
+            l.shadowRadius = 11
+            l.shadowOffset = CGSize(width: 0, height: -5)
+        }
+        container.addSubview(view)
         animator = FrameAnimator(hostView: view)
 
         view.owner = self
@@ -365,39 +360,43 @@ final class ThumbnailWindow {
         cardHeight = layout.height
         let display = image.cropping(to: layout.cropRect) ?? image
         view.setDisplay(image: display, cropped: layout.cropped, edge: layout.cropEdge)
-        panel.setContentSize(cardSize)
+        container.setFrameSize(cardSize)
         view.layoutCard(width: cardWidth, height: cardHeight)
-        panel.invalidateShadow()
+        container.layer?.shadowPath = CGPath(roundedRect: view.bounds,
+                                             cornerWidth: QS.radiusCard, cornerHeight: QS.radiusCard,
+                                             transform: nil)
     }
 
     func setCollapsed(_ b: Bool) { view.collapsed = b }
     func flashCopied() { view.flashCopied() }
 
-    // MARK: анимация (CADisplayLink + кривые с оседанием)
+    // MARK: анимация (CADisplayLink + кривые с оседанием) — двигаем контейнер-сабвью
 
     private func animate(toFrame target: NSRect, toAlpha targetAlpha: CGFloat,
                          duration: Double, delay: Double,
                          easing: @escaping (CGFloat) -> CGFloat = easeOutCubic,
                          completion: (() -> Void)? = nil) {
-        let startFrame = panel.frame
-        let startAlpha = panel.alphaValue
+        let startFrame = container.frame
+        let startAlpha = container.alphaValue
         animator.run(duration: duration, delay: delay, easing: easing, onFrame: { [weak self] e in
             guard let self else { return }
             let fr = NSRect(x: startFrame.minX + (target.minX - startFrame.minX) * e,
                             y: startFrame.minY + (target.minY - startFrame.minY) * e,
                             width: startFrame.width + (target.width - startFrame.width) * e,
                             height: startFrame.height + (target.height - startFrame.height) * e)
-            self.panel.setFrame(fr, display: true)
-            self.panel.alphaValue = max(0, min(1, startAlpha + (targetAlpha - startAlpha) * e))
+            self.container.frame = fr
+            self.view.frame = self.container.bounds
+            self.container.alphaValue = max(0, min(1, startAlpha + (targetAlpha - startAlpha) * e))
         }, onDone: completion)
     }
 
     /// Мгновенно поставить карточку на место (alpha 1).
     func placeInstant(origin: NSPoint) {
         animator.cancel()
-        panel.setFrame(NSRect(origin: origin, size: cardSize), display: true)
-        panel.alphaValue = 1
-        panel.orderFrontRegardless()
+        container.frame = NSRect(origin: origin, size: cardSize)
+        view.frame = container.bounds
+        container.alphaValue = 1
+        container.isHidden = false
     }
 
     /// Влёт новой карточки: scale (0.92 → 1) + fade, с лёгким оседанием.
@@ -406,9 +405,10 @@ final class ThumbnailWindow {
         let final = NSRect(origin: origin, size: cardSize)
         let startSize = NSSize(width: cardSize.width * 0.92, height: cardSize.height * 0.92)
         let startOrigin = NSPoint(x: final.midX - startSize.width / 2, y: final.midY - startSize.height / 2)
-        panel.setFrame(NSRect(origin: startOrigin, size: startSize), display: true)
-        panel.alphaValue = 0
-        panel.orderFrontRegardless()
+        container.frame = NSRect(origin: startOrigin, size: startSize)
+        view.frame = container.bounds
+        container.alphaValue = 0
+        container.isHidden = false
         animate(toFrame: final, toAlpha: 1, duration: 0.32, delay: 0, easing: easeOutBack)
     }
 
@@ -416,20 +416,20 @@ final class ThumbnailWindow {
     func dissolve(toHubCenter c: NSPoint, duration: Double, delay: Double) {
         let tiny = NSRect(x: c.x - 5, y: c.y - 5, width: 10, height: 10)
         animate(toFrame: tiny, toAlpha: 0, duration: duration, delay: delay, easing: easeInOutCubic) { [weak self] in
-            self?.panel.orderOut(nil)
+            self?.container.isHidden = true
         }
     }
 
     /// Развернуть: появиться из точки хаба на своё место с оседанием.
     func emerge(fromHubCenter c: NSPoint, toOrigin o: NSPoint, duration: Double, delay: Double) {
         animator.cancel()
-        panel.setFrame(NSRect(x: c.x - 5, y: c.y - 5, width: 10, height: 10), display: true)
-        panel.alphaValue = 0
-        panel.orderFrontRegardless()
+        container.frame = NSRect(x: c.x - 5, y: c.y - 5, width: 10, height: 10)
+        view.frame = container.bounds
+        container.alphaValue = 0
+        container.isHidden = false
         animate(toFrame: NSRect(origin: o, size: cardSize), toAlpha: 1, duration: duration, delay: delay, easing: easeOutBack)
     }
 
-    func orderFront() { panel.orderFrontRegardless() }
-    func hide() { panel.orderOut(nil) }
-    func close() { animator.cancel(); panel.orderOut(nil) }
+    func hide() { animator.cancel(); container.isHidden = true }
+    func close() { animator.cancel(); container.removeFromSuperview() }
 }
