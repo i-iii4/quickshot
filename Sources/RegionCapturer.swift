@@ -16,13 +16,6 @@ enum CaptureError: Error {
 /// точным контролем Retina-пикселей.
 final class RegionCapturer {
 
-    /// Тихая проверка статуса доступа «Запись экрана» (без диалога).
-    func hasPermission() -> Bool { CGPreflightScreenCaptureAccess() }
-
-    /// Показать системный запрос доступа и зарегистрировать приложение в списке.
-    @discardableResult
-    func requestPermission() -> Bool { CGRequestScreenCaptureAccess() }
-
     /// Захват `globalRect` (в глобальных точках AppKit) с дисплея `displayID`.
     /// Принимает Sendable-данные (CGRect/идентификатор), чтобы не передавать NSScreen
     /// через границу Task.

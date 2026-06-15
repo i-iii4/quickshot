@@ -71,10 +71,17 @@ final class SelectionView: NSView {
         NSColor.clear.set()
         currentRect.fill(using: .copy)
 
-        NSColor.white.withAlphaComponent(0.9).setStroke()
-        let path = NSBezierPath(rect: currentRect.insetBy(dx: 0.5, dy: 0.5))
-        path.lineWidth = 1
-        path.stroke()
+        // Двойной контур: тёмный снаружи + белый внутри — читается и на светлом, и на тёмном.
+        // lineWidth не домножаем на scale: 1pt в CG уже = 2 физпикселя на Retina.
+        NSColor.black.withAlphaComponent(0.35).setStroke()
+        let outer = NSBezierPath(rect: currentRect.insetBy(dx: -0.5, dy: -0.5))
+        outer.lineWidth = 1
+        outer.stroke()
+
+        NSColor.white.withAlphaComponent(0.95).setStroke()
+        let inner = NSBezierPath(rect: currentRect.insetBy(dx: 0.5, dy: 0.5))
+        inner.lineWidth = 1
+        inner.stroke()
     }
 }
 
@@ -134,4 +141,6 @@ final class OverlayController {
         onComplete = nil
         onCancel = nil
     }
+
+    deinit { if let escMonitor { NSEvent.removeMonitor(escMonitor) } }
 }

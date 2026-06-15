@@ -4,11 +4,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: StatusItemController?
     private let capture = CaptureController()
+    private let settings = SettingsController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Пункт в строке меню: «Сделать снимок» и «Выйти».
+        // Пункт в строке меню: снимок, настройки, доступ, выход.
         statusItem = StatusItemController(onCapture: { [weak self] in
             self?.capture.triggerCapture()
+        }, onSettings: { [weak self] in
+            self?.settings.show()
         })
 
         // Глобальный хоткей ⌘⇧4. Carbon RegisterEventHotKey не требует никаких прав

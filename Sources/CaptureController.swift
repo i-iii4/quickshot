@@ -7,7 +7,7 @@ final class CaptureController {
 
     private let capturer = RegionCapturer()
     private var overlay: OverlayController?
-    private var thumbnail: ThumbnailController?
+    private let thumbnails = ThumbnailManager()
     private var busy = false
 
     func triggerCapture() {
@@ -16,15 +16,12 @@ final class CaptureController {
         // Проверяем доступ ДО показа оверлея, чтобы пользователь не выделил область
         // впустую (после выдачи прав ScreenCaptureKit нередко требует перезапуска).
         if !CGPreflightScreenCaptureAccess() {
-            let askedKey = "didRequestScreenRecording"
-            if !UserDefaults.standard.bool(forKey: askedKey) {
-                // Первый раз: показываем ТОЛЬКО системный запрос (у него есть кнопка
-                // «Открыть Системные настройки»), без дублирующего своего диалога.
-                UserDefaults.standard.set(true, forKey: askedKey)
-                _ = CGRequestScreenCaptureAccess()
+            _ = CGRequestScreenCaptureAccess()   // идемпотентно: перерегистрирует приложение, диалог если статус не определён
+            let key = "didRequestScreenRecording"
+            if UserDefaults.standard.bool(forKey: key) {
+                presentPermissionAlert(firstRun: true)   // спрашивали раньше, доступа нет — ведём в настройки
             } else {
-                // Уже спрашивали раньше, доступа по-прежнему нет — направляем в настройки.
-                presentPermissionAlert(firstRun: false)
+                UserDefaults.standard.set(true, forKey: key)   // первый раз — только системный диалог, без дубля
             }
             return
         }
@@ -89,11 +86,7 @@ final class CaptureController {
 
     private func showThumbnail(_ image: CGImage, on screen: NSScreen?) {
         guard let screen = screen ?? NSScreen.main else { return }
-        thumbnail?.close()
-        let tc = ThumbnailController(image: image, screen: screen)
-        thumbnail = tc
-        tc.onClose = { [weak self] in self?.thumbnail = nil }
-        tc.show()
+        thumbnails.add(image: image, on: screen)
     }
 
     private func handleCaptureError(_ error: Error) {

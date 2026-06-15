@@ -37,11 +37,19 @@ xcrun swiftc \
 cp Info.plist "$BUNDLE/Contents/Info.plist"
 printf 'APPL????' > "$BUNDLE/Contents/PkgInfo"
 
-# Ad-hoc подпись всего бандла. ВНИМАНИЕ: ad-hoc (-s -) меняет хеш кода при каждой
-# сборке, поэтому TCC будет считать пересобранное приложение новым и заново спросит
-# доступ «Запись экрана». Для стабильного доступа подпишите фиксированным
-# self-signed/Developer ID удостоверением, оставив CFBundleIdentifier неизменным.
-codesign --force --deep --sign - "$BUNDLE" 2>/dev/null || true
+# Подпись бандла. Стабильная личность (Apple Development / Developer ID) даёт
+# неизменный designated requirement, поэтому TCC помнит доступ «Запись экрана» между
+# сборками. Ad-hoc (-s -) меняет хеш кода каждую сборку и сбрасывает разрешение —
+# используется только как fallback, если стабильной подписи нет.
+SIGN_IDENTITY="${QUICKSHOT_SIGN_IDENTITY:-$(security find-identity -p codesigning -v 2>/dev/null \
+  | grep -oE '"(Apple Development|Developer ID Application)[^"]*"' | head -1 | tr -d '"')}"
+if [ -n "$SIGN_IDENTITY" ]; then
+  echo "==> Подпись: $SIGN_IDENTITY"
+  codesign --force --deep --sign "$SIGN_IDENTITY" "$BUNDLE"
+else
+  echo "==> Подпись: ad-hoc (стабильной личности не найдено — доступ будет слетать при пересборке)"
+  codesign --force --deep --sign - "$BUNDLE" 2>/dev/null || true
+fi
 
 echo "==> Готово: ./$BUNDLE"
 echo "    Запуск:  open ./$BUNDLE"
