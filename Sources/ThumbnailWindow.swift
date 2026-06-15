@@ -59,40 +59,71 @@ final class FrameAnimator: NSObject {
 private final class PassthroughImageView: NSImageView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
-private final class PassthroughView: NSView {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+/// Ручка ресайза — отдельная вью-зона у бокового края карточки. Своя tracking-область даёт
+/// надёжный курсор `.resizeLeftRight` (через cursorUpdate, без капризов resetCursorRects), свой
+/// захват drag. Это и есть «правильная архитектура»: ресайз отделён от тела карточки, его легко
+/// нащупать, а тело занимается только drag-out и даблкликом.
+private final class ResizeHandle: NSView {
+    enum Side { case left, right }
+    let side: Side
+    var beginWidth: (() -> CGFloat)?
+    var liveWidth: ((CGFloat) -> Void)?
+    var endResize: (() -> Void)?
+
+    private var startX: CGFloat = 0
+    private var startW: CGFloat = 0
+    private var tracking: NSTrackingArea?
+
+    init(side: Side) { self.side = side; super.init(frame: .zero) }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let t = tracking { removeTrackingArea(t) }
+        let t = NSTrackingArea(rect: bounds, options: [.activeAlways, .cursorUpdate, .inVisibleRect],
+                               owner: self, userInfo: nil)
+        addTrackingArea(t); tracking = t
+    }
+    override func cursorUpdate(with event: NSEvent) { NSCursor.resizeLeftRight.set() }
+
+    override func mouseDown(with event: NSEvent) {
+        startX = NSEvent.mouseLocation.x
+        startW = beginWidth?() ?? ThumbStyle.defaultWidth
+    }
+    override func mouseDragged(with event: NSEvent) {
+        let dx = NSEvent.mouseLocation.x - startX
+        liveWidth?(side == .right ? startW + dx : startW - dx)   // тянем наружу → шире
+    }
+    override func mouseUp(with event: NSEvent) { endResize?() }
 }
 
 /// Тело карточки: только сам скриншот, скруглённый на radiusCard, без рамки. Контролы —
 /// нативные Liquid Glass кнопки (NSButton .glass) в верхнем ряду: [Копировать] [закрыть].
-/// Появляются по ховеру через isHidden (чётко, на полном контрасте). Копирование только по кнопке,
-/// даблклик — полный кадр. Жесты: drag-out, ресайз за левый/правый край. Сворачивание — хабом.
+/// Появляются/исчезают плавным fade (alphaValue). Копирование только по кнопке, даблклик —
+/// полный кадр. Ресайз — боковыми ручками `ResizeHandle`; тело — drag-out и даблклик.
 private final class ThumbnailView: NSView, NSDraggingSource {
 
     static let feedbackHold: TimeInterval = 1.2     // сколько держать галочку «Скопировано»
+    static let fade: TimeInterval = 0.15            // минималистичный fade кнопок
 
     weak var owner: ThumbnailWindow?
     weak var manager: ThumbnailManager?
-    var collapsed = false { didSet { if collapsed { setControlsVisible(false) } } }
+    var collapsed = false { didSet { if collapsed { setControlsVisible(false, animated: false) } } }
 
     private let image: CGImage
     private let nsImage: NSImage
     private var displayNSImage: NSImage
     private let displayView = PassthroughImageView()
-    private let fade = PassthroughView()
-    private let fadeGradient = CAGradientLayer()
     private let copyButton = GlassButton(symbol: "doc.on.doc", title: "Копировать", a11y: "Скопировать в буфер обмена")
     private let closeButton = GlassButton(symbol: "xmark", a11y: "Отбросить снимок")
+    private let leftHandle = ResizeHandle(side: .left)
+    private let rightHandle = ResizeHandle(side: .right)
     private var trackingArea: NSTrackingArea?
 
-    private var cropEdge: CropEdge = .none
-
-    private enum Mode { case none, body, resize }
-    private enum Edge { case none, left, right }
-    private var mode: Mode = .none
-    private var edge: Edge = .none
     private var startMouse: NSPoint = .zero
-    private var startWidth: CGFloat = 0
     private var movedFar = false
     private var titleResetWork: DispatchWorkItem?
 
@@ -111,65 +142,47 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         displayView.wantsLayer = true
         addSubview(displayView)
 
-        // Фейд на обрезанном крае (постоянный сигнал «есть ещё»).
-        fade.wantsLayer = true
-        fade.layer?.masksToBounds = true
-        fadeGradient.colors = [NSColor.black.withAlphaComponent(0).cgColor,
-                               NSColor.black.withAlphaComponent(0.08).cgColor,
-                               NSColor.black.withAlphaComponent(0.38).cgColor]
-        fadeGradient.locations = [0, 0.6, 1]
-        fade.layer?.addSublayer(fadeGradient)
-        fade.isHidden = true
-        addSubview(fade)
+        // Ручки ресайза — поверх изображения, но ПОД кнопками (в верхнем ряду побеждает кнопка).
+        for h in [leftHandle, rightHandle] { addSubview(h) }
+        leftHandle.beginWidth  = { [weak self] in self?.owner?.cardWidth ?? ThumbStyle.defaultWidth }
+        rightHandle.beginWidth = { [weak self] in self?.owner?.cardWidth ?? ThumbStyle.defaultWidth }
+        leftHandle.liveWidth   = { [weak self] w in self?.manager?.updateWidthLive(w) }
+        rightHandle.liveWidth  = { [weak self] w in self?.manager?.updateWidthLive(w) }
+        leftHandle.endResize   = { [weak self] in self?.manager?.persistWidth() }
+        rightHandle.endResize  = { [weak self] in self?.manager?.persistWidth() }
 
-        // Кнопки всегда в иерархии; видимость — через isHidden (скрытая вью не ловит клики
-        // и выпадает из tab/a11y сама, костыли с alpha-хит-тестом не нужны).
+        // Кнопки всегда в иерархии; видимость — fade по alphaValue. Стартуют скрытыми (alpha 0).
         copyButton.onClick = { [weak self] in self?.doCopy() }
         copyButton.toolTip = "Скопировать в буфер обмена"
-        copyButton.isHidden = true
-        addSubview(copyButton)
-
-        // remove() рвёт единственную сильную ссылку на ThumbnailWindow и синхронно
-        // деаллоцирует кнопку прямо в её же mouseUp — откладываем на следующий тик.
         closeButton.onClick = { [weak self] in
+            // remove() рвёт единственную сильную ссылку на ThumbnailWindow и синхронно
+            // деаллоцирует кнопку прямо в её же mouseUp — откладываем на следующий тик.
             guard let s = self, let o = s.owner else { return }
             let mgr = s.manager
             DispatchQueue.main.async { mgr?.remove(o) }
         }
         closeButton.toolTip = "Отбросить снимок"
-        closeButton.isHidden = true
-        addSubview(closeButton)
+        for b in [copyButton, closeButton] { b.alphaValue = 0; b.isHidden = true; addSubview(b) }
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    func setDisplay(image displayImage: CGImage, cropped: Bool, edge: CropEdge) {
+    func setDisplay(image displayImage: CGImage) {
         displayNSImage = NSImage(cgImage: displayImage,
                                  size: NSSize(width: displayImage.width, height: displayImage.height))
         displayView.image = displayNSImage
-        cropEdge = edge
-        fade.isHidden = !cropped
     }
 
     func layoutCard(width: CGFloat, height: CGFloat) {
         frame = NSRect(x: 0, y: 0, width: width, height: height)
         displayView.frame = bounds
 
-        // Фейд у обрезанного края.
-        let fb: CGFloat = 34
-        switch cropEdge {
-        case .bottom:
-            fade.frame = NSRect(x: 0, y: 0, width: width, height: fb)
-            fadeGradient.startPoint = CGPoint(x: 0.5, y: 1); fadeGradient.endPoint = CGPoint(x: 0.5, y: 0)
-        case .right:
-            fade.frame = NSRect(x: width - fb, y: 0, width: fb, height: height)
-            fadeGradient.startPoint = CGPoint(x: 0, y: 0.5); fadeGradient.endPoint = CGPoint(x: 1, y: 0.5)
-        case .none:
-            fade.frame = .zero
-        }
-        fadeGradient.frame = fade.bounds
+        // Боковые ручки ресайза во всю высоту — крупная, легко находимая зона хвата.
+        let hw = ThumbStyle.edgeBand
+        leftHandle.frame  = NSRect(x: 0, y: 0, width: hw, height: height)
+        rightHandle.frame = NSRect(x: width - hw, y: 0, width: hw, height: height)
 
         // Верхний ряд: [Копировать] слева … [закрыть] справа. Размеры — нативные (fittingSize).
         let inset = QS.s2, gap = QS.s2
@@ -191,7 +204,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         trackingArea = ta
     }
 
-    // MARK: ховер (reveal через isHidden — глиф всегда полный контраст, без alpha-ramp)
+    // MARK: ховер (плавный fade кнопок)
 
     override func mouseEntered(with event: NSEvent) {
         guard !collapsed else { return }
@@ -200,65 +213,42 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     }
     override func mouseExited(with event: NSEvent) { setControlsVisible(false) }
 
-    private func setControlsVisible(_ visible: Bool) {
-        copyButton.isHidden = !visible
-        closeButton.isHidden = !visible
+    private func setControlsVisible(_ visible: Bool, animated: Bool = true) {
+        let buttons = [copyButton, closeButton]
+        if visible {
+            for b in buttons { b.isHidden = false }
+            guard animated else { for b in buttons { b.alphaValue = 1 }; return }
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = Self.fade
+                for b in buttons { b.animator().alphaValue = 1 }
+            }
+        } else {
+            guard animated else { for b in buttons { b.alphaValue = 0; b.isHidden = true }; return }
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = Self.fade
+                for b in buttons { b.animator().alphaValue = 0 }
+            }, completionHandler: {
+                // прятать только то, что реально догасло (мышь могла вернуться и заново зажечь)
+                for b in buttons where b.alphaValue == 0 { b.isHidden = true }
+            })
+        }
     }
 
-    // MARK: курсор у краёв (ресайз меняет только ширину — курсор только горизонтальный)
-
-    override func resetCursorRects() {
-        let b = ThumbStyle.edgeBand
-        addCursorRect(NSRect(x: 0, y: 0, width: b, height: bounds.height), cursor: .resizeLeftRight)
-        addCursorRect(NSRect(x: bounds.width - b, y: 0, width: b, height: bounds.height), cursor: .resizeLeftRight)
-    }
-
-    private func edgeAt(_ p: NSPoint) -> Edge {
-        let b = ThumbStyle.edgeBand
-        if p.x <= b { return .left }
-        if p.x >= bounds.width - b { return .right }
-        return .none
-    }
-
-    // MARK: мышь (кнопки обрабатываются сами; тело — drag-out/ресайз, без копирования)
+    // MARK: мышь тела (drag-out + даблклик; ресайз — на боковых ручках)
 
     override func mouseDown(with event: NSEvent) {
         movedFar = false
         startMouse = NSEvent.mouseLocation
-        if collapsed { mode = .none; return }
-        let p = convert(event.locationInWindow, from: nil)
-        edge = edgeAt(p)
-        if edge == .none && event.clickCount == 2 { mode = .none; openFull(); return }   // даблклик — полный кадр
-        mode = edge != .none ? .resize : .body
-        if mode == .resize { startWidth = owner?.cardWidth ?? ThumbStyle.defaultWidth }
+        if collapsed { return }
+        if event.clickCount == 2 { openFull() }     // даблклик по телу — полный кадр
     }
 
     override func mouseDragged(with event: NSEvent) {
-        if collapsed { return }
+        guard !collapsed, !movedFar else { return }
         let now = NSEvent.mouseLocation
-        let dx = now.x - startMouse.x, dy = now.y - startMouse.y
-        switch mode {
-        case .resize:
-            var w = startWidth
-            switch edge {
-            case .left:  w = startWidth + (startMouse.x - now.x)
-            case .right: w = startWidth + (now.x - startMouse.x)
-            case .none:  break
-            }
-            manager?.updateWidthLive(w)
-        case .body:
-            guard !movedFar, hypot(dx, dy) > ThumbStyle.dragThreshold else { return }
-            movedFar = true
-            beginDragOut(with: event)
-        case .none:
-            break
-        }
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        if collapsed { mode = .none; return }          // свёрнутые карточки невидимы и неинтерактивны
-        if mode == .resize { manager?.persistWidth() }
-        mode = .none                                   // клик по телу ничего не копирует
+        guard hypot(now.x - startMouse.x, now.y - startMouse.y) > ThumbStyle.dragThreshold else { return }
+        movedFar = true
+        beginDragOut(with: event)                   // клик по телу ничего не копирует — только перетаскивание
     }
 
     // MARK: действия
@@ -273,6 +263,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     /// Фидбэк копирования: галочка + «Скопировано» на стеклянной кнопке (единственный сигнал).
     func flashCopied() {
         copyButton.isHidden = false
+        copyButton.alphaValue = 1
         copyButton.showCheck(true)
         titleResetWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
@@ -309,11 +300,9 @@ private final class ThumbnailView: NSView, NSDraggingSource {
                          sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
 }
 
-/// Обёртка над одной карточкой. Раньше держала отдельную панель; теперь это САБВЬЮ общего
-/// окна-хоста трея. `hostView` (контейнер) несёт тень слоем (не клипует), внутри — скруглённая
-/// `ThumbnailView`. Анимации двигают frame/alpha контейнера, а не окна (одно окно на весь трей —
-/// стекло активно, клики диспатчатся, нет флаппинга и обрезки press-lift). Геометрия — вариант D
-/// (CardSizing); все координаты — в системе координат хоста.
+/// Обёртка над одной карточкой — САБВЬЮ общего окна-хоста трея. `hostView` (контейнер) несёт тень
+/// слоем (не клипует), внутри — скруглённая `ThumbnailView`. Анимации двигают frame/alpha
+/// контейнера, а не окна. Геометрия — вариант D (CardSizing); координаты — в системе хоста.
 final class ThumbnailWindow {
 
     let image: CGImage
@@ -359,7 +348,7 @@ final class ThumbnailWindow {
                                        width: cardWidth, screenHeight: screenHeight)
         cardHeight = layout.height
         let display = image.cropping(to: layout.cropRect) ?? image
-        view.setDisplay(image: display, cropped: layout.cropped, edge: layout.cropEdge)
+        view.setDisplay(image: display)
         container.setFrameSize(cardSize)
         view.layoutCard(width: cardWidth, height: cardHeight)
         container.layer?.shadowPath = CGPath(roundedRect: view.bounds,

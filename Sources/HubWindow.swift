@@ -1,9 +1,12 @@
 import AppKit
 
-/// Круглый нативный Liquid Glass хаб-кнопка со счётчиком. Теперь это САБВЬЮ общего окна-хоста
-/// трея (`TrayHostPanel`), а не отдельное окно. Так стекло рисуется в активном виде (одно key-окно,
-/// без флаппинга), а клик диспатчится штатным `target/action` NSButton — без ручного перехвата
-/// событий. Цифра — это контент: всегда белая (явный attributedTitle), не анимируется.
+/// Круглый нативный Liquid Glass хаб-кнопка со счётчиком — САБВЬЮ общего окна-хоста трея
+/// (`TrayHostPanel`), а не отдельное окно. Так стекло рисуется в активном виде (одно key-окно,
+/// без флаппинга), а клик диспатчится штатным `target/action` NSButton.
+///
+/// Цифра — обычный `title` без принудительного цвета: система сама даёт контрастный, адаптивный
+/// под светлую/тёмную тему и под стекло цвет (`controlTextColor`). Форсировать белый нельзя —
+/// на светлом фоне/светлой кнопке он не читается.
 final class HubWindow {
 
     /// Кнопка-сабвью. Хост добавляет её в свою иерархию и позиционирует в своих координатах.
@@ -25,26 +28,12 @@ final class HubWindow {
         diameter = ceil(b.fittingSize.height)
         b.frame = NSRect(x: 0, y: 0, width: diameter, height: diameter)
         view = b
-        view.attributedTitle = Self.glyph("0", font: view.font ?? base)
-    }
-
-    /// Цифра хаба всегда белая на полном контрасте: задаём явным attributedTitle (цвет + шрифт +
-    /// центрирование), а не голым title — иначе система перекрашивает её под состояние кнопки.
-    private static func glyph(_ s: String, font: NSFont) -> NSAttributedString {
-        let para = NSMutableParagraphStyle()
-        para.alignment = .center
-        return NSAttributedString(string: s, attributes: [
-            .foregroundColor: NSColor.white,
-            .font: font,
-            .paragraphStyle: para,
-        ])
     }
 
     /// Обновить счётчик и озвучку. Число — accessibilityValue, состояние трея — label
     /// (без повтора числа), чтобы VoiceOver не дублировал счётчик.
     func setState(count: Int, collapsed: Bool) {
-        let f = view.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize(for: .large))
-        view.attributedTitle = Self.glyph("\(count)", font: f)
+        view.title = "\(count)"
         view.setAccessibilityValue("\(count)")
         view.setAccessibilityLabel(collapsed ? "Развернуть скриншоты" : "Свернуть скриншоты")
         view.setAccessibilityHelp("Нажмите, чтобы развернуть или свернуть трей")
