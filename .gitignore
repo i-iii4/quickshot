@@ -1,0 +1,12 @@
+# Сборочные артефакты
+QuickShot.app/
+*.app/
+build/
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Прочее
+*.swiftmodule
+*.o
