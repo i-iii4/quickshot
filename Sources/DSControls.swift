@@ -7,7 +7,7 @@ import AppKit
 /// Видимостью по ховеру управляем через isHidden, а НЕ через alpha: у нативного .glass
 /// нельзя отделить глиф от подложки публичным API, поэтому глиф никогда не держим на
 /// частичном контрасте — кнопка либо есть целиком (полный контраст), либо скрыта.
-final class GlassButton: NSButton {
+class GlassButton: NSButton {
 
     var onClick: (() -> Void)?
     private let symbolName: String?

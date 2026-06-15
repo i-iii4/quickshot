@@ -6,7 +6,7 @@ enum ThumbStyle {
     static let minWidth: CGFloat = 120
     static let maxWidth: CGFloat = 640
     static let defaultWidth: CGFloat = 240
-    static let edgeBand: CGFloat = 8             // ширина кромки для ресайза (тянуть за край)
+    static let edgeBand: CGFloat = 16            // ширина кромки для ресайза (тянуть за край) — крупная зона хвата
     static let dragThreshold: CGFloat = 6        // порог, после которого клик тела становится drag-out
 }
 

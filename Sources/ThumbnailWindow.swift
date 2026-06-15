@@ -58,8 +58,12 @@ final class FrameAnimator: NSObject {
 }
 
 /// Панель одной миниатюры. Одна санкционированная тень плавающего слоя (hasShadow).
+/// isKeyWindow=true — контролы (стеклянные кнопки) всегда рисуются в активном виде, без
+/// makeKey-флаппинга между панелями. Это только self-report для отрисовки: системное key-окно
+/// и ввод с клавиатуры у активного приложения не трогаются.
 final class ThumbnailPanel: NSPanel {
     override var canBecomeKey: Bool { true }
+    override var isKeyWindow: Bool { true }
 }
 
 private final class PassthroughImageView: NSImageView {
@@ -204,8 +208,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
 
     override func mouseEntered(with event: NSEvent) {
         guard !collapsed else { return }
-        window?.makeKey()             // nonactivating key: кнопки рисуются активными сразу, не по клику
-        setControlsVisible(true)
+        setControlsVisible(true)      // активный вид даёт isKeyWindow=true панели, makeKey не нужен (он ломал reveal)
     }
     override func mouseExited(with event: NSEvent) { setControlsVisible(false) }
 
