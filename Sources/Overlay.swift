@@ -6,6 +6,12 @@ import AppKit
 final class OverlayWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    // AppKit по умолчанию «подтягивает» окно так, чтобы титул остался на экране, и для
+    // borderless-оверлея на дисплее с отрицательным origin (монитор слева) это уносит окно
+    // обратно на главный экран — второй монитор остаётся без оверлея, скриншоты там не делаются.
+    // Оверлей обязан точно лежать на своём экране — возвращаем рамку без правок.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
 /// Вид, рисующий затемнение и «вырезанную» рамку выделения, и обрабатывающий
@@ -20,6 +26,12 @@ final class SelectionView: NSView {
     private var currentRect: NSRect = .zero
 
     override var acceptsFirstResponder: Bool { true }
+
+    // Без этого первый клик по оверлею экрана, который не является key-окном (на втором мониторе
+    // оверлеи всех экранов кроме главного — не key), тратится на активацию окна и НЕ доходит до
+    // вью: startPoint не ставится, выделение не начинается — «ничего не происходит». С true
+    // mouseDown приходит сразу, выделение работает на любом экране независимо от key-статуса.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .crosshair)
@@ -100,8 +112,12 @@ final class OverlayController {
         self.onCancel = onCancel
 
         for screen in NSScreen.screens {
+            // БЕЗ параметра screen: — иначе contentRect трактуется относительно origin экрана,
+            // и на дисплее с отрицательным origin смещение применяется дважды (окно улетает за
+            // экран). Тут contentRect глобальный; точную посадку добиваем явным setFrame ниже.
             let w = OverlayWindow(contentRect: screen.frame, styleMask: [.borderless],
-                                  backing: .buffered, defer: false, screen: screen)
+                                  backing: .buffered, defer: false)
+            w.setFrame(screen.frame, display: false)
             w.isOpaque = false
             w.backgroundColor = .clear
             w.hasShadow = false
