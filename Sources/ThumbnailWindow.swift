@@ -7,10 +7,6 @@ private func easeOutCubic(_ f: CGFloat) -> CGFloat { 1 - pow(1 - f, 3) }
 private func easeInOutCubic(_ f: CGFloat) -> CGFloat {
     f < 0.5 ? 4 * f * f * f : 1 - pow(-2 * f + 2, 3) / 2
 }
-private func easeOutBack(_ f: CGFloat) -> CGFloat {        // лёгкий overshoot + settle
-    let c1: CGFloat = 1.70158, c3 = c1 + 1
-    return 1 + c3 * pow(f - 1, 3) + c1 * pow(f - 1, 2)
-}
 
 /// Покадровая анимация поверх CADisplayLink (синхронно с дисплеем, корректно на ProMotion).
 final class FrameAnimator: NSObject {
@@ -18,7 +14,6 @@ final class FrameAnimator: NSObject {
     private var link: CADisplayLink?
     private var begin: CFTimeInterval = 0
     private var duration: CFTimeInterval = 0
-    private var started = false
     private var easing: (CGFloat) -> CGFloat = easeOutCubic
     private var onFrame: ((CGFloat) -> Void)?
     private var onDone: (() -> Void)?
@@ -33,7 +28,6 @@ final class FrameAnimator: NSObject {
         self.easing = easing
         self.onFrame = onFrame
         self.onDone = onDone
-        self.started = false
         self.begin = CACurrentMediaTime() + delay
         guard let hostView else { return }
         let l = hostView.displayLink(target: self, selector: #selector(step(_:)))
@@ -60,54 +54,53 @@ private final class PassthroughImageView: NSImageView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// Ручка ресайза — отдельная вью-зона у бокового края карточки. Своя tracking-область даёт
-/// надёжный курсор `.resizeLeftRight` (через cursorUpdate, без капризов resetCursorRects), свой
-/// захват drag. Это и есть «правильная архитектура»: ресайз отделён от тела карточки, его легко
-/// нащупать, а тело занимается только drag-out и даблкликом.
-private final class ResizeHandle: NSView {
-    enum Side { case left, right }
-    let side: Side
-    var beginWidth: (() -> CGFloat)?
+/// Ручка ресайза по ВНУТРЕННЕЙ стороне карточки — той, что смотрит к центру экрана (внешняя
+/// сторона приколочена раскладкой к краю экрана). Тянем внутренний край — он идёт за курсором,
+/// внешний стоит на месте; направление само согласуется с позицией трея.
+///
+/// Курсор НЕ трогаем намеренно: фоновому приложению macOS менять курсор над своим окном не даёт
+/// (подтверждено Apple DevForums), любой `set/push` система перебивает стрелкой. Поэтому
+/// findability обеспечивает не вид курсора, а сама крупная предсказуемая зона вдоль всего края.
+private final class EdgeHandle: NSView {
+    enum Edge { case left, right, top, bottom }
+    var edge: Edge = .left
+
+    var beginSize: (() -> (w: CGFloat, h: CGFloat))?
     var liveWidth: ((CGFloat) -> Void)?
     var endResize: (() -> Void)?
 
-    private var startX: CGFloat = 0
+    private var start: NSPoint = .zero
     private var startW: CGFloat = 0
-    private var tracking: NSTrackingArea?
-
-    init(side: Side) { self.side = side; super.init(frame: .zero) }
-    required init?(coder: NSCoder) { fatalError() }
+    private var startH: CGFloat = 1
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let t = tracking { removeTrackingArea(t) }
-        let t = NSTrackingArea(rect: bounds, options: [.activeAlways, .cursorUpdate, .inVisibleRect],
-                               owner: self, userInfo: nil)
-        addTrackingArea(t); tracking = t
-    }
-    override func cursorUpdate(with event: NSEvent) { NSCursor.resizeLeftRight.set() }
-
     override func mouseDown(with event: NSEvent) {
-        startX = NSEvent.mouseLocation.x
-        startW = beginWidth?() ?? ThumbStyle.defaultWidth
+        let s = beginSize?() ?? (w: ThumbStyle.defaultWidth, h: ThumbStyle.defaultWidth)
+        startW = s.w; startH = max(1, s.h)
+        start = NSEvent.mouseLocation
     }
     override func mouseDragged(with event: NSEvent) {
-        let dx = NSEvent.mouseLocation.x - startX
-        liveWidth?(side == .right ? startW + dx : startW - dx)   // тянем наружу → шире
+        let now = NSEvent.mouseLocation
+        let newW: CGFloat
+        switch edge {
+        case .left:   newW = startW + (start.x - now.x)                          // влево → шире
+        case .right:  newW = startW + (now.x - start.x)                          // вправо → шире
+        case .bottom: newW = startW * ((startH + (start.y - now.y)) / startH)    // вниз → выше → шире (аспект)
+        case .top:    newW = startW * ((startH + (now.y - start.y)) / startH)    // вверх → выше → шире
+        }
+        liveWidth?(newW)
     }
     override func mouseUp(with event: NSEvent) { endResize?() }
 }
 
-/// Тело карточки: только сам скриншот, скруглённый на radiusCard, без рамки. Контролы —
-/// нативные Liquid Glass кнопки (NSButton .glass) в верхнем ряду: [Копировать] [закрыть].
-/// Появляются/исчезают плавным fade (alphaValue). Копирование только по кнопке, даблклик —
-/// полный кадр. Ресайз — боковыми ручками `ResizeHandle`; тело — drag-out и даблклик.
+/// Тело карточки: сам скриншот (скруглённый) и контролы — нативные Liquid Glass кнопки
+/// [Копировать] [закрыть] в верхнем ряду, появляются/исчезают плавным fade. Ресайз — НЕ здесь
+/// (краевая ручка `EdgeHandle`); тело отвечает за drag-out и даблклик. Курсор не трогаем.
 private final class ThumbnailView: NSView, NSDraggingSource {
 
     static let feedbackHold: TimeInterval = 1.2     // сколько держать галочку «Скопировано»
-    static let fade: TimeInterval = 0.15            // минималистичный fade кнопок
+    static let fade: TimeInterval = 0.09            // почти незаметный fade кнопок
 
     weak var owner: ThumbnailWindow?
     weak var manager: ThumbnailManager?
@@ -119,8 +112,6 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     private let displayView = PassthroughImageView()
     private let copyButton = GlassButton(symbol: "doc.on.doc", title: "Копировать", a11y: "Скопировать в буфер обмена")
     private let closeButton = GlassButton(symbol: "xmark", a11y: "Отбросить снимок")
-    private let leftHandle = ResizeHandle(side: .left)
-    private let rightHandle = ResizeHandle(side: .right)
     private var trackingArea: NSTrackingArea?
 
     private var startMouse: NSPoint = .zero
@@ -133,7 +124,6 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         self.displayNSImage = nsImage
         super.init(frame: .zero)
 
-        // Карточка = сам скриншот, скруглённый. Без рамки/подложки. Тень несёт контейнер снаружи.
         wantsLayer = true
         layer?.cornerRadius = QS.radiusCard
         layer?.masksToBounds = true
@@ -142,21 +132,9 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         displayView.wantsLayer = true
         addSubview(displayView)
 
-        // Ручки ресайза — поверх изображения, но ПОД кнопками (в верхнем ряду побеждает кнопка).
-        for h in [leftHandle, rightHandle] { addSubview(h) }
-        leftHandle.beginWidth  = { [weak self] in self?.owner?.cardWidth ?? ThumbStyle.defaultWidth }
-        rightHandle.beginWidth = { [weak self] in self?.owner?.cardWidth ?? ThumbStyle.defaultWidth }
-        leftHandle.liveWidth   = { [weak self] w in self?.manager?.updateWidthLive(w) }
-        rightHandle.liveWidth  = { [weak self] w in self?.manager?.updateWidthLive(w) }
-        leftHandle.endResize   = { [weak self] in self?.manager?.persistWidth() }
-        rightHandle.endResize  = { [weak self] in self?.manager?.persistWidth() }
-
-        // Кнопки всегда в иерархии; видимость — fade по alphaValue. Стартуют скрытыми (alpha 0).
         copyButton.onClick = { [weak self] in self?.doCopy() }
         copyButton.toolTip = "Скопировать в буфер обмена"
         closeButton.onClick = { [weak self] in
-            // remove() рвёт единственную сильную ссылку на ThumbnailWindow и синхронно
-            // деаллоцирует кнопку прямо в её же mouseUp — откладываем на следующий тик.
             guard let s = self, let o = s.owner else { return }
             let mgr = s.manager
             DispatchQueue.main.async { mgr?.remove(o) }
@@ -169,26 +147,28 @@ private final class ThumbnailView: NSView, NSDraggingSource {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    // Tracking-область — только ховер кнопок.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let t = trackingArea { removeTrackingArea(t) }
+        let t = NSTrackingArea(rect: .zero, options: [.activeAlways, .inVisibleRect, .mouseEnteredAndExited],
+                               owner: self, userInfo: nil)
+        addTrackingArea(t); trackingArea = t
+    }
+
     func setDisplay(image displayImage: CGImage) {
         displayNSImage = NSImage(cgImage: displayImage,
                                  size: NSSize(width: displayImage.width, height: displayImage.height))
         displayView.image = displayNSImage
     }
 
-    func layoutCard(width: CGFloat, height: CGFloat) {
-        frame = NSRect(x: 0, y: 0, width: width, height: height)
+    /// Раскладка внутренних элементов по текущему `bounds` (frame вью ставит обёртка).
+    func layoutContents() {
         displayView.frame = bounds
-
-        // Боковые ручки ресайза во всю высоту — крупная, легко находимая зона хвата.
-        let hw = ThumbStyle.edgeBand
-        leftHandle.frame  = NSRect(x: 0, y: 0, width: hw, height: height)
-        rightHandle.frame = NSRect(x: width - hw, y: 0, width: hw, height: height)
-
-        // Верхний ряд: [Копировать] слева … [закрыть] справа. Размеры — нативные (fittingSize).
         let inset = QS.s2, gap = QS.s2
         let rowH = ceil(max(copyButton.fittingSize.height, closeButton.fittingSize.height))
-        let rowY = height - inset - rowH
-        let closeX = width - inset - rowH
+        let rowY = bounds.height - inset - rowH
+        let closeX = bounds.width - inset - rowH
         closeButton.frame = NSRect(x: closeX, y: rowY, width: rowH, height: rowH)
 
         copyButton.setCompact(false)
@@ -196,19 +176,13 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         copyButton.setCompact(copyButton.fittingSize.width > availForCopy)
         let cw = copyButton.isCompact ? rowH : ceil(copyButton.fittingSize.width)
         copyButton.frame = NSRect(x: inset, y: rowY, width: cw, height: rowH)
-
-        if let trackingArea { removeTrackingArea(trackingArea) }
-        let ta = NSTrackingArea(rect: bounds, options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
-                                owner: self, userInfo: nil)
-        addTrackingArea(ta)
-        trackingArea = ta
     }
 
-    // MARK: ховер (плавный fade кнопок)
+    // MARK: ховер кнопок (плавный fade)
 
     override func mouseEntered(with event: NSEvent) {
         guard !collapsed else { return }
-        manager?.hostBecomeKey()      // одно key-окно: стеклянные кнопки светлеют на ховере без клика
+        manager?.hostBecomeKey()
         setControlsVisible(true)
     }
     override func mouseExited(with event: NSEvent) { setControlsVisible(false) }
@@ -228,19 +202,18 @@ private final class ThumbnailView: NSView, NSDraggingSource {
                 ctx.duration = Self.fade
                 for b in buttons { b.animator().alphaValue = 0 }
             }, completionHandler: {
-                // прятать только то, что реально догасло (мышь могла вернуться и заново зажечь)
                 for b in buttons where b.alphaValue == 0 { b.isHidden = true }
             })
         }
     }
 
-    // MARK: мышь тела (drag-out + даблклик; ресайз — на боковых ручках)
+    // MARK: мышь тела (drag-out + даблклик; ресайз — краевая ручка)
 
     override func mouseDown(with event: NSEvent) {
         movedFar = false
         startMouse = NSEvent.mouseLocation
         if collapsed { return }
-        if event.clickCount == 2 { openFull() }     // даблклик по телу — полный кадр
+        if event.clickCount == 2 { openFull() }
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -248,7 +221,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         let now = NSEvent.mouseLocation
         guard hypot(now.x - startMouse.x, now.y - startMouse.y) > ThumbStyle.dragThreshold else { return }
         movedFar = true
-        beginDragOut(with: event)                   // клик по телу ничего не копирует — только перетаскивание
+        beginDragOut(with: event)
     }
 
     // MARK: действия
@@ -260,7 +233,6 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         PinnedWindowController.show(image: image, on: screen)
     }
 
-    /// Фидбэк копирования: галочка + «Скопировано» на стеклянной кнопке (единственный сигнал).
     func flashCopied() {
         copyButton.isHidden = false
         copyButton.alphaValue = 1
@@ -300,20 +272,33 @@ private final class ThumbnailView: NSView, NSDraggingSource {
                          sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
 }
 
-/// Обёртка над одной карточкой — САБВЬЮ общего окна-хоста трея. `hostView` (контейнер) несёт тень
-/// слоем (не клипует), внутри — скруглённая `ThumbnailView`. Анимации двигают frame/alpha
-/// контейнера, а не окна. Геометрия — вариант D (CardSizing); координаты — в системе хоста.
+/// Контейнер карточки: больше карточки на `resizeBand` с каждой стороны (поле под краевую ручку,
+/// которая центрирована на крае и слегка выходит наружу). Несёт тень слоем. Пустые поля
+/// (не ручка, не карточка) пропускают клики сквозь — иначе поля стали бы мёртвой зоной.
+private final class CardContainer: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let v = super.hitTest(point)
+        return v === self ? nil : v          // ловят только сабвью (ручка/карточка); поля — сквозь
+    }
+}
+
+/// Обёртка над одной карточкой — САБВЬЮ общего окна-хоста трея. `hostView` (контейнер) на
+/// `resizeBand` больше карточки с каждой стороны; вдоль внутренней стороны сидит одна краевая
+/// ручка ресайза. Анимации двигают frame/alpha контейнера.
 final class ThumbnailWindow {
 
     let image: CGImage
     let screen: NSScreen
     private(set) var cardWidth: CGFloat
     private(set) var cardHeight: CGFloat = 0
-    private let container = NSView()
-    private let view: ThumbnailView
-    private let animator: FrameAnimator
 
-    /// Вью, которую хост добавляет в свою иерархию и двигает.
+    private let band = ThumbStyle.resizeBand
+    private let container = CardContainer()
+    private let view: ThumbnailView
+    private let edgeHandle = EdgeHandle()
+    private let animator: FrameAnimator
+    private var resizeEdge: EdgeHandle.Edge = .left
+
     var hostView: NSView { container }
     var cardSize: NSSize { NSSize(width: cardWidth, height: cardHeight) }
 
@@ -323,9 +308,8 @@ final class ThumbnailWindow {
         self.cardWidth = width
 
         view = ThumbnailView(image: image)
+        animator = FrameAnimator(hostView: view)         // до замыканий с self ниже
 
-        // Контейнер несёт тень плавающего слоя (раньше — panel.hasShadow). masksToBounds=false,
-        // чтобы тень не обрезалась; скругление и клип изображения — внутри самой ThumbnailView.
         container.wantsLayer = true
         if let l = container.layer {
             l.masksToBounds = false
@@ -334,12 +318,52 @@ final class ThumbnailWindow {
             l.shadowRadius = 11
             l.shadowOffset = CGSize(width: 0, height: -5)
         }
-        container.addSubview(view)
-        animator = FrameAnimator(hostView: view)
+        container.addSubview(view)                       // карточка под ручкой
+        container.addSubview(edgeHandle)                 // ручка поверх (вдоль внутреннего края)
+
+        edgeHandle.beginSize = { [weak self] in
+            (self?.cardWidth ?? ThumbStyle.defaultWidth, self?.cardHeight ?? ThumbStyle.defaultWidth)
+        }
+        edgeHandle.liveWidth = { [weak self] w in self?.view.manager?.updateWidthLive(w) }
+        edgeHandle.endResize = { [weak self] in self?.view.manager?.persistWidth() }
 
         view.owner = self
         view.manager = manager
         applyWidth(width, screenHeight: screenHeight)
+    }
+
+    /// Назначить внутренний край под ресайз по позиции трея (внешний приколочен к краю экрана).
+    func configureResize(for pos: TrayPosition) {
+        switch pos {
+        case .right:  resizeEdge = .left
+        case .left:   resizeEdge = .right
+        case .top:    resizeEdge = .bottom
+        case .bottom: resizeEdge = .top
+        }
+        edgeHandle.edge = resizeEdge
+        positionHandle()
+    }
+
+    /// Ручка-полоса вдоль внутреннего края: центрирована на крае (±band), длиной во всю сторону.
+    private func positionHandle() {
+        let b = band, z = 2 * band
+        switch resizeEdge {
+        case .left:   edgeHandle.frame = NSRect(x: 0,         y: b, width: z, height: cardHeight)
+        case .right:  edgeHandle.frame = NSRect(x: cardWidth, y: b, width: z, height: cardHeight)
+        case .bottom: edgeHandle.frame = NSRect(x: b, y: 0,          width: cardWidth, height: z)
+        case .top:    edgeHandle.frame = NSRect(x: b, y: cardHeight, width: cardWidth, height: z)
+        }
+    }
+
+    private func outerRect(cardOrigin o: NSPoint) -> NSRect {
+        NSRect(x: o.x - band, y: o.y - band, width: cardWidth + 2 * band, height: cardHeight + 2 * band)
+    }
+
+    /// Карточка занимает контейнер минус поля `band`; во время анимации размер клампим.
+    private func layoutCardInContainer() {
+        let iw = max(0, container.bounds.width - 2 * band)
+        let ih = max(0, container.bounds.height - 2 * band)
+        view.frame = NSRect(x: band, y: band, width: iw, height: ih)
     }
 
     func applyWidth(_ w: CGFloat, screenHeight: CGFloat) {
@@ -349,17 +373,18 @@ final class ThumbnailWindow {
         cardHeight = layout.height
         let display = image.cropping(to: layout.cropRect) ?? image
         view.setDisplay(image: display)
-        container.setFrameSize(cardSize)
-        view.layoutCard(width: cardWidth, height: cardHeight)
-        container.layer?.shadowPath = CGPath(roundedRect: view.bounds,
-                                             cornerWidth: QS.radiusCard, cornerHeight: QS.radiusCard,
-                                             transform: nil)
+        container.setFrameSize(NSSize(width: cardWidth + 2 * band, height: cardHeight + 2 * band))
+        layoutCardInContainer()
+        view.layoutContents()
+        positionHandle()
+        container.layer?.shadowPath = CGPath(roundedRect: view.frame, cornerWidth: QS.radiusCard,
+                                             cornerHeight: QS.radiusCard, transform: nil)
     }
 
     func setCollapsed(_ b: Bool) { view.collapsed = b }
     func flashCopied() { view.flashCopied() }
 
-    // MARK: анимация (CADisplayLink + кривые с оседанием) — двигаем контейнер-сабвью
+    // MARK: анимация (CADisplayLink, ease-out без overshoot) — двигаем контейнер
 
     private func animate(toFrame target: NSRect, toAlpha targetAlpha: CGFloat,
                          duration: Double, delay: Double,
@@ -369,39 +394,37 @@ final class ThumbnailWindow {
         let startAlpha = container.alphaValue
         animator.run(duration: duration, delay: delay, easing: easing, onFrame: { [weak self] e in
             guard let self else { return }
-            let fr = NSRect(x: startFrame.minX + (target.minX - startFrame.minX) * e,
-                            y: startFrame.minY + (target.minY - startFrame.minY) * e,
-                            width: startFrame.width + (target.width - startFrame.width) * e,
-                            height: startFrame.height + (target.height - startFrame.height) * e)
-            self.container.frame = fr
-            self.view.frame = self.container.bounds
+            self.container.frame = NSRect(
+                x: startFrame.minX + (target.minX - startFrame.minX) * e,
+                y: startFrame.minY + (target.minY - startFrame.minY) * e,
+                width: startFrame.width + (target.width - startFrame.width) * e,
+                height: startFrame.height + (target.height - startFrame.height) * e)
+            self.layoutCardInContainer()
             self.container.alphaValue = max(0, min(1, startAlpha + (targetAlpha - startAlpha) * e))
         }, onDone: completion)
     }
 
-    /// Мгновенно поставить карточку на место (alpha 1).
     func placeInstant(origin: NSPoint) {
         animator.cancel()
-        container.frame = NSRect(origin: origin, size: cardSize)
-        view.frame = container.bounds
+        container.frame = outerRect(cardOrigin: origin)
+        layoutCardInContainer()
         container.alphaValue = 1
         container.isHidden = false
     }
 
-    /// Влёт новой карточки: scale (0.92 → 1) + fade, с лёгким оседанием.
+    /// Влёт новой карточки: scale (0.92 → 1) + fade. Быстро, ease-out без перелёта.
     func appear(at origin: NSPoint) {
         animator.cancel()
-        let final = NSRect(origin: origin, size: cardSize)
-        let startSize = NSSize(width: cardSize.width * 0.92, height: cardSize.height * 0.92)
-        let startOrigin = NSPoint(x: final.midX - startSize.width / 2, y: final.midY - startSize.height / 2)
-        container.frame = NSRect(origin: startOrigin, size: startSize)
-        view.frame = container.bounds
+        let final = outerRect(cardOrigin: origin)
+        let startSize = NSSize(width: final.width * 0.92, height: final.height * 0.92)
+        container.frame = NSRect(x: final.midX - startSize.width / 2, y: final.midY - startSize.height / 2,
+                                 width: startSize.width, height: startSize.height)
+        layoutCardInContainer()
         container.alphaValue = 0
         container.isHidden = false
-        animate(toFrame: final, toAlpha: 1, duration: 0.32, delay: 0, easing: easeOutBack)
+        animate(toFrame: final, toAlpha: 1, duration: TrayAnim.move, delay: 0, easing: easeOutCubic)
     }
 
-    /// Свернуть: растворить карточку в точку хаба (уменьшение + затухание).
     func dissolve(toHubCenter c: NSPoint, duration: Double, delay: Double) {
         let tiny = NSRect(x: c.x - 5, y: c.y - 5, width: 10, height: 10)
         animate(toFrame: tiny, toAlpha: 0, duration: duration, delay: delay, easing: easeInOutCubic) { [weak self] in
@@ -409,14 +432,13 @@ final class ThumbnailWindow {
         }
     }
 
-    /// Развернуть: появиться из точки хаба на своё место с оседанием.
     func emerge(fromHubCenter c: NSPoint, toOrigin o: NSPoint, duration: Double, delay: Double) {
         animator.cancel()
         container.frame = NSRect(x: c.x - 5, y: c.y - 5, width: 10, height: 10)
-        view.frame = container.bounds
+        layoutCardInContainer()
         container.alphaValue = 0
         container.isHidden = false
-        animate(toFrame: NSRect(origin: o, size: cardSize), toAlpha: 1, duration: duration, delay: delay, easing: easeOutBack)
+        animate(toFrame: outerRect(cardOrigin: o), toAlpha: 1, duration: duration, delay: delay, easing: easeOutCubic)
     }
 
     func hide() { animator.cancel(); container.isHidden = true }

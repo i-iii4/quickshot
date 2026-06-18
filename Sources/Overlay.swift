@@ -21,6 +21,7 @@ final class SelectionView: NSView {
     var onComplete: ((NSRect, NSScreen) -> Void)?
     var onCancel: (() -> Void)?
     weak var screenRef: NSScreen?
+    var backdrop: NSImage?          // замороженный полный кадр этого дисплея (подложка)
 
     private var startPoint: NSPoint?
     private var currentRect: NSRect = .zero
@@ -74,14 +75,23 @@ final class SelectionView: NSView {
     override func cancelOperation(_ sender: Any?) { onCancel?() }
 
     override func draw(_ dirtyRect: NSRect) {
+        // Подложка — замороженный кадр экрана; поверх него затемнение. В выделении кадр рисуем
+        // заново на полном контрасте (без затемнения) — это и есть «окно» в снимок.
+        backdrop?.draw(in: bounds)
         NSColor.black.withAlphaComponent(0.30).setFill()
         bounds.fill()
 
         guard currentRect != .zero else { return }
 
-        // Пробиваем «дыру» в затемнении на месте выделения: .copy кладёт прозрачность.
-        NSColor.clear.set()
-        currentRect.fill(using: .copy)
+        if let backdrop {
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(rect: currentRect).setClip()
+            backdrop.draw(in: bounds)
+            NSGraphicsContext.restoreGraphicsState()
+        } else {
+            NSColor.clear.set()
+            currentRect.fill(using: .copy)
+        }
 
         // Двойной контур: тёмный снаружи + белый внутри — читается и на светлом, и на тёмном.
         // lineWidth не домножаем на scale: 1pt в CG уже = 2 физпикселя на Retina.
@@ -106,12 +116,19 @@ final class OverlayController {
     private var onComplete: ((NSRect, NSScreen) -> Void)?
     private var onCancel: (() -> Void)?
 
-    func begin(onComplete: @escaping (NSRect, NSScreen) -> Void,
+    /// `backdrops` — замороженный кадр на дисплей (по displayID). Оверлей создаём только для
+    /// экранов, у которых снимок есть. Активация и оверлей теперь безвредны: пиксели уже сняты.
+    func begin(backdrops: [CGDirectDisplayID: NSImage],
+               onComplete: @escaping (NSRect, NSScreen) -> Void,
                onCancel: @escaping () -> Void) {
         self.onComplete = onComplete
         self.onCancel = onCancel
 
         for screen in NSScreen.screens {
+            let did = CGDirectDisplayID(
+                (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
+            guard let backdrop = backdrops[did] else { continue }
+
             // БЕЗ параметра screen: — иначе contentRect трактуется относительно origin экрана,
             // и на дисплее с отрицательным origin смещение применяется дважды (окно улетает за
             // экран). Тут contentRect глобальный; точную посадку добиваем явным setFrame ниже.
@@ -128,6 +145,7 @@ final class OverlayController {
 
             let view = SelectionView(frame: NSRect(origin: .zero, size: screen.frame.size))
             view.screenRef = screen
+            view.backdrop = backdrop
             view.onComplete = { [weak self] rect, scr in self?.onComplete?(rect, scr) }
             view.onCancel = { [weak self] in self?.onCancel?() }
             w.contentView = view
@@ -143,11 +161,6 @@ final class OverlayController {
             if e.keyCode == 53 { self?.onCancel?(); return nil }
             return e
         }
-    }
-
-    /// Спрятать всю «обвязку» перед захватом, не разрушая окна.
-    func orderOutAll() {
-        for w in windows { w.orderOut(nil) }
     }
 
     func dismiss() {

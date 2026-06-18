@@ -1,20 +1,21 @@
 import AppKit
 
-/// Оркестратор одного цикла захвата:
-/// хоткей/меню -> проверка доступа -> оверлеи -> выделение -> спрятать оверлеи ->
-/// дать кадр компоновщику -> захват -> миниатюра с «Копировать».
+/// Оркестратор одного цикла захвата по модели «заморозка → кадрирование»:
+/// хоткей/меню -> проверка доступа -> МГНОВЕННЫЙ снимок полных экранов (без оверлея и активации,
+/// чтобы не сбить ховеры/тултипы/активные состояния) -> оверлей с замороженным кадром как подложкой
+/// -> выделение -> кадрирование уже снятого изображения -> миниатюра.
 final class CaptureController {
 
     private let capturer = RegionCapturer()
     private var overlay: OverlayController?
     private let thumbnails = ThumbnailManager()
     private var busy = false
+    private var frozen: [FrozenScreen] = []
 
     func triggerCapture() {
         guard !busy else { return }
 
-        // Проверяем доступ ДО показа оверлея, чтобы пользователь не выделил область
-        // впустую (после выдачи прав ScreenCaptureKit нередко требует перезапуска).
+        // Проверяем доступ ДО снимка, чтобы не ловить пустой кадр.
         if !CGPreflightScreenCaptureAccess() {
             _ = CGRequestScreenCaptureAccess()   // идемпотентно: перерегистрирует приложение, диалог если статус не определён
             let key = "didRequestScreenRecording"
@@ -27,66 +28,57 @@ final class CaptureController {
         }
 
         busy = true
-        let oc = OverlayController()
-        overlay = oc
-        oc.begin(onComplete: { [weak self] rect, screen in
-            self?.handleSelection(rect, screen)
-        }, onCancel: { [weak self] in
-            self?.overlay?.dismiss()
-            self?.overlay = nil
-            self?.busy = false
-        })
-    }
 
-    private func handleSelection(_ globalRect: NSRect, _ screen: NSScreen) {
-        guard let oc = overlay else { busy = false; return }
-
-        let clamped = globalRect.intersection(screen.frame)        // не вылезать за дисплей
-        guard clamped.width >= 3, clamped.height >= 3 else {
-            oc.dismiss(); overlay = nil; busy = false; return
-        }
-
-        // Готовим только Sendable-данные (CGRect/идентификатор/frame), чтобы не тащить
-        // NSScreen через границу Task; NSScreen для миниатюры заново найдём на главном потоке.
-        let displayID = CGDirectDisplayID(
-            (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
-        let displayFrame = screen.frame
-
-        // 1) спрятать оверлеи. 2) дать компоновщику ~один-два кадра, чтобы затемнение
-        // ушло из следующего захваченного кадра. 3) только потом захватывать.
-        oc.orderOutAll()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            guard let self else { return }
-            Task {
-                do {
-                    let image = try await self.capturer.capture(
-                        globalRect: clamped, displayID: displayID, displayFrame: displayFrame)
-                    await MainActor.run {
-                        oc.dismiss(); self.overlay = nil
-                        let scr = Self.screen(for: displayID) ?? NSScreen.main
-                        self.showThumbnail(image, on: scr)
-                        self.busy = false
-                    }
-                } catch {
-                    await MainActor.run {
-                        oc.dismiss(); self.overlay = nil
-                        self.busy = false
-                        self.handleCaptureError(error)
-                    }
-                }
+        // КЛЮЧЕВОЕ: снимаем полные экраны в ПЕРВЫЙ миг — никакого оверлея и NSApp.activate до этого,
+        // иначе ховер/тултип/активное состояние под курсором сбросятся ещё до кадра. Только Sendable
+        // данные (id + frame) уходят в Task; NSScreen через границу не тащим.
+        let displays = NSScreen.screens.map { (id: Self.displayID(of: $0), frame: $0.frame) }
+        Task {
+            do {
+                let shots = try await self.capturer.captureFull(displays: displays)
+                await MainActor.run { self.presentSelection(shots) }
+            } catch {
+                await MainActor.run { self.busy = false; self.handleCaptureError(error) }
             }
         }
     }
 
-    private static func screen(for displayID: CGDirectDisplayID) -> NSScreen? {
-        NSScreen.screens.first {
-            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID
-        }
+    /// Показать выделение поверх замороженных кадров. Здесь активация и оверлей уже безвредны —
+    /// пиксели сняты.
+    private func presentSelection(_ shots: [FrozenScreen]) {
+        guard !shots.isEmpty else { busy = false; return }
+        frozen = shots
+
+        var backdrops: [CGDirectDisplayID: NSImage] = [:]
+        for s in shots { backdrops[s.displayID] = NSImage(cgImage: s.image, size: s.frame.size) }
+
+        let oc = OverlayController()
+        overlay = oc
+        oc.begin(backdrops: backdrops, onComplete: { [weak self] rect, screen in
+            self?.handleSelection(rect, screen)
+        }, onCancel: { [weak self] in
+            self?.overlay?.dismiss(); self?.overlay = nil
+            self?.frozen = []; self?.busy = false
+        })
     }
 
-    private func showThumbnail(_ image: CGImage, on screen: NSScreen?) {
-        guard let screen = screen ?? NSScreen.main else { return }
-        thumbnails.add(image: image, on: screen)
+    private func handleSelection(_ globalRect: NSRect, _ screen: NSScreen) {
+        let did = Self.displayID(of: screen)
+        let shot = frozen.first { $0.displayID == did }
+        overlay?.dismiss(); overlay = nil
+        frozen = []
+        busy = false
+
+        guard let shot else { return }
+        let clamped = globalRect.intersection(screen.frame)          // не вылезать за дисплей
+        guard clamped.width >= 3, clamped.height >= 3,
+              let cropped = shot.crop(globalSelection: clamped) else { return }
+        thumbnails.add(image: cropped, on: screen)
+    }
+
+    private static func displayID(of screen: NSScreen) -> CGDirectDisplayID {
+        CGDirectDisplayID(
+            (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
     }
 
     private func handleCaptureError(_ error: Error) {

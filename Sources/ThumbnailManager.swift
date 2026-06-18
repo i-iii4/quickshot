@@ -6,14 +6,16 @@ enum ThumbStyle {
     static let minWidth: CGFloat = 120
     static let maxWidth: CGFloat = 640
     static let defaultWidth: CGFloat = 240
-    static let edgeBand: CGFloat = 16            // ширина кромки для ресайза (тянуть за край) — крупная зона хвата
+    static let resizeBand: CGFloat = 12          // полуширина краевой ручки ресайза (центрирована на крае: ±resizeBand)
     static let dragThreshold: CGFloat = 6        // порог, после которого клик тела становится drag-out
 }
 
-/// Тайминги анимаций трея (одна точка правки, зеркальные вход/выход).
+/// Тайминги анимаций трея (одна точка правки, зеркальные вход/выход). Быстро и почти незаметно:
+/// пространственное движение ~160ms, стаггер минимальный, везде ease-out без перелёта.
 enum TrayAnim {
-    static let collapse: Double = 0.3            // растворение/проявление карточки
-    static let stagger: Double = 0.03            // сдвиг старта между карточками
+    static let move: Double = 0.16               // влёт новой карточки (scale+fade)
+    static let collapse: Double = 0.16           // растворение/проявление карточки (зеркально move)
+    static let stagger: Double = 0.015           // сдвиг старта между карточками
 }
 
 /// Положение трея миниатюр. Сохраняется в UserDefaults, меняется из окна настроек.
@@ -85,11 +87,36 @@ final class ThumbnailManager {
         NotificationCenter.default.addObserver(
             self, selector: #selector(trayPositionChanged),
             name: TrayPosition.changedNotification, object: nil)
+        // Смена Spaces/экрана свайпом снимает key с хоста → стекло гаснет («disabled»). Если курсор
+        // над треем (пользователь его трогает) — пере-key'им, чтобы стекло ожило без out-and-back.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(activeSpaceChanged),
+            name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
     }
 
-    deinit { NotificationCenter.default.removeObserver(self) }
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
 
     @objc private func trayPositionChanged() { layout(animateNewest: false) }
+
+    @objc private func activeSpaceChanged() {
+        guard host.isVisible, mouseOverTray() else { return }
+        host.makeKey()
+    }
+
+    /// Курсор над картой/хабом (в глобальных координатах)? Хост полноэкранный, поэтому проверяем
+    /// именно интерактивные сабвью, а не весь хост.
+    private func mouseOverTray() -> Bool {
+        let m = NSEvent.mouseLocation
+        let o = host.frame.origin
+        func globalFrame(_ v: NSView) -> NSRect {
+            NSRect(x: o.x + v.frame.minX, y: o.y + v.frame.minY, width: v.frame.width, height: v.frame.height)
+        }
+        if !hub.view.isHidden, globalFrame(hub.view).contains(m) { return true }
+        return items.contains { !$0.hostView.isHidden && globalFrame($0.hostView).contains(m) }
+    }
 
     private var anchorHeight: CGFloat { (anchorScreen ?? NSScreen.main)?.frame.height ?? 900 }
 
@@ -193,7 +220,8 @@ final class ThumbnailManager {
         guard let screen = anchorScreen ?? NSScreen.main else { return }
         ensureHost(on: screen)
         positionHub(on: screen)
-        for t in items { t.setCollapsed(collapsed) }
+        let edgePos = TrayPosition.current
+        for t in items { t.setCollapsed(collapsed); t.configureResize(for: edgePos) }
         let (visible, hidden) = cardLayout(on: screen)
         for t in hidden { t.hide() }
         if collapsed {

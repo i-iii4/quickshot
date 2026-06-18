@@ -59,7 +59,10 @@ private final class PinnedContentView: NSView {
         trackingArea = ta
     }
 
-    override func mouseEntered(with event: NSEvent) { copyButton.isHidden = false }
+    override func mouseEntered(with event: NSEvent) {
+        window?.makeKey()           // после свайпа Spaces окно теряет key и стекло гаснет — оживляем
+        copyButton.isHidden = false
+    }
     override func mouseExited(with event: NSEvent) { copyButton.isHidden = true }
 
     private func doCopy() {
