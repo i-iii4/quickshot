@@ -1,42 +1,69 @@
 import AppKit
 
-/// Безрамочное прозрачное окно поверх всего. Borderless-окно по умолчанию возвращает
-/// canBecomeKey == false, из-за чего до него не доходят клавиши (в т.ч. Escape) —
-/// поэтому переопределяем.
+/// Безрамочное окно поверх всего. Borderless по умолчанию возвращает canBecomeKey == false,
+/// из-за чего до него не доходят клавиши (в т.ч. Escape) — переопределяем.
 final class OverlayWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
-    // AppKit по умолчанию «подтягивает» окно так, чтобы титул остался на экране, и для
-    // borderless-оверлея на дисплее с отрицательным origin (монитор слева) это уносит окно
-    // обратно на главный экран — второй монитор остаётся без оверлея, скриншоты там не делаются.
-    // Оверлей обязан точно лежать на своём экране — возвращаем рамку без правок.
+    // AppKit «подтягивает» окно так, чтобы титул остался на экране; для borderless-оверлея на
+    // дисплее с отрицательным origin (монитор слева) это уносит окно на главный экран. Оверлей
+    // обязан точно лежать на своём экране — возвращаем рамку без правок.
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
-/// Вид, рисующий затемнение и «вырезанную» рамку выделения, и обрабатывающий
-/// перетаскивание мышью.
+/// Статический бэкдроп — замороженный кадр в слое. Выставляется ОДИН раз, не перерисовывается:
+/// GPU композитит его пиксель-в-пиксель, поэтому он не «доезжает» и не дрожит. Мышь пропускаем
+/// хрому, лежащему сверху.
+private final class BackdropView: NSView {
+    init(image: CGImage) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.contents = image
+        layer?.contentsGravity = .resize
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// Хром выделения поверх бэкдропа: затемнение + рамка. Лёгкая перерисовка (без изображения),
+/// поэтому перетаскивание рамки не гоняет полноэкранную картинку. Слоёвый и непрозрачный частично:
+/// `.copy`-clear пробивает прозрачную «дыру» в затемнении — сквозь неё бэкдроп виден на полном
+/// контрасте.
 final class SelectionView: NSView {
 
     var onComplete: ((NSRect, NSScreen) -> Void)?
     var onCancel: (() -> Void)?
     weak var screenRef: NSScreen?
-    var backdrop: NSImage?          // замороженный полный кадр этого дисплея (подложка)
 
     private var startPoint: NSPoint?
     private var currentRect: NSRect = .zero
+    private var cursorTracking: NSTrackingArea?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true                 // своя прозрачная backing-store для .copy-дыры над бэкдропом
+    }
+    required init?(coder: NSCoder) { fatalError() }
 
     override var acceptsFirstResponder: Bool { true }
 
-    // Без этого первый клик по оверлею экрана, который не является key-окном (на втором мониторе
-    // оверлеи всех экранов кроме главного — не key), тратится на активацию окна и НЕ доходит до
-    // вью: startPoint не ставится, выделение не начинается — «ничего не происходит». С true
-    // mouseDown приходит сразу, выделение работает на любом экране независимо от key-статуса.
+    // Без этого первый клик по оверлею экрана, который не key (на втором мониторе оверлеи кроме
+    // главного — не key), тратится на активацию окна и не доходит до вью. С true mouseDown
+    // приходит сразу — выделение работает на любом экране независимо от key-статуса.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .crosshair)
+    // Курсор-перекрестье. resetCursorRects плохо держится у сабвью на каждый mouse-moved —
+    // система перебивает стрелкой. Через cursorUpdate (приложение в оверлее активно) держится
+    // надёжно; во время drag cursorUpdate не приходит, поэтому ставим явно в mouseDragged.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let t = cursorTracking { removeTrackingArea(t) }
+        let t = NSTrackingArea(rect: .zero, options: [.activeAlways, .inVisibleRect, .cursorUpdate],
+                               owner: self, userInfo: nil)
+        addTrackingArea(t); cursorTracking = t
     }
+    override func cursorUpdate(with event: NSEvent) { NSCursor.crosshair.set() }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -44,12 +71,14 @@ final class SelectionView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        NSCursor.crosshair.set()
         startPoint = convert(event.locationInWindow, from: nil)
         currentRect = .zero
         needsDisplay = true
     }
 
     override func mouseDragged(with event: NSEvent) {
+        NSCursor.crosshair.set()                       // удержать перекрестье во время выделения
         guard let s = startPoint else { return }
         let p = convert(event.locationInWindow, from: nil)
         currentRect = NSRect(x: min(s.x, p.x), y: min(s.y, p.y),
@@ -75,26 +104,16 @@ final class SelectionView: NSView {
     override func cancelOperation(_ sender: Any?) { onCancel?() }
 
     override func draw(_ dirtyRect: NSRect) {
-        // Подложка — замороженный кадр экрана; поверх него затемнение. В выделении кадр рисуем
-        // заново на полном контрасте (без затемнения) — это и есть «окно» в снимок.
-        backdrop?.draw(in: bounds)
         NSColor.black.withAlphaComponent(0.30).setFill()
         bounds.fill()
 
         guard currentRect != .zero else { return }
 
-        if let backdrop {
-            NSGraphicsContext.saveGraphicsState()
-            NSBezierPath(rect: currentRect).setClip()
-            backdrop.draw(in: bounds)
-            NSGraphicsContext.restoreGraphicsState()
-        } else {
-            NSColor.clear.set()
-            currentRect.fill(using: .copy)
-        }
+        // Прозрачная «дыра» на месте выделения: сквозь неё бэкдроп виден без затемнения.
+        NSColor.clear.set()
+        currentRect.fill(using: .copy)
 
         // Двойной контур: тёмный снаружи + белый внутри — читается и на светлом, и на тёмном.
-        // lineWidth не домножаем на scale: 1pt в CG уже = 2 физпикселя на Retina.
         NSColor.black.withAlphaComponent(0.35).setStroke()
         let outer = NSBezierPath(rect: currentRect.insetBy(dx: -0.5, dy: -0.5))
         outer.lineWidth = 1
@@ -107,8 +126,8 @@ final class SelectionView: NSView {
     }
 }
 
-/// Создаёт и удерживает по одному оверлею на КАЖДЫЙ экран (origin и backingScaleFactor
-/// у дисплеев разные — одно окно на всё нельзя). Один экран = одно окно.
+/// Создаёт и удерживает по одному оверлею на КАЖДЫЙ экран (origin и backingScaleFactor у дисплеев
+/// разные — одно окно на всё нельзя). Каждый оверлей = бэкдроп-слой (заморозка) + хром выделения.
 final class OverlayController {
 
     private(set) var windows: [OverlayWindow] = []
@@ -117,8 +136,8 @@ final class OverlayController {
     private var onCancel: (() -> Void)?
 
     /// `backdrops` — замороженный кадр на дисплей (по displayID). Оверлей создаём только для
-    /// экранов, у которых снимок есть. Активация и оверлей теперь безвредны: пиксели уже сняты.
-    func begin(backdrops: [CGDirectDisplayID: NSImage],
+    /// экранов, у которых снимок есть.
+    func begin(backdrops: [CGDirectDisplayID: CGImage],
                onComplete: @escaping (NSRect, NSScreen) -> Void,
                onCancel: @escaping () -> Void) {
         self.onComplete = onComplete
@@ -129,9 +148,8 @@ final class OverlayController {
                 (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
             guard let backdrop = backdrops[did] else { continue }
 
-            // БЕЗ параметра screen: — иначе contentRect трактуется относительно origin экрана,
-            // и на дисплее с отрицательным origin смещение применяется дважды (окно улетает за
-            // экран). Тут contentRect глобальный; точную посадку добиваем явным setFrame ниже.
+            // БЕЗ параметра screen: — иначе contentRect трактуется относительно origin экрана, и на
+            // дисплее с отрицательным origin смещение применяется дважды. contentRect глобальный.
             let w = OverlayWindow(contentRect: screen.frame, styleMask: [.borderless],
                                   backing: .buffered, defer: false)
             w.setFrame(screen.frame, display: false)
@@ -142,13 +160,24 @@ final class OverlayController {
             w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
             w.ignoresMouseEvents = false
             w.acceptsMouseMovedEvents = true
+            w.animationBehavior = .none                  // без влёта/fade — заморозка появляется разом
 
-            let view = SelectionView(frame: NSRect(origin: .zero, size: screen.frame.size))
-            view.screenRef = screen
-            view.backdrop = backdrop
-            view.onComplete = { [weak self] rect, scr in self?.onComplete?(rect, scr) }
-            view.onCancel = { [weak self] in self?.onCancel?() }
-            w.contentView = view
+            let bounds = NSRect(origin: .zero, size: screen.frame.size)
+            let backdropView = BackdropView(image: backdrop)
+            backdropView.frame = bounds
+            backdropView.autoresizingMask = [.width, .height]
+
+            let chrome = SelectionView(frame: bounds)
+            chrome.autoresizingMask = [.width, .height]
+            chrome.screenRef = screen
+            chrome.onComplete = { [weak self] rect, scr in self?.onComplete?(rect, scr) }
+            chrome.onCancel = { [weak self] in self?.onCancel?() }
+
+            let container = NSView(frame: bounds)
+            container.addSubview(backdropView)           // статичный фон снизу
+            container.addSubview(chrome)                 // лёгкий хром сверху
+            w.contentView = container
+            w.displayIfNeeded()                          // отрисовать содержимое ДО показа — атомарно
             windows.append(w)
         }
 
@@ -156,7 +185,7 @@ final class OverlayController {
         windows.first?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
-        // Escape должен отменять независимо от того, какое окно key (мульти-монитор).
+        // Escape отменяет независимо от того, какое окно key (мульти-монитор).
         escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             if e.keyCode == 53 { self?.onCancel?(); return nil }
             return e

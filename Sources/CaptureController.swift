@@ -49,8 +49,8 @@ final class CaptureController {
         guard !shots.isEmpty else { busy = false; return }
         frozen = shots
 
-        var backdrops: [CGDirectDisplayID: NSImage] = [:]
-        for s in shots { backdrops[s.displayID] = NSImage(cgImage: s.image, size: s.frame.size) }
+        var backdrops: [CGDirectDisplayID: CGImage] = [:]
+        for s in shots { backdrops[s.displayID] = s.image }
 
         let oc = OverlayController()
         overlay = oc
