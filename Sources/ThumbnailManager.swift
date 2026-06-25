@@ -135,8 +135,9 @@ final class ThumbnailManager {
     @objc private func trayPositionChanged() { layout(animateNewest: false) }
 
     @objc private func activeSpaceChanged() {
-        guard host.isVisible, mouseOverTray() else { return }
-        host.makeKey()
+        guard host.isVisible else { return }
+        host.orderFrontRegardless()             // доталкиваем трей в текущий Space (вкл. фуллскрин via fullScreenAuxiliary)
+        if mouseOverTray() { host.makeKey() }   // карточные стеклянные кнопки оживают, если курсор над треем
     }
 
     /// Курсор над картой/хабом (в глобальных координатах)? Хост полноэкранный, поэтому проверяем
