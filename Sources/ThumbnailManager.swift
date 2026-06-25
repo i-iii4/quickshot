@@ -217,7 +217,8 @@ final class ThumbnailManager {
     func toggleCollapse() { collapsed ? expand() : collapse() }
 
     func collapse() {
-        guard !collapsed, items.count > 1, let screen = anchorScreen ?? NSScreen.main else { return }
+        // Сворачиваем при любом count >= 1 (хаб теперь виден и при одном снимке — клик должен работать).
+        guard !collapsed, !items.isEmpty, let screen = anchorScreen ?? NSScreen.main else { return }
         collapsed = true
         positionHub(on: screen)
         for t in items { t.setCollapsed(true) }
@@ -269,19 +270,19 @@ final class ThumbnailManager {
     }
 
     private func positionHub(on screen: NSScreen) {
+        hub.setState(count: items.count, collapsed: collapsed)   // сначала размер (ширина капсулы), потом позиция
         hub.setOrigin(toLocal(hubOrigin(on: screen)))
-        hub.setState(count: items.count, collapsed: collapsed)
-        if items.count >= 2 { hub.show() } else { hub.hide() }
+        if items.isEmpty { hub.hide() } else { hub.show() }      // счётчик виден при любом count >= 1
     }
 
     private func hubOrigin(on screen: NSScreen) -> NSPoint {
         let vf = screen.visibleFrame
-        let s = hub.size
+        let w = hub.width, h = hub.height                        // капсула: ширина переменная, высота фикс.
         switch TrayPosition.current {
-        case .right:  return NSPoint(x: vf.maxX - ThumbStyle.margin - s, y: vf.minY + ThumbStyle.margin)
+        case .right:  return NSPoint(x: vf.maxX - ThumbStyle.margin - w, y: vf.minY + ThumbStyle.margin)
         case .left:   return NSPoint(x: vf.minX + ThumbStyle.margin,     y: vf.minY + ThumbStyle.margin)
-        case .bottom: return NSPoint(x: vf.maxX - ThumbStyle.margin - s, y: vf.minY + ThumbStyle.margin)
-        case .top:    return NSPoint(x: vf.maxX - ThumbStyle.margin - s, y: vf.maxY - ThumbStyle.margin - s)
+        case .bottom: return NSPoint(x: vf.maxX - ThumbStyle.margin - w, y: vf.minY + ThumbStyle.margin)
+        case .top:    return NSPoint(x: vf.maxX - ThumbStyle.margin - w, y: vf.maxY - ThumbStyle.margin - h)
         }
     }
 
@@ -290,14 +291,14 @@ final class ThumbnailManager {
     private func cardLayout(on screen: NSScreen) -> (visible: [(ThumbnailWindow, NSPoint)], hidden: [ThumbnailWindow]) {
         let vf = screen.visibleFrame
         let pos = TrayPosition.current
-        let s = hub.size
+        let hubW = hub.width, hubH = hub.height                  // капсула: высота для вертикали, ширина для горизонтали
         var visible: [(ThumbnailWindow, NSPoint)] = []
         var hidden: [ThumbnailWindow] = []
         var overflow = false
 
         if pos.isVertical {
             let x = pos == .right ? (vf.maxX - ThumbStyle.margin - cardWidth) : (vf.minX + ThumbStyle.margin)
-            var y = vf.minY + ThumbStyle.margin + s + ThumbStyle.gap      // над хабом
+            var y = vf.minY + ThumbStyle.margin + hubH + ThumbStyle.gap   // над хабом — высота хаба
             for (idx, t) in items.reversed().enumerated() {
                 if overflow { hidden.append(t); continue }
                 let h = t.cardHeight
@@ -306,7 +307,7 @@ final class ThumbnailManager {
                 y += h + ThumbStyle.gap
             }
         } else {
-            var x = (vf.maxX - ThumbStyle.margin - s) - ThumbStyle.gap - cardWidth   // слева от хаба
+            var x = (vf.maxX - ThumbStyle.margin - hubW) - ThumbStyle.gap - cardWidth   // слева от хаба — ширина хаба
             for (idx, t) in items.reversed().enumerated() {
                 if overflow { hidden.append(t); continue }
                 if idx > 0 && x < (vf.minX + ThumbStyle.margin) { overflow = true; hidden.append(t); continue }
