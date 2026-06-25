@@ -39,10 +39,13 @@ final class SelectionView: NSView {
     private var startPoint: NSPoint?
     private var currentRect: NSRect = .zero
     private var cursorTracking: NSTrackingArea?
+    private let crosshair = SelectionView.makeCrosshair()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true                 // своя прозрачная backing-store для .copy-дыры над бэкдропом
+        layer?.addSublayer(crosshair)
+        crosshair.isHidden = true
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -53,32 +56,70 @@ final class SelectionView: NSView {
     // приходит сразу — выделение работает на любом экране независимо от key-статуса.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    // Курсор-перекрестье. resetCursorRects плохо держится у сабвью на каждый mouse-moved —
-    // система перебивает стрелкой. Через cursorUpdate (приложение в оверлее активно) держится
-    // надёжно; во время drag cursorUpdate не приходит, поэтому ставим явно в mouseDragged.
+    // Системный курсор прячет OverlayController; перекрестье рисуем сами слоем и двигаем по
+    // событиям мыши. Так пер-move сброс курсора window server'ом нас не касается (прятать нечего),
+    // и зависимости от cursor-rect/cursorUpdate/«кто последний set()» нет.
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let t = cursorTracking { removeTrackingArea(t) }
-        let t = NSTrackingArea(rect: .zero, options: [.activeAlways, .inVisibleRect, .cursorUpdate],
+        let t = NSTrackingArea(rect: .zero, options: [.activeAlways, .inVisibleRect, .mouseMoved, .mouseEnteredAndExited],
                                owner: self, userInfo: nil)
         addTrackingArea(t); cursorTracking = t
     }
-    override func cursorUpdate(with event: NSEvent) { NSCursor.crosshair.set() }
+    override func mouseEntered(with event: NSEvent) { moveCrosshair(event) }
+    override func mouseExited(with event: NSEvent) { crosshair.isHidden = true }
+    override func mouseMoved(with event: NSEvent) { moveCrosshair(event) }
+
+    private func moveCrosshair(_ event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        CATransaction.begin(); CATransaction.setDisableActions(true)   // следовать мгновенно, без анимации
+        crosshair.position = p
+        crosshair.isHidden = false
+        CATransaction.commit()
+    }
+
+    /// Перекрестье: белый «+» с тёмным ореолом (читается на любом фоне), векторно — резко на Retina.
+    private static func makeCrosshair() -> CALayer {
+        let s: CGFloat = 44, c = s / 2, gap: CGFloat = 4, arm: CGFloat = 9
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: c - gap - arm, y: c)); path.addLine(to: CGPoint(x: c - gap, y: c))
+        path.move(to: CGPoint(x: c + gap, y: c));       path.addLine(to: CGPoint(x: c + gap + arm, y: c))
+        path.move(to: CGPoint(x: c, y: c - gap - arm)); path.addLine(to: CGPoint(x: c, y: c - gap))
+        path.move(to: CGPoint(x: c, y: c + gap));       path.addLine(to: CGPoint(x: c, y: c + gap + arm))
+        func shape(_ color: CGColor, _ w: CGFloat) -> CAShapeLayer {
+            let l = CAShapeLayer()
+            l.frame = CGRect(x: 0, y: 0, width: s, height: s)
+            l.path = path; l.strokeColor = color; l.fillColor = nil; l.lineWidth = w; l.lineCap = .round
+            return l
+        }
+        let container = CALayer()
+        container.bounds = CGRect(x: 0, y: 0, width: s, height: s)
+        container.addSublayer(shape(NSColor.black.withAlphaComponent(0.6).cgColor, 3.5))   // ореол
+        container.addSublayer(shape(NSColor.white.cgColor, 1.5))                           // ядро
+        return container
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         window?.makeFirstResponder(self)
+        let scale = window?.backingScaleFactor ?? 2
+        crosshair.contentsScale = scale
+        crosshair.sublayers?.forEach { $0.contentsScale = scale }
+        if let win = window {                                   // показать перекрестье сразу, если курсор уже над этим экраном
+            let vp = convert(win.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
+            if bounds.contains(vp) { crosshair.position = vp; crosshair.isHidden = false }
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
-        NSCursor.crosshair.set()
+        moveCrosshair(event)
         startPoint = convert(event.locationInWindow, from: nil)
         currentRect = .zero
         needsDisplay = true
     }
 
     override func mouseDragged(with event: NSEvent) {
-        NSCursor.crosshair.set()                       // удержать перекрестье во время выделения
+        moveCrosshair(event)
         guard let s = startPoint else { return }
         let p = convert(event.locationInWindow, from: nil)
         currentRect = NSRect(x: min(s.x, p.x), y: min(s.y, p.y),
@@ -132,6 +173,8 @@ final class OverlayController {
 
     private(set) var windows: [OverlayWindow] = []
     private var escMonitor: Any?
+    private var spaceObserver: Any?
+    private var cursorHidden = false
     private var onComplete: ((NSRect, NSScreen) -> Void)?
     private var onCancel: (() -> Void)?
 
@@ -157,7 +200,10 @@ final class OverlayController {
             w.backgroundColor = .clear
             w.hasShadow = false
             w.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))   // выше строки меню
-            w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+            // БЕЗ .canJoinAllSpaces: оверлей выделения привязан к своему Space (модальный момент),
+            // а не таскается за свайпом, показывая протухший замороженный кадр. Свайп Spaces —
+            // отменяем захват (наблюдатель ниже).
+            w.collectionBehavior = [.fullScreenAuxiliary, .stationary]
             w.ignoresMouseEvents = false
             w.acceptsMouseMovedEvents = true
             w.animationBehavior = .none                  // без влёта/fade — заморозка появляется разом
@@ -184,21 +230,34 @@ final class OverlayController {
         for w in windows { w.orderFrontRegardless() }
         windows.first?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        if !cursorHidden { NSCursor.hide(); cursorHidden = true }   // системный курсор прячем — рисуем своё перекрестье
 
         // Escape отменяет независимо от того, какое окно key (мульти-монитор).
         escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             if e.keyCode == 53 { self?.onCancel?(); return nil }
             return e
         }
+        // Свайп между Spaces во время выделения — отменяем захват (иначе застреваешь: после свайпа
+        // оверлей теряет key, локальный Esc-монитор до него не доходит, и выйти можно только сняв кадр).
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.onCancel?()
+        }
     }
 
     func dismiss() {
+        if cursorHidden { NSCursor.unhide(); cursorHidden = false }
         if let escMonitor { NSEvent.removeMonitor(escMonitor); self.escMonitor = nil }
+        if let spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver); self.spaceObserver = nil }
         for w in windows { w.orderOut(nil) }
         windows.removeAll()
         onComplete = nil
         onCancel = nil
     }
 
-    deinit { if let escMonitor { NSEvent.removeMonitor(escMonitor) } }
+    deinit {
+        if cursorHidden { NSCursor.unhide() }                      // защита: не оставить курсор скрытым
+        if let escMonitor { NSEvent.removeMonitor(escMonitor) }
+        if let spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver) }
+    }
 }

@@ -92,11 +92,44 @@ final class ThumbnailManager {
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(activeSpaceChanged),
             name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        // Трей следует за активным экраном. Переход на другой монитор НЕ шлёт activeSpaceDidChange
+        // (проверено логом), а NSScreen.main отстаёт на событие — поэтому ловим клики глобально
+        // (видят чужие приложения, прав не требуют) и берём экран под курсором: он на первом же
+        // клике точен. Триггер по намеренному клику, а не по каждому движению мыши — без дёрганья.
+        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) {
+            [weak self] _ in self?.followActiveScreen()
+        }
+        // Отключили монитор, на котором стоял трей — перенести на главный, чтобы не завис на «нигде».
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(screenParamsChanged),
+            name: NSApplication.didChangeScreenParametersNotification, object: nil)
     }
+
+    private var clickMonitor: Any?
 
     deinit {
         NotificationCenter.default.removeObserver(self)
         NSWorkspace.shared.notificationCenter.removeObserver(self)
+        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+    }
+
+    private func cursorScreen() -> NSScreen? {
+        let m = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(m, $0.frame, false) }
+    }
+
+    /// Перенести трей на экран под курсором, если он не там (по клику в активном экране).
+    private func followActiveScreen() {
+        guard host.isVisible, let cur = cursorScreen(), host.frame != cur.frame else { return }
+        anchorScreen = cur
+        layout(animateNewest: false)
+    }
+
+    @objc private func screenParamsChanged() {
+        guard host.isVisible, let a = anchorScreen, !NSScreen.screens.contains(a),
+              let main = NSScreen.main else { return }
+        anchorScreen = main
+        layout(animateNewest: false)
     }
 
     @objc private func trayPositionChanged() { layout(animateNewest: false) }
