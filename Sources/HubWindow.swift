@@ -1,128 +1,53 @@
 import AppKit
 
-/// Круглый/капсульный хаб-счётчик — САБВЬЮ общего окна-хоста трея. НЕ системная `.glass`-кнопка:
-/// её активный вид следует за key/active-состоянием окна, а трей — фоновая nonactivating-панель,
-/// почти всегда не key, поэтому стекло гасло в «disabled». Публичного способа форсировать активный
-/// вид системного контрола в не-key окне нет.
+/// Круглый нативный Liquid Glass хаб-счётчик — САБВЬЮ общего окна-хоста трея. Это системная
+/// `.glass`-кнопка (`GlassButton`): стекло, ховер/нажатие и цвет цифры рисует система, как у кнопок
+/// карточки (крестик/копировать) — визуально совпадает с ними.
 ///
-/// Поэтому вид отвязан от состояния окна: фон — `NSVisualEffectView` с `state = .active` (пин
-/// активного вида материала — НЕ гаснет при потере фокуса/key/Spaces), пин тёмной темы (белая цифра
-/// читаема всегда), цифру и клик рисуем/обрабатываем сами.
+/// Известный размен (выбран сознательно ради вида): активный вид `.glass` следует за key/active
+/// окна, а трей — фоновая nonactivating-панель, поэтому вне фокуса кнопка приглушается («disabled»)
+/// и оживает при наведении/взаимодействии. Публичного способа форсировать активный вид системного
+/// контрола в не-key окне нет.
 ///
-/// Форма: круг при коротком числе, плавно растёт в капсулу под широкое («99+»). Высота фиксирована.
-private final class HubView: NSView {
-    var onClick: (() -> Void)?
-    let diameter: CGFloat                                  // = высота, фиксированная
-    private let hPad: CGFloat
-    private let blur = NSVisualEffectView()
-    private let label = NSTextField(labelWithString: "0")
-
-    init(diameter: CGFloat, font: NSFont) {
-        self.diameter = diameter
-        self.hPad = ceil(diameter * 0.22)
-        super.init(frame: NSRect(x: 0, y: 0, width: diameter, height: diameter))
-
-        blur.material = .hudWindow
-        blur.blendingMode = .behindWindow
-        blur.state = .active                                  // пин активного вида — не гаснет вне key
-        blur.appearance = NSAppearance(named: .darkAqua)      // консистентно тёмный фрост → белая цифра читаема
-        addSubview(blur)
-
-        label.font = font
-        label.textColor = .white
-        label.alignment = .center
-        label.isBezeled = false
-        label.drawsBackground = false
-        label.isEditable = false
-        label.isSelectable = false
-        label.setAccessibilityElement(false)                  // a11y — на самом хабе
-        addSubview(label)
-
-        setAccessibilityElement(true)
-        setAccessibilityRole(.button)
-        updateMask()
-    }
-    required init?(coder: NSCoder) { fatalError() }
-
-    var count: String {
-        get { label.stringValue }
-        set { label.stringValue = newValue; resizeToFit() }
-    }
-
-    /// Ширина под текст: круг при коротком числе (минимум = диаметр), капсула при широком.
-    private func resizeToFit() {
-        label.sizeToFit()
-        let w = max(diameter, ceil(label.frame.width) + 2 * hPad)
-        if abs(frame.width - w) > 0.5 {
-            setFrameSize(NSSize(width: w, height: diameter))
-            updateMask()
-        }
-        needsLayout = true
-    }
-
-    /// Маска по текущему размеру: roundedRect с радиусом = высота/2 даёт круг (w==h) или капсулу (w>h).
-    private func updateMask() {
-        let sz = bounds.size
-        blur.maskImage = NSImage(size: sz, flipped: false) { rect in
-            NSColor.black.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: sz.height / 2, yRadius: sz.height / 2).fill()
-            return true
-        }
-    }
-
-    override func layout() {
-        super.layout()
-        blur.frame = bounds
-        label.sizeToFit()
-        label.frame = NSRect(x: 0, y: (bounds.height - label.frame.height) / 2,
-                             width: bounds.width, height: label.frame.height)
-    }
-
-    // Клик обрабатываем сами: acceptsFirstMouse → срабатывает и в не-key окне; лёгкий press-фидбэк.
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func mouseDown(with event: NSEvent) { alphaValue = 0.7 }
-    override func mouseUp(with event: NSEvent) {
-        alphaValue = 1
-        if bounds.contains(convert(event.locationInWindow, from: nil)) { onClick?() }
-    }
-}
-
-/// Обёртка над хабом для менеджера трея. Хаб переменной ширины (капсула), высота фиксирована —
-/// поэтому раздаём `width`/`height` раздельно (раскладка использует высоту для вертикали, ширину
-/// для горизонтали).
+/// Внешний API (view/onClick/width/height/center/setState/setOrigin/show/hide) сохранён — менеджер
+/// и позднейшие фиксы (видимость при count≥1, доталкивание на фуллскрины) работают без изменений.
 final class HubWindow {
 
-    private let hub: HubView
+    private let button: GlassButton
+    private let diameter: CGFloat
 
     /// Сабвью, которую хост добавляет в свою иерархию и позиционирует.
-    var view: NSView { hub }
+    var view: NSView { button }
 
-    var onClick: (() -> Void)? { didSet { hub.onClick = onClick } }
-    var width: CGFloat { hub.frame.width }     // переменная (капсула)
-    var height: CGFloat { hub.diameter }       // фиксированная
+    var onClick: (() -> Void)? { didSet { button.onClick = onClick } }
+    var width: CGFloat { diameter }            // круг — ширина = высота
+    var height: CGFloat { diameter }
     /// Центр в координатах хоста (для растворения/появления карточек в точку хаба).
-    var center: NSPoint { NSPoint(x: hub.frame.midX, y: hub.frame.midY) }
+    var center: NSPoint { NSPoint(x: button.frame.midX, y: button.frame.midY) }
 
     init() {
         let base = NSFont.systemFont(ofSize: NSFont.systemFontSize(for: .large), weight: .semibold)
         let font = NSFont(descriptor: base.fontDescriptor.withDesign(.rounded) ?? base.fontDescriptor,
                           size: base.pointSize) ?? base
+        button = GlassButton(title: "0", a11y: "Свернуть скриншоты")
+        button.borderShape = .circle           // круглая, как раньше
+        button.font = font
         // Диаметр = стандартная высота large-контрола (системная метрика), а не магическое число.
-        let sizer = GlassButton(title: "0", a11y: "")
-        sizer.borderShape = .circle
-        hub = HubView(diameter: ceil(sizer.fittingSize.height), font: font)
+        diameter = ceil(button.fittingSize.height)
+        button.frame = NSRect(x: 0, y: 0, width: diameter, height: diameter)
     }
 
-    /// Обновить счётчик и озвучку. Потолок «99+» — держит ширину ограниченной и предсказуемой.
+    /// Обновить счётчик и озвучку. Цифра — обычный `title`: система даёт контрастный, адаптивный под
+    /// тему/стекло цвет (`controlTextColor`). Потолок «99+» держит ширину в пределах круга.
     func setState(count: Int, collapsed: Bool) {
-        hub.count = count > 99 ? "99+" : "\(count)"
-        hub.setAccessibilityValue("\(count)")
-        hub.setAccessibilityLabel(collapsed ? "Развернуть скриншоты" : "Свернуть скриншоты")
-        hub.setAccessibilityHelp("Нажмите, чтобы развернуть или свернуть трей")
+        button.title = count > 99 ? "99+" : "\(count)"
+        button.setAccessibilityValue("\(count)")
+        button.setAccessibilityLabel(collapsed ? "Развернуть скриншоты" : "Свернуть скриншоты")
+        button.setAccessibilityHelp("Нажмите, чтобы развернуть или свернуть трей")
     }
 
     /// Позиция в координатах хоста.
-    func setOrigin(_ p: NSPoint) { hub.setFrameOrigin(p) }
-    func show() { hub.isHidden = false }
-    func hide() { hub.isHidden = true }
+    func setOrigin(_ p: NSPoint) { button.setFrameOrigin(p) }
+    func show() { button.isHidden = false }
+    func hide() { button.isHidden = true }
 }
