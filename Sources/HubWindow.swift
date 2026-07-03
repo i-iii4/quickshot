@@ -40,6 +40,29 @@ private enum HubMetrics {
     static let animationDuration: Double = 0.18
 }
 
+#if TESTING
+struct HubDebugPillSnapshot {
+    let title: String
+    let frame: NSRect
+    let cornerRadius: CGFloat
+    let labelAlpha: CGFloat
+    let isInteractive: Bool
+}
+
+struct HubDebugSnapshot {
+    let shellBounds: NSRect
+    let shellInset: CGFloat
+    let groupGap: CGFloat
+    let actionGap: CGFloat
+    let progress: CGFloat
+    let coreFrame: NSRect
+    let coreCornerRadius: CGFloat
+    let actionClipFrame: NSRect
+    let actionClipCornerRadius: CGFloat
+    let actionPills: [HubDebugPillSnapshot]
+}
+#endif
+
 private func hubEaseOutCubic(_ f: CGFloat) -> CGFloat { 1 - pow(1 - f, 3) }
 private func hubEaseInOutCubic(_ f: CGFloat) -> CGFloat {
     f < 0.5 ? 4 * f * f * f : 1 - pow(-2 * f + 2, 3) / 2
@@ -138,6 +161,16 @@ private final class HubActionPill: NSView {
         label.alphaValue = title
         isInteractive = title > 0.98
     }
+
+#if TESTING
+    func debugSnapshot() -> HubDebugPillSnapshot {
+        HubDebugPillSnapshot(title: action.title,
+                             frame: frame,
+                             cornerRadius: layer?.cornerRadius ?? 0,
+                             labelAlpha: label.alphaValue,
+                             isInteractive: isInteractive)
+    }
+#endif
 
     private static func deleteTextColor(hovered: Bool, pressed: Bool) -> NSColor {
         if pressed { return NSColor(calibratedRed: 1.0, green: 0.72, blue: 0.72, alpha: 1) }
@@ -524,6 +557,19 @@ private final class HubShellView: NSView {
         core.setGroupHovered(progress > 0)
         layoutForProgress(progress)
     }
+
+    func debugSnapshot() -> HubDebugSnapshot {
+        HubDebugSnapshot(shellBounds: bounds,
+                         shellInset: HubMetrics.shellInset,
+                         groupGap: HubMetrics.groupGap,
+                         actionGap: HubMetrics.actionGap,
+                         progress: progress,
+                         coreFrame: core.frame,
+                         coreCornerRadius: core.layer?.cornerRadius ?? 0,
+                         actionClipFrame: actionClip.frame,
+                         actionClipCornerRadius: actionClip.layer?.cornerRadius ?? 0,
+                         actionPills: actionButtons.map { $0.view.debugSnapshot() })
+    }
 #endif
 
     private func layoutForProgress(_ p: CGFloat) {
@@ -643,5 +689,6 @@ final class HubWindow {
 
 #if TESTING
     func debugSetExpansionProgress(_ progress: CGFloat) { shell.debugSetExpansionProgress(progress) }
+    func debugSnapshot() -> HubDebugSnapshot { shell.debugSnapshot() }
 #endif
 }

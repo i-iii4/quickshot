@@ -14,6 +14,8 @@ struct HubWindowBehaviorTests {
         run("visible controls stay inside shell bounds", testVisibleControlsStayInsideShellBounds)
         run("intermediate expansion frames stay contained and anchored", testIntermediateExpansionFrames)
         run("action labels are never visibly clipped", testActionLabelsAreNeverVisiblyClipped)
+        run("layout metrics stay mathematically consistent", testLayoutMetricsStayConsistent)
+        run("blank shell area is inert", testBlankShellAreaIsInert)
         run("action pill click invokes action without toggling tray", testActionClickDoesNotToggle)
 
         print("HubWindowBehaviorTests: passed")
@@ -157,6 +159,74 @@ struct HubWindowBehaviorTests {
         }
     }
 
+    private static func testLayoutMetricsStayConsistent() throws {
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            for count in [1, 2, 120] {
+                let harness = Harness(position: position, count: count)
+                harness.hub.debugSetExpansionProgress(1)
+                let snapshot = harness.hub.debugSnapshot()
+
+                try require(abs(snapshot.coreFrame.minY - snapshot.shellInset) <= 0.5,
+                            "\(position) count \(count): core Y inset drifted")
+                try require(abs(snapshot.coreFrame.height - snapshot.actionClipFrame.height) <= 0.5,
+                            "\(position) count \(count): core/action heights differ")
+                try require(abs(snapshot.coreCornerRadius - snapshot.coreFrame.height / 2) <= 0.5,
+                            "\(position) count \(count): core radius is not half-height")
+                try require(abs(snapshot.actionClipCornerRadius - snapshot.actionClipFrame.height / 2) <= 0.5,
+                            "\(position) count \(count): clip radius is not half-height")
+
+                let coreActionGap: CGFloat
+                if position == .left {
+                    coreActionGap = snapshot.actionClipFrame.minX - snapshot.coreFrame.maxX
+                } else {
+                    coreActionGap = snapshot.coreFrame.minX - snapshot.actionClipFrame.maxX
+                }
+                try require(abs(coreActionGap - snapshot.groupGap) <= 0.5,
+                            "\(position) count \(count): core/action gap \(coreActionGap) != \(snapshot.groupGap)")
+
+                let pills = snapshot.actionPills
+                try require(pills.count == 3, "\(position) count \(count): expected 3 action pills")
+                for pill in pills {
+                    try require(abs(pill.frame.height - snapshot.coreFrame.height) <= 0.5,
+                                "\(position) count \(count): \(pill.title) height differs")
+                    try require(abs(pill.cornerRadius - pill.frame.height / 2) <= 0.5,
+                                "\(position) count \(count): \(pill.title) radius is not half-height")
+                    try require(pill.labelAlpha == 1 && pill.isInteractive,
+                                "\(position) count \(count): fully expanded \(pill.title) should be visible and interactive")
+                }
+                for index in 1..<pills.count {
+                    let gap = pills[index].frame.minX - pills[index - 1].frame.maxX
+                    try require(abs(gap - snapshot.actionGap) <= 0.5,
+                                "\(position) count \(count): action gap \(gap) != \(snapshot.actionGap)")
+                }
+            }
+        }
+    }
+
+    private static func testBlankShellAreaIsInert() throws {
+        let progressFrames: [CGFloat] = [0.08, 0.18, 0.33]
+
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            let harness = Harness(position: position)
+            for progress in progressFrames {
+                harness.hub.debugSetExpansionProgress(progress)
+                let snapshot = harness.hub.debugSnapshot()
+                let blankPointInHub: NSPoint
+                if position == .left {
+                    blankPointInHub = NSPoint(x: snapshot.actionClipFrame.maxX - 2, y: snapshot.shellBounds.midY)
+                } else {
+                    blankPointInHub = NSPoint(x: snapshot.actionClipFrame.minX + 2, y: snapshot.shellBounds.midY)
+                }
+                let blankPoint = harness.hub.view.convert(blankPointInHub, to: harness.root)
+                harness.dispatchClickIfPossible(at: blankPoint)
+                try require(harness.toggleCount == 0,
+                            "\(position) progress \(progress): blank shell click toggled tray")
+                try require(harness.deleteCount == 0 && harness.saveAsCount == 0 && harness.copyAllCount == 0,
+                            "\(position) progress \(progress): blank shell click triggered action")
+            }
+        }
+    }
+
     private static func pointsEqual(_ a: NSPoint, _ b: NSPoint, tolerance: CGFloat = 0.5) -> Bool {
         abs(a.x - b.x) <= tolerance && abs(a.y - b.y) <= tolerance
     }
@@ -188,7 +258,7 @@ struct HubWindowBehaviorTests {
         var saveAsCount = 0
         var copyAllCount = 0
 
-        init(position: TrayPosition) {
+        init(position: TrayPosition, count: Int = 2) {
             TrayPosition.testCurrent = position
 
             window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 420),
@@ -204,7 +274,7 @@ struct HubWindowBehaviorTests {
             hub.onDelete = { [weak self] in self?.deleteCount += 1 }
             hub.onSaveAs = { [weak self] in self?.saveAsCount += 1 }
             hub.onCopyAll = { [weak self] in self?.copyAllCount += 1 }
-            hub.setState(count: 2, collapsed: false)
+            hub.setState(count: count, collapsed: false)
             root.addSubview(hub.view)
             hub.setOrigin(NSPoint(x: 300, y: 40))
             hub.show()
@@ -221,6 +291,14 @@ struct HubWindowBehaviorTests {
             guard let hit = hub.view.hitTest(pointInHub), hit !== hub.view else {
                 throw Failure("No interactive view at \(point)")
             }
+            hit.mouseDown(with: event(.leftMouseDown, at: point))
+            hit.mouseUp(with: event(.leftMouseUp, at: point))
+            root.layoutSubtreeIfNeeded()
+        }
+
+        func dispatchClickIfPossible(at point: NSPoint) {
+            let pointInHub = hub.view.convert(point, from: root)
+            guard let hit = hub.view.hitTest(pointInHub) else { return }
             hit.mouseDown(with: event(.leftMouseDown, at: point))
             hit.mouseUp(with: event(.leftMouseUp, at: point))
             root.layoutSubtreeIfNeeded()
