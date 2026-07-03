@@ -1,84 +1,43 @@
 import AppKit
+import CoreGraphics
 
-/// Оркестратор одного цикла захвата по модели «заморозка → кадрирование»:
-/// хоткей/меню -> проверка доступа -> МГНОВЕННЫЙ снимок полных экранов (без оверлея и активации,
-/// чтобы не сбить ховеры/тултипы/активные состояния) -> оверлей с замороженным кадром как подложкой
-/// -> выделение -> кадрирование уже снятого изображения -> миниатюра.
+/// Оркестратор запуска захвата. Сам цикл захвата живёт в `CaptureSession`: так у одного
+/// hotkey-цикла есть явное состояние, один владелец overlay и один путь завершения.
+@MainActor
 final class CaptureController {
 
     private let capturer = RegionCapturer()
-    private var overlay: OverlayController?
     private let thumbnails = ThumbnailManager()
-    private var busy = false
-    private var frozen: [FrozenScreen] = []
+    private var session: CaptureSession?
 
     func triggerCapture() {
-        guard !busy else { return }
+        guard session == nil else { return }
 
-        // Проверяем доступ ДО снимка, чтобы не ловить пустой кадр.
+        // Проверяем доступ ДО любого overlay, чтобы не показывать UI поверх неизбежного system prompt.
         if !CGPreflightScreenCaptureAccess() {
-            _ = CGRequestScreenCaptureAccess()   // идемпотентно: перерегистрирует приложение, диалог если статус не определён
+            _ = CGRequestScreenCaptureAccess()
             let key = "didRequestScreenRecording"
             if UserDefaults.standard.bool(forKey: key) {
-                presentPermissionAlert(firstRun: true)   // спрашивали раньше, доступа нет — ведём в настройки
+                presentPermissionAlert(firstRun: true)
             } else {
-                UserDefaults.standard.set(true, forKey: key)   // первый раз — только системный диалог, без дубля
+                UserDefaults.standard.set(true, forKey: key)
             }
             return
         }
 
-        busy = true
-
-        // КЛЮЧЕВОЕ: снимаем полные экраны в ПЕРВЫЙ миг — никакого оверлея и NSApp.activate до этого,
-        // иначе ховер/тултип/активное состояние под курсором сбросятся ещё до кадра. Только Sendable
-        // данные (id + frame) уходят в Task; NSScreen через границу не тащим.
-        let displays = NSScreen.screens.map { (id: Self.displayID(of: $0), frame: $0.frame) }
-        Task {
-            do {
-                let shots = try await self.capturer.captureFull(displays: displays)
-                await MainActor.run { self.presentSelection(shots) }
-            } catch {
-                await MainActor.run { self.busy = false; self.handleCaptureError(error) }
-            }
-        }
-    }
-
-    /// Показать выделение поверх замороженных кадров. Здесь активация и оверлей уже безвредны —
-    /// пиксели сняты.
-    private func presentSelection(_ shots: [FrozenScreen]) {
-        guard !shots.isEmpty else { busy = false; return }
-        frozen = shots
-
-        var backdrops: [CGDirectDisplayID: CGImage] = [:]
-        for s in shots { backdrops[s.displayID] = s.image }
-
-        let oc = OverlayController()
-        overlay = oc
-        oc.begin(backdrops: backdrops, onComplete: { [weak self] rect, screen in
-            self?.handleSelection(rect, screen)
-        }, onCancel: { [weak self] in
-            self?.overlay?.dismiss(); self?.overlay = nil
-            self?.frozen = []; self?.busy = false
-        })
-    }
-
-    private func handleSelection(_ globalRect: NSRect, _ screen: NSScreen) {
-        let did = Self.displayID(of: screen)
-        let shot = frozen.first { $0.displayID == did }
-        overlay?.dismiss(); overlay = nil
-        frozen = []
-        busy = false
-
-        guard let shot else { return }
-        let clamped = globalRect.intersection(screen.frame)          // не вылезать за дисплей
-        guard clamped.width >= 3, clamped.height >= 3,
-              let cropped = shot.crop(globalSelection: clamped) else { return }
-        thumbnails.add(image: cropped, on: screen)
-    }
-
-    private static func displayID(of screen: NSScreen) -> CGDirectDisplayID {
-        CGDirectDisplayID(
-            (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
+        let s = CaptureSession(
+            capturer: capturer,
+            onImage: { [weak self] image, screen in
+                self?.thumbnails.add(image: image, on: screen)
+            },
+            onError: { [weak self] error in
+                self?.handleCaptureError(error)
+            },
+            onEnd: { [weak self] in
+                self?.session = nil
+            })
+        session = s
+        s.start()
     }
 
     private func handleCaptureError(_ error: Error) {
@@ -104,5 +63,163 @@ final class CaptureController {
                 NSWorkspace.shared.open(url)
             }
         }
+    }
+}
+
+/// Одна сессия захвата:
+/// 1. мгновенно показывает live selection chrome;
+/// 2. параллельно делает frozen screenshot, исключая окна QuickShot;
+/// 3. подкладывает frozen backdrop под уже видимую рамку;
+/// 4. кадрирует только frozen image.
+@MainActor
+private final class CaptureSession {
+
+    private enum Phase {
+        case freezing
+        case frozen
+        case finishing
+        case cancelled
+    }
+
+    private let capturer: RegionCapturer
+    private let onImage: (CGImage, NSScreen) -> Void
+    private let onError: (Error) -> Void
+    private let onEnd: () -> Void
+
+    private var phase: Phase = .freezing
+    private var overlay: OverlayController?
+    private var frozen: [FrozenScreen] = []
+    private var pendingSelection: (rect: NSRect, screen: NSScreen)?
+    private var freezeTask: Task<Void, Never>?
+    private var didEnd = false
+
+    init(capturer: RegionCapturer,
+         onImage: @escaping (CGImage, NSScreen) -> Void,
+         onError: @escaping (Error) -> Void,
+         onEnd: @escaping () -> Void) {
+        self.capturer = capturer
+        self.onImage = onImage
+        self.onError = onError
+        self.onEnd = onEnd
+    }
+
+    func start() {
+        let initialMouseDown = CGEventSource.buttonState(.combinedSessionState, button: .left)
+            ? NSEvent.mouseLocation
+            : nil
+
+        let overlay = OverlayController()
+        self.overlay = overlay
+        overlay.beginLiveSelection(
+            initialMouseDownAt: initialMouseDown,
+            onComplete: { [weak self] rect, screen in
+                self?.selectionCompleted(rect, screen)
+            },
+            onCancel: { [weak self] in
+                self?.cancel()
+            })
+
+        let displays = NSScreen.screens.map { (id: Self.displayID(of: $0), frame: $0.frame) }
+        freezeTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let shots = try await self.capturer.captureFull(
+                    displays: displays,
+                    excludingBundleIdentifier: Bundle.main.bundleIdentifier)
+                guard !Task.isCancelled else { return }
+                self.freezeCompleted(shots)
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.freezeFailed(error)
+            }
+        }
+    }
+
+    private func freezeCompleted(_ shots: [FrozenScreen]) {
+        guard isRunning else { return }
+        guard !shots.isEmpty else {
+            freezeFailed(CaptureError.noDisplay)
+            return
+        }
+
+        frozen = shots
+        phase = .frozen
+        overlay?.installFrozenBackdrops(Dictionary(uniqueKeysWithValues: shots.map { ($0.displayID, $0.image) }))
+
+        if let pendingSelection {
+            self.pendingSelection = nil
+            completeSelection(pendingSelection.rect, pendingSelection.screen)
+        }
+    }
+
+    private func freezeFailed(_ error: Error) {
+        guard isRunning else { return }
+        overlay?.dismiss()
+        overlay = nil
+        phase = .cancelled
+        onError(error)
+        end()
+    }
+
+    private func selectionCompleted(_ globalRect: NSRect, _ screen: NSScreen) {
+        guard isRunning else { return }
+        if frozen.isEmpty {
+            pendingSelection = (globalRect, screen)
+            return
+        }
+        completeSelection(globalRect, screen)
+    }
+
+    private func completeSelection(_ globalRect: NSRect, _ screen: NSScreen) {
+        guard isRunning else { return }
+        phase = .finishing
+
+        let did = Self.displayID(of: screen)
+        let shot = frozen.first { $0.displayID == did }
+
+        overlay?.dismiss()
+        overlay = nil
+        frozen = []
+        pendingSelection = nil
+
+        defer { end() }
+
+        guard let shot else { return }
+        let clamped = globalRect.intersection(screen.frame)
+        guard clamped.width >= 3, clamped.height >= 3,
+              let cropped = shot.crop(globalSelection: clamped) else { return }
+        onImage(cropped, screen)
+    }
+
+    private func cancel() {
+        guard isRunning else { return }
+        phase = .cancelled
+        overlay?.dismiss()
+        overlay = nil
+        frozen = []
+        pendingSelection = nil
+        end()
+    }
+
+    private var isRunning: Bool {
+        switch phase {
+        case .freezing, .frozen, .finishing:
+            return !didEnd
+        case .cancelled:
+            return false
+        }
+    }
+
+    private func end() {
+        guard !didEnd else { return }
+        didEnd = true
+        freezeTask?.cancel()
+        freezeTask = nil
+        onEnd()
+    }
+
+    private static func displayID(of screen: NSScreen) -> CGDirectDisplayID {
+        CGDirectDisplayID(
+            (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
     }
 }

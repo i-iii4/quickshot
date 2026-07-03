@@ -277,20 +277,24 @@ final class ThumbnailManager {
     }
 
     private func hubOrigin(on screen: NSScreen) -> NSPoint {
-        let vf = screen.visibleFrame
+        // Хаб привязан к физическому frame экрана, а не к visibleFrame: Dock/menu bar не должны
+        // сдвигать кнопку. Если системный chrome окажется в этом углу, хаб осознанно перекрывает его.
+        let sf = screen.frame
         let w = hub.width, h = hub.height                        // капсула: ширина переменная, высота фикс.
         switch TrayPosition.current {
-        case .right:  return NSPoint(x: vf.maxX - ThumbStyle.margin - w, y: vf.minY + ThumbStyle.margin)
-        case .left:   return NSPoint(x: vf.minX + ThumbStyle.margin,     y: vf.minY + ThumbStyle.margin)
-        case .bottom: return NSPoint(x: vf.maxX - ThumbStyle.margin - w, y: vf.minY + ThumbStyle.margin)
-        case .top:    return NSPoint(x: vf.maxX - ThumbStyle.margin - w, y: vf.maxY - ThumbStyle.margin - h)
+        case .right:  return NSPoint(x: sf.maxX - ThumbStyle.margin - w, y: sf.minY + ThumbStyle.margin)
+        case .left:   return NSPoint(x: sf.minX + ThumbStyle.margin,     y: sf.minY + ThumbStyle.margin)
+        case .bottom: return NSPoint(x: sf.maxX - ThumbStyle.margin - w, y: sf.minY + ThumbStyle.margin)
+        case .top:    return NSPoint(x: sf.maxX - ThumbStyle.margin - w, y: sf.maxY - ThumbStyle.margin - h)
         }
     }
 
     /// Позиции видимых карточек (новейшая у хаба) + список переполнения (прячем). В ГЛОБАЛЬНЫХ
     /// координатах экрана; вызывающий конвертирует в координаты хоста через toLocal.
     private func cardLayout(on screen: NSScreen) -> (visible: [(ThumbnailWindow, NSPoint)], hidden: [ThumbnailWindow]) {
-        let vf = screen.visibleFrame
+        // Карточки должны жить в той же системе координат, что и хаб: полный frame экрана.
+        // Иначе Dock/menu bar сдвигают карточки, а хаб остаётся в углу — между ними появляется дыра.
+        let sf = screen.frame
         let pos = TrayPosition.current
         let hubW = hub.width, hubH = hub.height                  // капсула: высота для вертикали, ширина для горизонтали
         var visible: [(ThumbnailWindow, NSPoint)] = []
@@ -298,21 +302,21 @@ final class ThumbnailManager {
         var overflow = false
 
         if pos.isVertical {
-            let x = pos == .right ? (vf.maxX - ThumbStyle.margin - cardWidth) : (vf.minX + ThumbStyle.margin)
-            var y = vf.minY + ThumbStyle.margin + hubH + ThumbStyle.gap   // над хабом — высота хаба
+            let x = pos == .right ? (sf.maxX - ThumbStyle.margin - cardWidth) : (sf.minX + ThumbStyle.margin)
+            var y = sf.minY + ThumbStyle.margin + hubH + ThumbStyle.gap   // над хабом — высота хаба
             for (idx, t) in items.reversed().enumerated() {
                 if overflow { hidden.append(t); continue }
                 let h = t.cardHeight
-                if idx > 0 && (y + h) > (vf.maxY - ThumbStyle.margin) { overflow = true; hidden.append(t); continue }
+                if idx > 0 && (y + h) > (sf.maxY - ThumbStyle.margin) { overflow = true; hidden.append(t); continue }
                 visible.append((t, NSPoint(x: x, y: y)))
                 y += h + ThumbStyle.gap
             }
         } else {
-            var x = (vf.maxX - ThumbStyle.margin - hubW) - ThumbStyle.gap - cardWidth   // слева от хаба — ширина хаба
+            var x = (sf.maxX - ThumbStyle.margin - hubW) - ThumbStyle.gap - cardWidth   // слева от хаба — ширина хаба
             for (idx, t) in items.reversed().enumerated() {
                 if overflow { hidden.append(t); continue }
-                if idx > 0 && x < (vf.minX + ThumbStyle.margin) { overflow = true; hidden.append(t); continue }
-                let y = pos == .bottom ? (vf.minY + ThumbStyle.margin) : (vf.maxY - ThumbStyle.margin - t.cardHeight)
+                if idx > 0 && x < (sf.minX + ThumbStyle.margin) { overflow = true; hidden.append(t); continue }
+                let y = pos == .bottom ? (sf.minY + ThumbStyle.margin) : (sf.maxY - ThumbStyle.margin - t.cardHeight)
                 visible.append((t, NSPoint(x: x, y: y)))
                 x -= (cardWidth + ThumbStyle.gap)
             }

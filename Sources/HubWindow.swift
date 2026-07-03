@@ -1,29 +1,24 @@
 import AppKit
 
-/// Хаб-счётчик — тёмная «пуля» в стиле дизайн-системы Vercel (Geist): чёрный фон, тонкая subtle-
-/// обводка, белый текст, форма-пилюля. Уходим от `.glass`: сплошная заливка стабильна независимо от
-/// key/фокуса окна (приглушение снято по построению).
-///
-/// Справа от цифры — шеврон-индикатор. Он показывает, КУДА раскроется трей, и при клике плавно
-/// доворачивается. Направление берётся из позиции кнопки (через `isVertical`) — трей раскрывается:
-///   вертикальный (справа/слева): карточки идут ВВЕРХ  → свёрнуто ↑, развёрнуто ↓;
-///   горизонтальный (снизу/сверху): карточки идут ВЛЕВО → свёрнуто ←, развёрнуто →.
-/// Поворот живёт на отдельном `CAShapeLayer` (вектор, чёткий; `anchorPoint 0.5` — вокруг центра),
-/// поэтому `layout()` его не затирает и анимация не дёргается. Анимируем только на настоящем
-/// сворачивании/разворачивании, а не на каждом `setState`.
+/// Хаб-счётчик — тёмная «пуля» в стиле Vercel/Geist: чёрный фон, subtle-обводка,
+/// белый моноширинный счётчик и шеврон. Это простой рабочий вариант без liquid-эксперимента:
+/// сначала возвращаем надёжное сворачивание/разворачивание и корректную раскладку.
 private final class HubView: NSView {
     var onClick: (() -> Void)?
     let barHeight: CGFloat
 
     private let hPad: CGFloat
     private let gap: CGFloat
-    private let side: CGFloat                       // сторона квадратного слота шеврона
+    private let side: CGFloat
     private let label = NSTextField(labelWithString: "0")
     private let chevron = CAShapeLayer()
 
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false
+    private var isPressed = false
     private var vertical = true
     private var collapsed = false
-    private var appliedAngle: CGFloat?             // текущий угол (градусы); nil — ещё не задан
+    private var appliedAngle: CGFloat?
 
     init(height: CGFloat, font: NSFont) {
         self.barHeight = height
@@ -33,10 +28,11 @@ private final class HubView: NSView {
         super.init(frame: NSRect(x: 0, y: 0, width: height, height: height))
 
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.cgColor
-        layer?.borderColor = NSColor.white.withAlphaComponent(0.14).cgColor    // subtle-обводка Vercel
+        layer?.backgroundColor = Self.backgroundColor(pressed: false, hovered: false).cgColor
+        layer?.borderColor = Self.borderColor(pressed: false, hovered: false).cgColor
         layer?.borderWidth = 1
-        layer?.cornerRadius = height / 2                                        // пилюля
+        layer?.cornerRadius = height / 2
+        layer?.masksToBounds = true
 
         label.font = font
         label.textColor = .white
@@ -53,18 +49,38 @@ private final class HubView: NSView {
         chevron.lineWidth = max(1.5, side * 0.15)
         chevron.lineCap = .round
         chevron.lineJoin = .round
-        chevron.anchorPoint = CGPoint(x: 0.5, y: 0.5)                          // поворот вокруг центра
+        chevron.anchorPoint = CGPoint(x: 0.5, y: 0.5)
         chevron.bounds = CGRect(x: 0, y: 0, width: side, height: side)
-        chevron.path = HubView.chevronPath(side: side)                          // «^» вверх (0°)
+        chevron.path = Self.chevronPath(side: side)
         chevron.contentsScale = 2
         layer?.addSublayer(chevron)
 
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
+        resizeToFit()
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    /// «^» с апексом вверх в квадрате side×side (система координат y-вверх, non-flipped view).
+    private static func backgroundColor(pressed: Bool, hovered: Bool) -> NSColor {
+        if pressed { return NSColor(calibratedWhite: 0.13, alpha: 1) }
+        if hovered { return NSColor(calibratedWhite: 0.08, alpha: 1) }
+        return .black
+    }
+
+    private static func borderColor(pressed: Bool, hovered: Bool) -> NSColor {
+        let alpha: CGFloat = pressed ? 0.30 : (hovered ? 0.22 : 0.14)
+        return NSColor.white.withAlphaComponent(alpha)
+    }
+
+    private func updateChrome(animated: Bool = true) {
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(animated ? 0.12 : 0)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeInEaseOut))
+        layer?.backgroundColor = Self.backgroundColor(pressed: isPressed, hovered: isHovered).cgColor
+        layer?.borderColor = Self.borderColor(pressed: isPressed, hovered: isHovered).cgColor
+        CATransaction.commit()
+    }
+
     private static func chevronPath(side S: CGFloat) -> CGPath {
         let dx = S * 0.30, dy = S * 0.15, cx = S / 2, cy = S / 2
         let p = CGMutablePath()
@@ -76,9 +92,7 @@ private final class HubView: NSView {
 
     func set(count: Int, collapsed: Bool, vertical: Bool) {
         label.stringValue = count > 99 ? "99+" : "\(count)"
-        let angle = HubView.angle(vertical: vertical, collapsed: collapsed)
-        // Плавно доворачиваем только на настоящем сворачивании/разворачивании (та же ось).
-        // Смена позиции трея (меняется ось) и первичная установка — мгновенно.
+        let angle = Self.angle(vertical: vertical, collapsed: collapsed)
         let smooth = appliedAngle != nil && vertical == self.vertical && collapsed != self.collapsed
         self.vertical = vertical
         self.collapsed = collapsed
@@ -86,10 +100,9 @@ private final class HubView: NSView {
         rotate(to: angle, animated: smooth)
     }
 
-    /// Угол шеврона (градусы). База «^» смотрит вверх (0°). Положительный — против часовой.
     private static func angle(vertical: Bool, collapsed: Bool) -> CGFloat {
-        if vertical { return collapsed ? 0 : 180 }        // ↑ развернётся вверх / ↓ свернётся вниз
-        else        { return collapsed ? 90 : -90 }       // ← развернётся влево / → свернётся вправо
+        if vertical { return collapsed ? 0 : 180 }
+        else        { return collapsed ? 90 : -90 }
     }
 
     private func rotate(to angle: CGFloat, animated: Bool) {
@@ -97,7 +110,7 @@ private final class HubView: NSView {
         let from = appliedAngle ?? angle
         appliedAngle = angle
         let toRad = angle * .pi / 180
-        chevron.transform = CATransform3DMakeRotation(toRad, 0, 0, 1)          // модель
+        chevron.transform = CATransform3DMakeRotation(toRad, 0, 0, 1)
         if animated {
             let a = CABasicAnimation(keyPath: "transform.rotation.z")
             a.fromValue = from * .pi / 180
@@ -108,7 +121,6 @@ private final class HubView: NSView {
         }
     }
 
-    /// Ширина пули под содержимое: [pad][цифра][gap][шеврон][pad].
     private func resizeToFit() {
         label.sizeToFit()
         let w = hPad + ceil(label.frame.width) + gap + side + hPad
@@ -118,11 +130,13 @@ private final class HubView: NSView {
 
     override func layout() {
         super.layout()
+        layer?.cornerRadius = bounds.height / 2
         label.sizeToFit()
         let lw = ceil(label.frame.width), lh = ceil(label.frame.height)
         label.frame = NSRect(x: hPad, y: (bounds.height - lh) / 2, width: lw, height: lh)
-        // Двигаем только позицию шеврона, поворот не трогаем; без неявной анимации сдвига.
-        CATransaction.begin(); CATransaction.setDisableActions(true)
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         chevron.position = CGPoint(x: hPad + lw + gap + side / 2, y: bounds.height / 2)
         CATransaction.commit()
     }
@@ -133,29 +147,66 @@ private final class HubView: NSView {
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func mouseDown(with event: NSEvent) { alphaValue = 0.7 }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.activeAlways, .inVisibleRect, .mouseEnteredAndExited, .mouseMoved],
+                                  owner: self,
+                                  userInfo: nil)
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        updateChrome()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        if !isPressed { updateChrome() }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        isHovered = true
+        updateChrome()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        isPressed = true
+        isHovered = true
+        updateChrome()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        isHovered = bounds.contains(convert(event.locationInWindow, from: nil))
+        updateChrome()
+    }
+
     override func mouseUp(with event: NSEvent) {
-        alphaValue = 1
-        if bounds.contains(convert(event.locationInWindow, from: nil)) { onClick?() }
+        let inside = bounds.contains(convert(event.locationInWindow, from: nil))
+        isPressed = false
+        isHovered = inside
+        updateChrome()
+        if inside { onClick?() }
     }
 }
 
 /// Обёртка над хабом-пулей для менеджера трея. Внешний API сохранён.
 final class HubWindow {
-
     private let hub: HubView
+    private static let hubHeight: CGFloat = 34
 
     var view: NSView { hub }
     var onClick: (() -> Void)? { didSet { hub.onClick = onClick } }
-    var width: CGFloat { hub.frame.width }         // переменная (под содержимое)
-    var height: CGFloat { hub.barHeight }          // фиксированная
+    var width: CGFloat { hub.frame.width }
+    var height: CGFloat { hub.barHeight }
     var center: NSPoint { NSPoint(x: hub.frame.midX, y: hub.frame.midY) }
 
     init() {
-        // Высота = стандартная высота large-контрола (системная метрика), а не магическое число.
-        let sizer = GlassButton(title: "0", a11y: "")
-        sizer.borderShape = .circle
-        let h = ceil(sizer.fittingSize.height)
+        let h = Self.hubHeight
         let font = NSFont.monospacedDigitSystemFont(ofSize: ceil(h * 0.44), weight: .medium)
         hub = HubView(height: h, font: font)
     }

@@ -5,11 +5,13 @@ import CoreGraphics
 enum CaptureError: Error {
     case permissionDenied
     case noDisplay
+    case exclusionUnavailable(String)
     case failed(Error)
 }
 
-/// Замороженный полный кадр одного дисплея, снятый в первый миг (до показа оверлея). Кадрирование
-/// выделения идёт по нему — поэтому ховеры/тултипы/активные состояния не успевают сброситься.
+/// Замороженный полный кадр одного дисплея. Кадрирование выделения идёт только по нему:
+/// live overlay может двигаться и перерисовываться сколько угодно, но в итоговый снимок попадает
+/// статичный ScreenCaptureKit-кадр без UI QuickShot.
 struct FrozenScreen {
     let displayID: CGDirectDisplayID
     let frame: CGRect          // AppKit-точки (глобальные), снизу-слева
@@ -29,17 +31,18 @@ struct FrozenScreen {
 
 /// Захват экрана через ScreenCaptureKit.
 ///
-/// Модель «заморозка → кадрирование»: по хоткею мгновенно снимаем ПОЛНЫЕ экраны всех дисплеев в
-/// память (без оверлея и без активации приложения), затем показываем эти снимки как подложку
-/// выделения и кадрируем уже их. Так в кадр попадает истинное состояние экрана на момент нажатия.
+/// Модель «live selection → frozen backdrop → кадрирование»: overlay появляется сразу, а
+/// ScreenCaptureKit снимает полные экраны с исключением окон QuickShot. Когда frozen кадр готов,
+/// он докладывается под уже видимую рамку и затем используется для crop.
 ///
-/// SCScreenshotManager, а не CGDisplayCreateImage/CGWindowListCreateImage: последние обероблены в
+/// SCScreenshotManager, а не CGDisplayCreateImage/CGWindowListCreateImage: последние deprecated в
 /// SDK 15.0+ и не компилируются. SCScreenshotManager отдаёт CGImage в памяти, с типизированными
 /// ошибками и точным контролем Retina-пикселей.
 final class RegionCapturer {
 
     /// Полный кадр каждого переданного дисплея. Один fetch SCShareableContent на все.
-    func captureFull(displays: [(id: CGDirectDisplayID, frame: CGRect)]) async throws -> [FrozenScreen] {
+    func captureFull(displays: [(id: CGDirectDisplayID, frame: CGRect)],
+                     excludingBundleIdentifier: String? = nil) async throws -> [FrozenScreen] {
         guard CGPreflightScreenCaptureAccess() else { throw CaptureError.permissionDenied }
 
         let content: SCShareableContent
@@ -49,10 +52,20 @@ final class RegionCapturer {
             throw CaptureError.failed(error)
         }
 
+        let excludedApps: [SCRunningApplication]
+        if let excludingBundleIdentifier {
+            excludedApps = content.applications.filter { $0.bundleIdentifier == excludingBundleIdentifier }
+            guard !excludedApps.isEmpty else { throw CaptureError.exclusionUnavailable(excludingBundleIdentifier) }
+        } else {
+            excludedApps = []
+        }
+
         var result: [FrozenScreen] = []
         for d in displays {
             guard let scDisplay = content.displays.first(where: { $0.displayID == d.id }) else { continue }
-            let filter = SCContentFilter(display: scDisplay, excludingWindows: [])
+            let filter = excludedApps.isEmpty
+                ? SCContentFilter(display: scDisplay, excludingWindows: [])
+                : SCContentFilter(display: scDisplay, excludingApplications: excludedApps, exceptingWindows: [])
             let scale = CGFloat(filter.pointPixelScale)
 
             let config = SCStreamConfiguration()
