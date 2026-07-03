@@ -52,6 +52,7 @@ private final class HubActionPill: NSView {
     private let label = NSTextField(labelWithString: "")
     private var isHovered = false
     private var isPressed = false
+    private var isInteractive = false
 
     init(action: HubAction, font: NSFont) {
         self.action = action
@@ -87,7 +88,7 @@ private final class HubActionPill: NSView {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden, alphaValue > 0.45, bounds.contains(point) else { return nil }
+        guard !isHidden, isInteractive, alphaValue > 0.45, bounds.contains(point) else { return nil }
         return self
     }
 
@@ -130,6 +131,12 @@ private final class HubActionPill: NSView {
         isHovered = inside
         updateChrome()
         if inside { onClick?() }
+    }
+
+    func setReveal(chrome: CGFloat, title: CGFloat) {
+        alphaValue = chrome
+        label.alphaValue = title
+        isInteractive = title > 0.98
     }
 
     private static func deleteTextColor(hovered: Bool, pressed: Bool) -> NSColor {
@@ -387,7 +394,7 @@ private final class HubShellView: NSView {
         layer?.shadowRadius = 9
         layer?.shadowOffset = CGSize(width: 0, height: -4)
         [ringFill, ringHalo, ringLine].forEach { layer?.addSublayer($0) }
-        ringFill.fillColor = NSColor(calibratedWhite: 0.018, alpha: 0.92).cgColor
+        ringFill.fillColor = NSColor(calibratedWhite: 0.018, alpha: 0.96).cgColor
         ringFill.strokeColor = NSColor.clear.cgColor
         ringHalo.fillColor = NSColor.clear.cgColor
         ringHalo.strokeColor = NSColor.black.withAlphaComponent(0.48).cgColor
@@ -538,7 +545,7 @@ private final class HubShellView: NSView {
         ringFill.path = ringPath
         ringHalo.path = ringPath
         ringLine.path = ringPath
-        ringFill.opacity = Float(0.15 + 0.85 * eased)
+        ringFill.opacity = Float(0.22 + 0.78 * min(1, p / 0.14))
         ringHalo.strokeColor = NSColor.black.withAlphaComponent(0.48 + 0.16 * eased).cgColor
         ringLine.strokeColor = NSColor.white.withAlphaComponent(0.18 + 0.06 * eased).cgColor
         layer?.shadowPath = ringPath
@@ -575,15 +582,19 @@ private final class HubShellView: NSView {
         actionClip.layer?.cornerRadius = HubMetrics.actionHeight / 2
         actionClip.alphaValue = max(0, min(1, (p - 0.08) / 0.92))
 
+        let groupX: CGFloat = direction == .left ? clipW - actionWidth : 0
         var x: CGFloat = 0
         for item in actionButtons {
             let w = item.view.preferredWidth
-            item.view.frame = NSRect(x: x,
+            let itemX = groupX + x
+            item.view.frame = NSRect(x: itemX,
                                      y: 0,
                                      width: w,
                                      height: HubMetrics.actionHeight)
-            let itemReveal = max(0, min(1, (clipW - x - w * 0.72) / max(1, w * 0.28)))
-            item.view.alphaValue = itemReveal
+            let visibleW = max(0, min(clipW, itemX + w) - max(0, itemX))
+            let chromeReveal = max(0, min(1, visibleW / max(1, w * 0.42)))
+            let fullyVisible = visibleW >= w - 0.5
+            item.view.setReveal(chrome: chromeReveal, title: fullyVisible ? 1 : 0)
             item.view.layer?.transform = CATransform3DIdentity
             x += w + HubMetrics.actionGap
         }

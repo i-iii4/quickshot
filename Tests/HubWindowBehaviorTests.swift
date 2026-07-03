@@ -13,6 +13,7 @@ struct HubWindowBehaviorTests {
         run("hover expansion keeps core anchored for every tray edge", testExpansionAnchorsEveryTrayEdge)
         run("visible controls stay inside shell bounds", testVisibleControlsStayInsideShellBounds)
         run("intermediate expansion frames stay contained and anchored", testIntermediateExpansionFrames)
+        run("action labels are never visibly clipped", testActionLabelsAreNeverVisiblyClipped)
         run("action pill click invokes action without toggling tray", testActionClickDoesNotToggle)
 
         print("HubWindowBehaviorTests: passed")
@@ -144,6 +145,18 @@ struct HubWindowBehaviorTests {
         }
     }
 
+    private static func testActionLabelsAreNeverVisiblyClipped() throws {
+        let progressFrames: [CGFloat] = [0, 0.04, 0.08, 0.14, 0.22, 0.33, 0.48, 0.64, 0.78, 0.92, 1]
+
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            let harness = Harness(position: position)
+            for progress in progressFrames {
+                harness.hub.debugSetExpansionProgress(progress)
+                try harness.requireVisibleLabelsAreUnclipped()
+            }
+        }
+    }
+
     private static func pointsEqual(_ a: NSPoint, _ b: NSPoint, tolerance: CGFloat = 0.5) -> Bool {
         abs(a.x - b.x) <= tolerance && abs(a.y - b.y) <= tolerance
     }
@@ -234,6 +247,19 @@ struct HubWindowBehaviorTests {
                 guard let rect = visibleRectInShell(for: view) else { continue }
                 try require(rectContains(shellBounds, rect),
                             "\(type(of: view)) visibly escapes shell bounds: \(rect) not inside \(shellBounds)")
+            }
+        }
+
+        func requireVisibleLabelsAreUnclipped() throws {
+            for label in visibleDescendants(of: hub.view) where label is NSTextField && label.alphaValue > 0.01 {
+                let fullRect = label.convert(label.bounds, to: hub.view)
+                guard let visibleRect = visibleRectInShell(for: label) else {
+                    throw Failure("Visible label has no visible rect: \(label)")
+                }
+                try require(abs(fullRect.width - visibleRect.width) <= 0.5,
+                            "Visible label is horizontally clipped: \(visibleRect) of \(fullRect)")
+                try require(abs(fullRect.height - visibleRect.height) <= 0.5,
+                            "Visible label is vertically clipped: \(visibleRect) of \(fullRect)")
             }
         }
 
