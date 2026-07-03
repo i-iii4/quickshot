@@ -17,6 +17,7 @@ struct HubWindowBehaviorTests {
         run("layout metrics stay mathematically consistent", testLayoutMetricsStayConsistent)
         run("blank shell area is inert", testBlankShellAreaIsInert)
         run("action pill click invokes action without toggling tray", testActionClickDoesNotToggle)
+        run("every action pill is clickable in both expansion directions", testEveryActionPillIsClickable)
 
         print("HubWindowBehaviorTests: passed")
     }
@@ -82,6 +83,37 @@ struct HubWindowBehaviorTests {
 
         try require(harness.deleteCount == 1, "Delete action should fire once, got \(harness.deleteCount)")
         try require(harness.toggleCount == 0, "Action click must not toggle tray, got \(harness.toggleCount)")
+    }
+
+    private static func testEveryActionPillIsClickable() throws {
+        for position in [TrayPosition.right, .left] {
+            for title in ["Delete", "Save As", "Copy All Screenshots"] {
+                let harness = Harness(position: position)
+                harness.hub.debugSetExpansionProgress(1)
+                let point = try harness.actionPoint(title: title)
+
+                try harness.click(at: point)
+
+                try require(harness.toggleCount == 0,
+                            "\(position) \(title): action click must not toggle tray")
+                switch title {
+                case "Delete":
+                    try require(harness.deleteCount == 1, "\(position): Delete did not fire")
+                    try require(harness.saveAsCount == 0 && harness.copyAllCount == 0,
+                                "\(position): Delete fired another action")
+                case "Save As":
+                    try require(harness.saveAsCount == 1, "\(position): Save As did not fire")
+                    try require(harness.deleteCount == 0 && harness.copyAllCount == 0,
+                                "\(position): Save As fired another action")
+                case "Copy All Screenshots":
+                    try require(harness.copyAllCount == 1, "\(position): Copy All Screenshots did not fire")
+                    try require(harness.deleteCount == 0 && harness.saveAsCount == 0,
+                                "\(position): Copy All Screenshots fired another action")
+                default:
+                    throw Failure("Unexpected action title \(title)")
+                }
+            }
+        }
     }
 
     private static func testExpansionAnchorsEveryTrayEdge() throws {
@@ -317,6 +349,18 @@ struct HubWindowBehaviorTests {
                 x += 2
             }
             throw Failure("No action pill hit target found in expanded hub frame \(hub.view.frame)")
+        }
+
+        func actionPoint(title: String) throws -> NSPoint {
+            let snapshot = hub.debugSnapshot()
+            guard let pill = snapshot.actionPills.first(where: { $0.title == title }) else {
+                throw Failure("No action pill named \(title)")
+            }
+            try require(pill.labelAlpha == 1 && pill.isInteractive,
+                        "\(title) is not fully visible and interactive")
+            let pointInHub = NSPoint(x: snapshot.actionClipFrame.minX + pill.frame.midX,
+                                     y: snapshot.actionClipFrame.minY + pill.frame.midY)
+            return hub.view.convert(pointInHub, to: root)
         }
 
         func requireVisibleDescendantsInsideShell() throws {

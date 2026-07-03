@@ -37,7 +37,7 @@ private enum HubMetrics {
     static let groupGap: CGFloat = 7
     static let actionGap: CGFloat = 7
     static let actionHPad: CGFloat = 13
-    static let animationDuration: Double = 0.18
+    static let animationDuration: Double = 0.145
 }
 
 #if TESTING
@@ -64,6 +64,7 @@ struct HubDebugSnapshot {
 #endif
 
 private func hubEaseOutCubic(_ f: CGFloat) -> CGFloat { 1 - pow(1 - f, 3) }
+private func hubEaseOutQuad(_ f: CGFloat) -> CGFloat { 1 - (1 - f) * (1 - f) }
 private func hubEaseInOutCubic(_ f: CGFloat) -> CGFloat {
     f < 0.5 ? 4 * f * f * f : 1 - pow(-2 * f + 2, 3) / 2
 }
@@ -159,7 +160,7 @@ private final class HubActionPill: NSView {
     func setReveal(chrome: CGFloat, title: CGFloat) {
         alphaValue = chrome
         label.alphaValue = title
-        isInteractive = title > 0.98
+        isInteractive = title > 0.98 && chrome > 0.72
     }
 
 #if TESTING
@@ -529,7 +530,7 @@ private final class HubShellView: NSView {
         let start = progress
         animator.run(duration: HubMetrics.animationDuration,
                      delay: 0,
-                     easing: expanded ? hubEaseOutCubic : hubEaseInOutCubic,
+                     easing: expanded ? hubEaseOutQuad : hubEaseInOutCubic,
                      onFrame: { [weak self] t in
             guard let self else { return }
             self.progress = start + (target - start) * t
@@ -639,8 +640,10 @@ private final class HubShellView: NSView {
                                      height: HubMetrics.actionHeight)
             let visibleW = max(0, min(clipW, itemX + w) - max(0, itemX))
             let chromeReveal = max(0, min(1, visibleW / max(1, w * 0.42)))
-            let fullyVisible = visibleW >= w - 0.5
-            item.view.setReveal(chrome: chromeReveal, title: fullyVisible ? 1 : 0)
+            let labelLeft = itemX + HubMetrics.actionHPad
+            let labelRight = itemX + w - HubMetrics.actionHPad
+            let labelFullyVisible = labelLeft >= -0.5 && labelRight <= clipW + 0.5
+            item.view.setReveal(chrome: chromeReveal, title: labelFullyVisible ? 1 : 0)
             item.view.layer?.transform = CATransform3DIdentity
             x += w + HubMetrics.actionGap
         }
