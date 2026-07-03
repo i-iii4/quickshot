@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 enum ThumbStyle {
     static let gap: CGFloat = 12                 // зазор между карточками
@@ -84,6 +85,9 @@ final class ThumbnailManager {
             cardWidth = min(ThumbStyle.maxWidth, max(ThumbStyle.minWidth, CGFloat(saved)))
         }
         hub.onClick = { [weak self] in self?.toggleCollapse() }
+        hub.onDelete = { [weak self] in self?.deleteAll() }
+        hub.onSaveAs = { [weak self] in self?.saveAllAs() }
+        hub.onCopyAll = { [weak self] in self?.copyAll() }
         NotificationCenter.default.addObserver(
             self, selector: #selector(trayPositionChanged),
             name: TrayPosition.changedNotification, object: nil)
@@ -200,6 +204,69 @@ final class ThumbnailManager {
     func copy(_ t: ThumbnailWindow) {
         Clipboard.copy(cgImage: t.image)
         t.flashCopied()
+    }
+
+    func copyAll() {
+        Clipboard.copyAll(cgImages: items.map(\.image))
+        items.last?.flashCopied()
+    }
+
+    func deleteAll() {
+        guard !items.isEmpty else { return }
+        let doomed = items
+        items.removeAll()
+        collapsed = false
+        for item in doomed { item.close() }
+        hub.hide()
+        host.orderOut(nil)
+    }
+
+    func saveAllAs() {
+        guard !items.isEmpty else { return }
+        NSApp.activate(ignoringOtherApps: true)
+
+        if items.count == 1 {
+            let panel = NSSavePanel()
+            panel.title = "Save Screenshot"
+            panel.prompt = "Save"
+            panel.nameFieldStringValue = defaultFileName()
+            panel.allowedContentTypes = [.png]
+            panel.canCreateDirectories = true
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            writePNG(items[0].image, to: url)
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.title = "Save Screenshots"
+        panel.message = "Choose a folder for \(items.count) screenshots."
+        panel.prompt = "Save"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+
+        for (index, item) in items.enumerated() {
+            let url = folder.appendingPathComponent(defaultFileName(index: index + 1))
+            writePNG(item.image, to: url)
+        }
+    }
+
+    private func defaultFileName(index: Int? = nil) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd-HH-mm-ss"
+        let suffix = index.map { String(format: "-%02d", $0) } ?? ""
+        return "QuickShot-\(formatter.string(from: Date()))\(suffix).png"
+    }
+
+    private func writePNG(_ image: CGImage, to url: URL) {
+        guard let data = Clipboard.pngData(cgImage: image) else { return }
+        do {
+            try data.write(to: url, options: .atomic)
+        } catch {
+            NSLog("QuickShot: save failed: \(error)")
+        }
     }
 
     // MARK: ресайз (общая ширина, сохраняется между сессиями)

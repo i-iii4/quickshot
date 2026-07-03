@@ -14,14 +14,17 @@ import AppKit
 /// портит содержимое буфера; поэтому всё через declareTypes + setData/setString.
 enum Clipboard {
 
+    static func pngData(cgImage: CGImage) -> Data? {
+        NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:])
+    }
+
     static func copy(cgImage: CGImage) {
         let nsImage = NSImage(cgImage: cgImage,
                               size: NSSize(width: cgImage.width, height: cgImage.height))
         let pb = NSPasteboard.general
         pb.clearContents()
 
-        let rep = NSBitmapImageRep(cgImage: cgImage)
-        let png = rep.representation(using: .png, properties: [:])
+        let png = pngData(cgImage: cgImage)
         let tiff = nsImage.tiffRepresentation
 
         // Временный файл под fileURL (путь для терминалов).
@@ -41,5 +44,33 @@ enum Clipboard {
         if let png  { pb.setData(png,  forType: .png) }
         if let tiff { pb.setData(tiff, forType: .tiff) }
         if let fileURLString { pb.setString(fileURLString, forType: .fileURL) }
+    }
+
+    static func copyAll(cgImages: [CGImage]) {
+        guard !cgImages.isEmpty else { return }
+        if cgImages.count == 1 {
+            copy(cgImage: cgImages[0])
+            return
+        }
+
+        let items = cgImages.compactMap { image -> NSPasteboardItem? in
+            let nsImage = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+            let item = NSPasteboardItem()
+            guard let png = pngData(cgImage: image) else { return nil }
+            item.setData(png, forType: .png)
+            if let tiff = nsImage.tiffRepresentation { item.setData(tiff, forType: .tiff) }
+
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("QuickShot-\(UUID().uuidString.prefix(8)).png")
+            if (try? png.write(to: url)) != nil {
+                item.setString(url.absoluteString, forType: .fileURL)
+            }
+            return item
+        }
+        guard !items.isEmpty else { return }
+
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.writeObjects(items)
     }
 }
