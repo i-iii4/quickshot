@@ -12,6 +12,7 @@ xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
   -swift-version 5 \
+  -D TESTING \
   -framework AppKit \
   Tests/HubWindowTestSupport.swift \
   Sources/HubWindow.swift \

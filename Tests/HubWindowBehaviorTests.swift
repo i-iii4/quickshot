@@ -10,6 +10,9 @@ struct HubWindowBehaviorTests {
         run("core click toggles in compact state", testCoreClickTogglesCompact)
         run("core remains clickable after right-edge hover expansion", testRightEdgeExpansionKeepsCoreClickable)
         run("core remains clickable after left-edge hover expansion", testLeftEdgeExpansionKeepsCoreClickable)
+        run("hover expansion keeps core anchored for every tray edge", testExpansionAnchorsEveryTrayEdge)
+        run("visible controls stay inside shell bounds", testVisibleControlsStayInsideShellBounds)
+        run("intermediate expansion frames stay contained and anchored", testIntermediateExpansionFrames)
         run("action pill click invokes action without toggling tray", testActionClickDoesNotToggle)
 
         print("HubWindowBehaviorTests: passed")
@@ -78,8 +81,78 @@ struct HubWindowBehaviorTests {
         try require(harness.toggleCount == 0, "Action click must not toggle tray, got \(harness.toggleCount)")
     }
 
+    private static func testExpansionAnchorsEveryTrayEdge() throws {
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            let harness = Harness(position: position)
+            let compactFrame = harness.hub.view.frame
+            let compactCenter = harness.hub.center
+
+            harness.hoverHub()
+
+            let expandedFrame = harness.hub.view.frame
+            try require(expandedFrame.width > compactFrame.width, "\(position) did not expand")
+            try require(pointsEqual(harness.hub.center, compactCenter),
+                        "\(position) moved core center from \(compactCenter) to \(harness.hub.center)")
+
+            if position == .left {
+                try require(abs(expandedFrame.minX - compactFrame.minX) <= 0.5,
+                            "\(position) should keep shell minX anchored: \(compactFrame) -> \(expandedFrame)")
+                try require(expandedFrame.maxX > compactFrame.maxX,
+                            "\(position) should expand to the right: \(compactFrame) -> \(expandedFrame)")
+            } else {
+                try require(abs(expandedFrame.maxX - compactFrame.maxX) <= 0.5,
+                            "\(position) should keep shell maxX anchored: \(compactFrame) -> \(expandedFrame)")
+                try require(expandedFrame.minX < compactFrame.minX,
+                            "\(position) should expand to the left: \(compactFrame) -> \(expandedFrame)")
+            }
+        }
+    }
+
+    private static func testVisibleControlsStayInsideShellBounds() throws {
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            let harness = Harness(position: position)
+            try harness.requireVisibleDescendantsInsideShell()
+
+            harness.hoverHub()
+            try harness.requireVisibleDescendantsInsideShell()
+        }
+    }
+
+    private static func testIntermediateExpansionFrames() throws {
+        let progressFrames: [CGFloat] = [0, 0.08, 0.18, 0.33, 0.55, 0.78, 1]
+
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            let harness = Harness(position: position)
+            let compactFrame = harness.hub.view.frame
+            let compactCenter = harness.hub.center
+
+            for progress in progressFrames {
+                harness.hub.debugSetExpansionProgress(progress)
+                try harness.requireVisibleDescendantsInsideShell()
+                try require(pointsEqual(harness.hub.center, compactCenter),
+                            "\(position) moved core center at progress \(progress)")
+
+                let frame = harness.hub.view.frame
+                if position == .left {
+                    try require(abs(frame.minX - compactFrame.minX) <= 0.5,
+                                "\(position) minX drifted at progress \(progress): \(compactFrame) -> \(frame)")
+                } else {
+                    try require(abs(frame.maxX - compactFrame.maxX) <= 0.5,
+                                "\(position) maxX drifted at progress \(progress): \(compactFrame) -> \(frame)")
+                }
+            }
+        }
+    }
+
     private static func pointsEqual(_ a: NSPoint, _ b: NSPoint, tolerance: CGFloat = 0.5) -> Bool {
         abs(a.x - b.x) <= tolerance && abs(a.y - b.y) <= tolerance
+    }
+
+    private static func rectContains(_ outer: NSRect, _ inner: NSRect, tolerance: CGFloat = 0.5) -> Bool {
+        inner.minX >= outer.minX - tolerance
+            && inner.minY >= outer.minY - tolerance
+            && inner.maxX <= outer.maxX + tolerance
+            && inner.maxY <= outer.maxY + tolerance
     }
 
     private static func require(_ condition: @autoclosure () -> Bool, _ message: String) throws {
@@ -153,6 +226,38 @@ struct HubWindowBehaviorTests {
                 x += 2
             }
             throw Failure("No action pill hit target found in expanded hub frame \(hub.view.frame)")
+        }
+
+        func requireVisibleDescendantsInsideShell() throws {
+            let shellBounds = hub.view.bounds.insetBy(dx: -0.5, dy: -0.5)
+            for view in visibleDescendants(of: hub.view) {
+                guard let rect = visibleRectInShell(for: view) else { continue }
+                try require(rectContains(shellBounds, rect),
+                            "\(type(of: view)) visibly escapes shell bounds: \(rect) not inside \(shellBounds)")
+            }
+        }
+
+        private func visibleRectInShell(for view: NSView) -> NSRect? {
+            var rect = view.convert(view.bounds, to: hub.view)
+            var ancestor = view.superview
+
+            while let current = ancestor, current !== hub.view {
+                if current.layer?.masksToBounds == true {
+                    let clip = current.convert(current.bounds, to: hub.view)
+                    rect = rect.intersection(clip)
+                    if rect.isNull || rect.width <= 0 || rect.height <= 0 { return nil }
+                }
+                ancestor = current.superview
+            }
+            return rect
+        }
+
+        private func visibleDescendants(of view: NSView) -> [NSView] {
+            view.subviews.flatMap { child -> [NSView] in
+                guard !child.isHidden, child.alphaValue > 0.01 else { return [] }
+                let descendants = visibleDescendants(of: child)
+                return [child] + descendants
+            }
         }
 
         private func event(_ type: NSEvent.EventType, at point: NSPoint) -> NSEvent {
