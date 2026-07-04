@@ -31,6 +31,9 @@ xcrun swiftc \
   -framework ScreenCaptureKit \
   -framework Carbon \
   -framework CoreGraphics \
+  -framework CoreImage \
+  -framework CoreMedia \
+  -framework CoreVideo \
   -o "$BUNDLE/Contents/MacOS/$APP" \
   Sources/*.swift
 

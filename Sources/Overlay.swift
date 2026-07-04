@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import OSLog
 
 /// Безрамочная панель поверх всего. Она принимает мышь сразу; приложение активируем при старте
 /// overlay, чтобы CoreGraphics стабильно скрывал системную стрелку, пока мы рисуем свой
@@ -56,6 +57,33 @@ final class SelectionView: NSView {
     private var hasDrawableSelection: Bool {
         currentRect.width >= 2 && currentRect.height >= 2 && isFinite(currentRect)
     }
+
+#if TESTING
+    struct DebugMetrics {
+        let crosshairSize: CGFloat
+        let crosshairGap: CGFloat
+        let crosshairArm: CGFloat
+        let frameSeparator: CGFloat
+        let frameStartOffset: CGFloat
+        let haloWidth: CGFloat
+        let coreWidth: CGFloat
+    }
+
+    struct DebugCrosshairLayer {
+        let lineWidth: CGFloat
+        let lineCap: CAShapeLayerLineCap
+        let bounds: CGRect
+    }
+
+    struct DebugSnapshot {
+        let currentRect: NSRect
+        let crosshairPosition: CGPoint
+        let crosshairBounds: CGRect
+        let crosshairHidden: Bool
+        let crosshairLayers: [DebugCrosshairLayer]
+        let outlinePoints: [NSPoint]
+    }
+#endif
 
     private enum Metrics {
         static let crosshairSize: CGFloat = 44
@@ -282,6 +310,67 @@ final class SelectionView: NSView {
         inputLocked = locked
     }
 
+#if TESTING
+    static func debugMetrics() -> DebugMetrics {
+        DebugMetrics(crosshairSize: Metrics.crosshairSize,
+                     crosshairGap: Metrics.crosshairGap,
+                     crosshairArm: Metrics.crosshairArm,
+                     frameSeparator: Metrics.frameSeparator,
+                     frameStartOffset: Metrics.frameStartOffset,
+                     haloWidth: Metrics.haloWidth,
+                     coreWidth: Metrics.coreWidth)
+    }
+
+    func debugBeginAndDrag(from start: NSPoint, to current: NSPoint) {
+        beginSelection(atLocalPoint: start)
+        updateSelection(toLocalPoint: current)
+    }
+
+    func debugMoveCrosshair(to point: NSPoint) {
+        moveCrosshair(to: point)
+    }
+
+    func debugSnapshot() -> DebugSnapshot {
+        let layers = (crosshair.sublayers ?? []).compactMap { $0 as? CAShapeLayer }.map {
+            DebugCrosshairLayer(lineWidth: $0.lineWidth,
+                                lineCap: $0.lineCap,
+                                bounds: $0.bounds)
+        }
+        let activeCorner = self.activeCorner(in: currentRect)
+        let outline = selectionOutlinePath(currentRect, activeCorner: activeCorner)
+        return DebugSnapshot(currentRect: currentRect,
+                             crosshairPosition: crosshair.position,
+                             crosshairBounds: crosshair.bounds,
+                             crosshairHidden: crosshair.isHidden,
+                             crosshairLayers: layers,
+                             outlinePoints: Self.debugPoints(in: outline))
+    }
+
+    private static func debugPoints(in path: NSBezierPath) -> [NSPoint] {
+        var points: [NSPoint] = []
+        var buffer = Array(repeating: NSPoint.zero, count: 3)
+        for i in 0..<path.elementCount {
+            let element = path.element(at: i, associatedPoints: &buffer)
+            switch element {
+            case .moveTo, .lineTo:
+                points.append(buffer[0])
+            case .curveTo, .cubicCurveTo:
+                points.append(buffer[0])
+                points.append(buffer[1])
+                points.append(buffer[2])
+            case .quadraticCurveTo:
+                points.append(buffer[0])
+                points.append(buffer[1])
+            case .closePath:
+                break
+            @unknown default:
+                break
+            }
+        }
+        return points
+    }
+#endif
+
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { onCancel?() }                 // Escape
         else { super.keyDown(with: event) }
@@ -401,6 +490,8 @@ final class SelectionView: NSView {
 /// разные — одно окно на всё нельзя). Каждый оверлей = бэкдроп-слой (заморозка) + хром выделения.
 final class OverlayController {
 
+    private static let log = Logger(subsystem: "com.iiii.quickshot", category: "capture")
+
     private(set) var windows: [OverlayWindow] = []
     private var escMonitor: Any?
     private var spaceObserver: Any?
@@ -420,20 +511,36 @@ final class OverlayController {
     func beginLiveSelection(initialMouseDownAt: NSPoint?,
                             onComplete: @escaping (NSRect, NSScreen) -> Void,
                             onCancel: @escaping () -> Void) {
-        begin(backdrops: [:],
+        begin(screens: NSScreen.screens,
+              backdrops: [:],
               onComplete: onComplete,
               onCancel: onCancel,
               pendingMouseDownAt: initialMouseDownAt)
     }
 
-    private func begin(backdrops: [CGDirectDisplayID: CGImage],
+    /// Показать selection chrome только после того, как frozen backdrop уже готов.
+    /// Это продуктовый путь: пользователь не видит живой desktop под инструментом выделения.
+    func beginFrozenSelection(screens: [NSScreen],
+                              backdrops: [CGDirectDisplayID: CGImage],
+                              initialMouseDownAt: NSPoint?,
+                              onComplete: @escaping (NSRect, NSScreen) -> Void,
+                              onCancel: @escaping () -> Void) {
+        begin(screens: screens,
+              backdrops: backdrops,
+              onComplete: onComplete,
+              onCancel: onCancel,
+              pendingMouseDownAt: initialMouseDownAt)
+    }
+
+    private func begin(screens: [NSScreen],
+                       backdrops: [CGDirectDisplayID: CGImage],
                        onComplete: @escaping (NSRect, NSScreen) -> Void,
                        onCancel: @escaping () -> Void,
                        pendingMouseDownAt: NSPoint?) {
         self.onComplete = onComplete
         self.onCancel = onCancel
 
-        for screen in NSScreen.screens {
+        for screen in screens {
             let did = CGDirectDisplayID(
                 (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
 
@@ -481,6 +588,7 @@ final class OverlayController {
         for w in windows { w.orderFrontRegardless() }
         windows.first?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        Self.log.info("overlay begin windows=\(self.windows.count, privacy: .public) frozenBackdrops=\(backdrops.count, privacy: .public)")
         hideSystemCursor()
         selectionView(containing: NSEvent.mouseLocation)?.moveCrosshair(atGlobalPoint: NSEvent.mouseLocation)
 
@@ -529,12 +637,16 @@ final class OverlayController {
     private func showSystemCursor() {
         deferredCursorHide?.cancel()
         deferredCursorHide = nil
+        let restored = cursorHideDepth
         while cursorHideDepth > 0 {
             let result = CGDisplayShowCursor(CGMainDisplayID())
             if result != .success {
                 NSLog("QuickShot: CGDisplayShowCursor failed: \(result.rawValue)")
             }
             cursorHideDepth -= 1
+        }
+        if restored > 0 {
+            Self.log.info("overlay cursor restored count=\(restored, privacy: .public)")
         }
         cursorSuppressionActive = false
     }
@@ -543,8 +655,10 @@ final class OverlayController {
         let result = CGDisplayHideCursor(CGMainDisplayID())
         if result == .success {
             cursorHideDepth += 1
+            Self.log.info("overlay cursor hidden depth=\(self.cursorHideDepth, privacy: .public)")
         } else {
             NSLog("QuickShot: CGDisplayHideCursor failed: \(result.rawValue)")
+            Self.log.error("overlay cursor hide failed code=\(result.rawValue, privacy: .public)")
         }
     }
 
@@ -589,6 +703,7 @@ final class OverlayController {
     }
 
     func dismiss() {
+        Self.log.info("overlay dismiss windows=\(self.windows.count, privacy: .public)")
         showSystemCursor()
         if let escMonitor { NSEvent.removeMonitor(escMonitor); self.escMonitor = nil }
         if let spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver); self.spaceObserver = nil }

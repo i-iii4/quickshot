@@ -4,6 +4,58 @@
 
 ---
 
+## 04.07.2026 — frozen-first capture через прогретый ScreenCaptureKit stream cache
+
+Зафиксирован `PRODUCT_CONTRACT.md`: capture-flow считается корректным только если overlay появляется
+уже поверх frozen backdrop, системный курсор не конкурирует с кастомным, QuickShot UI не попадает в
+frozen/final кадр, а быстрый hotkey+drag не требует повторного клика.
+
+Аудит показал, что предыдущая модель **live chrome → frozen backdrop later** архитектурно
+провоцировала два симптома: видимый delayed переход с живого desktop на frozen image и редкое
+попадание собственного курсора/рамки в снимок, если ScreenCaptureKit не успевал или не мог надёжно
+исключить только что созданные overlay windows.
+
+Проверены альтернативы:
+
+- `CGDisplayCreateImage`, `CGWindowListCreateImage` и `CGDisplayStream` в текущем macOS SDK помечены
+  `unavailable`/obsoleted: компилятор требует ScreenCaptureKit.
+- `SCScreenshotManager.captureScreenshot(rect:configuration:)` и
+  `captureImage(contentFilter:configuration:)` работают, но one-shot путь на 5K экране стабильно
+  занимает около `950-970ms`; уменьшение output до `1280x720` не снимает эту задержку.
+- Прогретый `SCStream` отдаёт первый кадр после старта приложения примерно за `80-550ms`, а после
+  прогрева hotkey может брать frame из памяти. В серийной live-проверке после перезапуска:
+  худший `cache hit 27.3ms`, худший `overlay ready 42.6ms`, без cache miss.
+
+Итоговая архитектура: `ScreenFrameCache` стартует по одному `SCStream` на дисплей после запуска
+приложения, создаёт stream-объекты для дисплеев и стартует их параллельно, используя
+`SCContentFilter(display:excludingApplications:exceptingWindows:)`, чтобы весь QuickShot исключался
+на уровне приложения. `CaptureSession` по hotkey скрывает видимые окна QuickShot, берёт cached
+`CVPixelBuffer`, конвертирует его в `CGImage`, и только после этого показывает overlay на активном
+экране через `beginFrozenSelection`. Если hotkey попал на границу прогрева, session ждёт
+stream-cache и завершает путь через `cache late hit`; `SCScreenshotManager` больше не вызывается из
+hotkey-path `CaptureController`.
+
+Добавлен `scripts/verify-capture-runtime.sh`: он пересобирает и перезапускает app bundle,
+дожидается первого stream-cache frame, синтетически отправляет серию `Command-Shift-4`/`Esc` и
+валидирует unified log: обязательно immediate `cache hit` на каждый capture, запрещены `cache pending`
+и любые fallback-маркеры, проверяется hide/restore системного курсора, худший `overlay ready` должен
+быть быстрее `250ms`. Добавлен `scripts/verify-capture-cold-start.sh`: он нажимает hotkey почти
+сразу после старта процесса и разрешает только stream-cache `late hit`, без screenshot API fallback,
+а также проверяет dismiss/restore cursor lifecycle после `Esc`.
+
+Добавлен `scripts/verify-capture-selection-output.sh`: он поднимает однотонное тестовое окно,
+выполняет настоящий hotkey+drag, проверяет `capture crop complete`, `overlay cursor restored` и
+читает PNG из clipboard. Пиксельная проверка требует почти полной uniformity итогового изображения;
+это ловит попадание overlay, selection frame или кастомного курсора в финальный snapshot.
+
+Для курсора/рамки добавлены `SelectionToolBehaviorTests` и `scripts/render-selection-qa.sh`.
+Тесты фиксируют численный контракт: crosshair ровно из двух shape layers (halo/core), размер и
+anchor не меняются во время drag, а frame gap равен `crosshairGap + crosshairArm + frameSeparator`
+для всех четырёх drag-квадрантов. Renderer строит PNG-матрицу из debug-геометрии `SelectionView`,
+чтобы можно было глазами сверить, что рамка естественно продолжает курсор, без точки/ручки/перемычки.
+
+---
+
 ## 03.07.2026 — ускоренный reveal и кликабельность всех action pills
 
 Хвост hover-раскрытия был слишком вязким: `easeOutCubic` замедлял последние миллиметры, из-за чего

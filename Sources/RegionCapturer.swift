@@ -5,6 +5,7 @@ import CoreGraphics
 enum CaptureError: Error {
     case permissionDenied
     case noDisplay
+    case cacheUnavailable
     case exclusionUnavailable(String)
     case failed(Error)
 }
@@ -40,52 +41,82 @@ struct FrozenScreen {
 /// ошибками и точным контролем Retina-пикселей.
 final class RegionCapturer {
 
-    /// Полный кадр каждого переданного дисплея. Один fetch SCShareableContent на все.
+    /// Прогревает ScreenCaptureKit после запуска приложения, если доступ уже выдан.
+    /// Пиксели не снимаем: только убираем холодную инициализацию shareable-content из первого hotkey.
+    func prewarm() {
+        guard CGPreflightScreenCaptureAccess() else { return }
+        Task.detached(priority: .utility) {
+            _ = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        }
+    }
+
+    /// Полный кадр каждого переданного дисплея. Один лёгкий fetch SCShareableContent на все,
+    /// дальше дисплеи снимаются параллельно: hotkey-путь не должен ждать мониторы очередью.
+    /// `onShotCaptured` вызывается по мере готовности каждого дисплея, чтобы overlay мог замерзать
+    /// частями и не ждать самый медленный экран.
     func captureFull(displays: [(id: CGDirectDisplayID, frame: CGRect)],
-                     excludingBundleIdentifier: String? = nil) async throws -> [FrozenScreen] {
+                     excludingBundleIdentifier: String? = nil,
+                     onShotCaptured: ((FrozenScreen) async -> Void)? = nil) async throws -> [FrozenScreen] {
         guard CGPreflightScreenCaptureAccess() else { throw CaptureError.permissionDenied }
 
         let content: SCShareableContent
         do {
-            content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         } catch {
             throw CaptureError.failed(error)
         }
 
-        let excludedApps: [SCRunningApplication]
+        let excludedWindows: [SCWindow]
         if let excludingBundleIdentifier {
-            excludedApps = content.applications.filter { $0.bundleIdentifier == excludingBundleIdentifier }
-            guard !excludedApps.isEmpty else { throw CaptureError.exclusionUnavailable(excludingBundleIdentifier) }
-        } else {
-            excludedApps = []
-        }
-
-        var result: [FrozenScreen] = []
-        for d in displays {
-            guard let scDisplay = content.displays.first(where: { $0.displayID == d.id }) else { continue }
-            let filter = excludedApps.isEmpty
-                ? SCContentFilter(display: scDisplay, excludingWindows: [])
-                : SCContentFilter(display: scDisplay, excludingApplications: excludedApps, exceptingWindows: [])
-            let scale = CGFloat(filter.pointPixelScale)
-
-            let config = SCStreamConfiguration()
-            config.width  = max(1, Int((d.frame.width * scale).rounded()))
-            config.height = max(1, Int((d.frame.height * scale).rounded()))
-            config.scalesToFit = false
-            config.showsCursor = false
-            config.pixelFormat = kCVPixelFormatType_32BGRA
-            config.colorSpaceName = CGColorSpace.sRGB
-            config.captureResolution = .best
-
-            do {
-                let img = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-                result.append(FrozenScreen(displayID: d.id, frame: d.frame, scale: scale, image: img))
-            } catch {
-                if (error as NSError).code == -3801 { throw CaptureError.permissionDenied }   // userDeclined
-                throw CaptureError.failed(error)
+            excludedWindows = content.windows.filter {
+                $0.owningApplication?.bundleIdentifier == excludingBundleIdentifier
             }
+            guard !excludedWindows.isEmpty else { throw CaptureError.exclusionUnavailable(excludingBundleIdentifier) }
+        } else {
+            excludedWindows = []
         }
-        guard !result.isEmpty else { throw CaptureError.noDisplay }
-        return result
+
+        let scDisplays = Dictionary(uniqueKeysWithValues: content.displays.map { ($0.displayID, $0) })
+        let requestedDisplays = displays.compactMap { d -> (id: CGDirectDisplayID, frame: CGRect, scDisplay: SCDisplay)? in
+            guard let scDisplay = scDisplays[d.id] else { return nil }
+            return (d.id, d.frame, scDisplay)
+        }
+        guard !requestedDisplays.isEmpty else { throw CaptureError.noDisplay }
+
+        return try await withThrowingTaskGroup(of: FrozenScreen.self) { group in
+            for display in requestedDisplays {
+                group.addTask {
+                    let filter = SCContentFilter(display: display.scDisplay, excludingWindows: excludedWindows)
+                    let scale = CGFloat(filter.pointPixelScale)
+
+                    let config = SCStreamConfiguration()
+                    config.width  = max(1, Int((display.frame.width * scale).rounded()))
+                    config.height = max(1, Int((display.frame.height * scale).rounded()))
+                    config.scalesToFit = false
+                    config.showsCursor = false
+                    config.pixelFormat = kCVPixelFormatType_32BGRA
+                    config.colorSpaceName = CGColorSpace.sRGB
+                    config.captureResolution = .best
+
+                    do {
+                        let img = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+                        return FrozenScreen(displayID: display.id, frame: display.frame, scale: scale, image: img)
+                    } catch {
+                        if (error as NSError).code == -3801 { throw CaptureError.permissionDenied }   // userDeclined
+                        throw CaptureError.failed(error)
+                    }
+                }
+            }
+
+            var result: [FrozenScreen] = []
+            for try await shot in group {
+                result.append(shot)
+                if let onShotCaptured {
+                    await onShotCaptured(shot)
+                }
+            }
+            guard !result.isEmpty else { throw CaptureError.noDisplay }
+            return result
+        }
     }
 }

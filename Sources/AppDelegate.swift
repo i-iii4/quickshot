@@ -1,7 +1,10 @@
 import AppKit
+import OSLog
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+
+    private static let log = Logger(subsystem: "com.iiii.quickshot", category: "capture")
 
     private var statusItem: StatusItemController?
     private let capture = CaptureController()
@@ -20,6 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         GlobalHotKey.shared.register { [weak self] in
             self?.capture.triggerCapture()
         }
+        Self.log.info("app hotkey registered")
+        capture.prewarmCapturePipeline()
 
         NSLog("QuickShot: запущен (агент, ⌘⇧4)")
     }
