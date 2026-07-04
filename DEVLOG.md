@@ -4,6 +4,26 @@
 
 ---
 
+## 04.07.2026 — Vercel/Geist-подобный hover hub без кликовых регрессов
+
+Хаб закреплён как тёмная Vercel/Geist-подобная command-pill, а не инженерный набор из вложенных
+контуров: compact-state теперь рисуется одним shell layer с одной внешней обводкой, без stacked
+`CAShapeLayer` rings и без дополнительной обводки на core. В раскрытом состоянии visible labels
+сокращены до `Delete`, `Save`, `Copy`; полный смысл остаётся в accessibility labels, чтобы UI не
+раздувался строкой `Copy All Screenshots`.
+
+Hover reveal ускорен до `105ms` и остаётся на `easeOutQuad`, чтобы последние миллиметры раскрытия не
+растягивались. Текст action pill появляется только когда label уже полностью в clip, но действие
+становится доступным до финального кадра раскрытия. При нажатой action pill shell больше не
+схлопывается от `mouseExited` до `mouseUp`, поэтому клики по `Delete`/`Save`/`Copy` не теряются.
+
+Тестовый контракт расширен: проверяется один shell stroke без decorative sublayers, короткий
+нейминг action labels, клики по pills в промежуточных reveal frames, полный набор action-кликов для
+обоих направлений раскрытия и сценарий `press -> shell mouse exit -> release`. Visual QA обновляется
+через `./scripts/render-hub-qa.sh /tmp/quickshot-hub-matrix-preview.png`.
+
+---
+
 ## 04.07.2026 — frozen-first capture через прогретый ScreenCaptureKit stream cache
 
 Зафиксирован `PRODUCT_CONTRACT.md`: capture-flow считается корректным только если overlay появляется

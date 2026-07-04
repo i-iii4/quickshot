@@ -13,8 +13,8 @@ private enum HubAction: CaseIterable {
     var title: String {
         switch self {
         case .delete: return "Delete"
-        case .saveAs: return "Save As"
-        case .copyAll: return "Copy All Screenshots"
+        case .saveAs: return "Save"
+        case .copyAll: return "Copy"
         }
     }
 
@@ -31,13 +31,13 @@ private enum HubAction: CaseIterable {
 
 private enum HubMetrics {
     static let coreHeight: CGFloat = 34
-    static let shellInset: CGFloat = 3
+    static let shellInset: CGFloat = 2
     static let shellHeight: CGFloat = coreHeight + shellInset * 2
     static let actionHeight: CGFloat = coreHeight
-    static let groupGap: CGFloat = 7
-    static let actionGap: CGFloat = 7
-    static let actionHPad: CGFloat = 13
-    static let animationDuration: Double = 0.145
+    static let groupGap: CGFloat = 6
+    static let actionGap: CGFloat = 5
+    static let actionHPad: CGFloat = 12
+    static let animationDuration: Double = 0.105
 }
 
 #if TESTING
@@ -55,6 +55,8 @@ struct HubDebugSnapshot {
     let groupGap: CGFloat
     let actionGap: CGFloat
     let progress: CGFloat
+    let shellBorderWidth: CGFloat
+    let shellSublayerCount: Int
     let coreFrame: NSRect
     let coreCornerRadius: CGFloat
     let actionClipFrame: NSRect
@@ -71,6 +73,7 @@ private func hubEaseInOutCubic(_ f: CGFloat) -> CGFloat {
 
 private final class HubActionPill: NSView {
     var onClick: (() -> Void)?
+    var onPressChanged: ((Bool) -> Void)?
 
     private let action: HubAction
     private let label = NSTextField(labelWithString: "")
@@ -141,6 +144,7 @@ private final class HubActionPill: NSView {
     override func mouseDown(with event: NSEvent) {
         isPressed = true
         isHovered = true
+        onPressChanged?(true)
         updateChrome()
     }
 
@@ -153,6 +157,7 @@ private final class HubActionPill: NSView {
         let inside = bounds.contains(convert(event.locationInWindow, from: nil))
         isPressed = false
         isHovered = inside
+        onPressChanged?(false)
         updateChrome()
         if inside { onClick?() }
     }
@@ -184,17 +189,17 @@ private final class HubActionPill: NSView {
         let border: NSColor
         if action.isDestructive {
             bg = isPressed
-                ? NSColor(calibratedRed: 0.30, green: 0.030, blue: 0.040, alpha: 0.90)
+                ? NSColor(calibratedRed: 0.32, green: 0.030, blue: 0.040, alpha: 0.92)
                 : (isHovered
-                   ? NSColor(calibratedRed: 0.23, green: 0.025, blue: 0.032, alpha: 0.82)
-                   : NSColor(calibratedRed: 0.18, green: 0.018, blue: 0.024, alpha: 0.64))
+                   ? NSColor(calibratedRed: 0.23, green: 0.024, blue: 0.030, alpha: 0.84)
+                   : NSColor(calibratedRed: 0.18, green: 0.018, blue: 0.024, alpha: 0.66))
             border = NSColor(calibratedRed: 1, green: 0.22, blue: 0.24, alpha: isPressed ? 0.46 : (isHovered ? 0.34 : 0.24))
             label.textColor = Self.deleteTextColor(hovered: isHovered, pressed: isPressed)
         } else {
             bg = isPressed
-                ? NSColor.white.withAlphaComponent(0.135)
-                : (isHovered ? NSColor.white.withAlphaComponent(0.095) : NSColor.white.withAlphaComponent(0.052))
-            border = NSColor.white.withAlphaComponent(isPressed ? 0.24 : (isHovered ? 0.18 : 0.11))
+                ? NSColor.white.withAlphaComponent(0.15)
+                : (isHovered ? NSColor.white.withAlphaComponent(0.11) : NSColor.white.withAlphaComponent(0.058))
+            border = NSColor.white.withAlphaComponent(isPressed ? 0.26 : (isHovered ? 0.20 : 0.12))
             label.textColor = .white
         }
 
@@ -244,7 +249,7 @@ private final class HubCoreView: NSView {
         super.init(frame: NSRect(x: 0, y: 0, width: height, height: height))
 
         wantsLayer = true
-        layer?.borderWidth = 1
+        layer?.borderWidth = 0
         layer?.cornerRadius = height / 2
         layer?.cornerCurve = .continuous
         layer?.masksToBounds = true
@@ -402,9 +407,6 @@ private final class HubShellView: NSView {
     var onToggle: (() -> Void)? { didSet { core.onClick = onToggle } }
     var onAction: ((HubAction) -> Void)?
 
-    private let ringFill = CAShapeLayer()
-    private let ringHalo = CAShapeLayer()
-    private let ringLine = CAShapeLayer()
     private let core: HubCoreView
     private let actionClip = HubActionClipView()
     private let actionButtons: [(action: HubAction, view: HubActionPill)]
@@ -412,6 +414,7 @@ private final class HubShellView: NSView {
     private var direction: HubExpansionDirection = .left
     private var collapsedOrigin: NSPoint = .zero
     private var progress: CGFloat = 0
+    private var actionPressDepth = 0
     private lazy var animator = FrameAnimator(hostView: self)
 
     init(font: NSFont, actionFont: NSFont) {
@@ -423,19 +426,15 @@ private final class HubShellView: NSView {
 
         wantsLayer = true
         layer?.masksToBounds = false
+        layer?.backgroundColor = Self.shellBackground(progress: 0).cgColor
+        layer?.borderWidth = 1
+        layer?.borderColor = Self.shellBorder(progress: 0).cgColor
+        layer?.cornerRadius = HubMetrics.shellHeight / 2
+        layer?.cornerCurve = .continuous
         layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = 0.16
-        layer?.shadowRadius = 9
-        layer?.shadowOffset = CGSize(width: 0, height: -4)
-        [ringFill, ringHalo, ringLine].forEach { layer?.addSublayer($0) }
-        ringFill.fillColor = NSColor(calibratedWhite: 0.018, alpha: 0.96).cgColor
-        ringFill.strokeColor = NSColor.clear.cgColor
-        ringHalo.fillColor = NSColor.clear.cgColor
-        ringHalo.strokeColor = NSColor.black.withAlphaComponent(0.48).cgColor
-        ringHalo.lineWidth = 1.6
-        ringLine.fillColor = NSColor.clear.cgColor
-        ringLine.strokeColor = NSColor.white.withAlphaComponent(0.18).cgColor
-        ringLine.lineWidth = 1
+        layer?.shadowOpacity = 0.15
+        layer?.shadowRadius = 8
+        layer?.shadowOffset = CGSize(width: 0, height: -3)
 
         actionClip.wantsLayer = true
         actionClip.layer?.masksToBounds = true
@@ -448,6 +447,10 @@ private final class HubShellView: NSView {
         for item in actionButtons {
             item.view.alphaValue = 0
             item.view.isHidden = true
+            item.view.onPressChanged = { [weak self] pressed in
+                guard let self else { return }
+                self.actionPressDepth = max(0, self.actionPressDepth + (pressed ? 1 : -1))
+            }
             item.view.onClick = { [weak self] in
                 guard let self else { return }
                 self.setExpanded(false)
@@ -519,6 +522,7 @@ private final class HubShellView: NSView {
     override func mouseExited(with event: NSEvent) { setExpanded(false) }
 
     private func setExpanded(_ expanded: Bool) {
+        if !expanded && actionPressDepth > 0 { return }
         let target: CGFloat = expanded ? 1 : 0
         guard abs(progress - target) > 0.001 else { return }
         if expanded {
@@ -565,6 +569,8 @@ private final class HubShellView: NSView {
                          groupGap: HubMetrics.groupGap,
                          actionGap: HubMetrics.actionGap,
                          progress: progress,
+                         shellBorderWidth: layer?.borderWidth ?? 0,
+                         shellSublayerCount: layer?.sublayers?.count ?? 0,
                          coreFrame: core.frame,
                          coreCornerRadius: core.layer?.cornerRadius ?? 0,
                          actionClipFrame: actionClip.frame,
@@ -587,17 +593,14 @@ private final class HubShellView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let eased = hubEaseOutCubic(p)
-        let ringRect = bounds.insetBy(dx: 0.75, dy: 0.75)
-        let ringPath = CGPath(roundedRect: ringRect, cornerWidth: ringRect.height / 2, cornerHeight: ringRect.height / 2, transform: nil)
-        ringFill.path = ringPath
-        ringHalo.path = ringPath
-        ringLine.path = ringPath
-        ringFill.opacity = Float(0.22 + 0.78 * min(1, p / 0.14))
-        ringHalo.strokeColor = NSColor.black.withAlphaComponent(0.48 + 0.16 * eased).cgColor
-        ringLine.strokeColor = NSColor.white.withAlphaComponent(0.18 + 0.06 * eased).cgColor
-        layer?.shadowPath = ringPath
-        layer?.shadowOpacity = 0.16 + Float(0.10 * eased)
-        layer?.shadowRadius = 9 + 4 * eased
+        let shellRect = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let shellPath = CGPath(roundedRect: shellRect, cornerWidth: shellRect.height / 2, cornerHeight: shellRect.height / 2, transform: nil)
+        layer?.cornerRadius = bounds.height / 2
+        layer?.backgroundColor = Self.shellBackground(progress: eased).cgColor
+        layer?.borderColor = Self.shellBorder(progress: eased).cgColor
+        layer?.shadowPath = shellPath
+        layer?.shadowOpacity = 0.15 + Float(0.05 * eased)
+        layer?.shadowRadius = 8 + 2 * eased
         CATransaction.commit()
 
         let coreX: CGFloat
@@ -647,6 +650,15 @@ private final class HubShellView: NSView {
             item.view.layer?.transform = CATransform3DIdentity
             x += w + HubMetrics.actionGap
         }
+    }
+
+    private static func shellBackground(progress: CGFloat) -> NSColor {
+        let white = 0.014 + 0.010 * progress
+        return NSColor(calibratedWhite: white, alpha: 0.985)
+    }
+
+    private static func shellBorder(progress: CGFloat) -> NSColor {
+        NSColor.white.withAlphaComponent(0.18 + 0.06 * progress)
     }
 }
 

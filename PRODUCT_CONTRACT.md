@@ -66,6 +66,13 @@ passes compilation.
    accidentally.
 5. The tray/hub position is based on full screen frames, not safe areas; it may
    intentionally overlap Dock or menu bar.
+6. The hub is a Vercel/Geist-inspired command surface: compact state uses one
+   dark pill with one outer stroke, not stacked translucent rings or bridges.
+7. Hover reveal exposes three short Title Case actions: `Delete`, `Save`, and
+   `Copy`. Longer intent is carried by accessibility labels, not visible text.
+8. Action pills must become clickable as soon as their label is fully visible
+   during reveal, and a press must still complete if the shell receives a mouse
+   exit before mouse-up.
 
 ## Observability And Regression Gates
 
@@ -74,7 +81,8 @@ passes compilation.
    and final crop.
 2. Timing logs must not contain screenshot content or user text from the screen.
 3. Tests must cover pure geometry and interaction contracts where possible:
-   cursor/frame geometry, crop math, hub clickability, and action clickability.
+   cursor/frame geometry, crop math, hub clickability, action clickability, and
+   hub reveal states.
 4. Manual verification after any capture-flow change must use a freshly restarted
    `QuickShot.app` process. A successful build is not evidence that the running
    menu-bar app changed.

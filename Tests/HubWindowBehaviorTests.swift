@@ -15,8 +15,12 @@ struct HubWindowBehaviorTests {
         run("intermediate expansion frames stay contained and anchored", testIntermediateExpansionFrames)
         run("action labels are never visibly clipped", testActionLabelsAreNeverVisiblyClipped)
         run("layout metrics stay mathematically consistent", testLayoutMetricsStayConsistent)
+        run("action labels stay short and intentional", testActionLabelsStayShort)
+        run("compact shell uses one stroke", testCompactShellUsesOneStroke)
         run("blank shell area is inert", testBlankShellAreaIsInert)
         run("action pill click invokes action without toggling tray", testActionClickDoesNotToggle)
+        run("interactive action pills click during reveal", testInteractiveActionPillsClickDuringReveal)
+        run("action press survives shell mouse exit", testActionPressSurvivesShellMouseExit)
         run("every action pill is clickable in both expansion directions", testEveryActionPillIsClickable)
 
         print("HubWindowBehaviorTests: passed")
@@ -87,7 +91,7 @@ struct HubWindowBehaviorTests {
 
     private static func testEveryActionPillIsClickable() throws {
         for position in [TrayPosition.right, .left] {
-            for title in ["Delete", "Save As", "Copy All Screenshots"] {
+            for title in ["Delete", "Save", "Copy"] {
                 let harness = Harness(position: position)
                 harness.hub.debugSetExpansionProgress(1)
                 let point = try harness.actionPoint(title: title)
@@ -101,14 +105,14 @@ struct HubWindowBehaviorTests {
                     try require(harness.deleteCount == 1, "\(position): Delete did not fire")
                     try require(harness.saveAsCount == 0 && harness.copyAllCount == 0,
                                 "\(position): Delete fired another action")
-                case "Save As":
-                    try require(harness.saveAsCount == 1, "\(position): Save As did not fire")
+                case "Save":
+                    try require(harness.saveAsCount == 1, "\(position): Save did not fire")
                     try require(harness.deleteCount == 0 && harness.copyAllCount == 0,
-                                "\(position): Save As fired another action")
-                case "Copy All Screenshots":
-                    try require(harness.copyAllCount == 1, "\(position): Copy All Screenshots did not fire")
+                                "\(position): Save fired another action")
+                case "Copy":
+                    try require(harness.copyAllCount == 1, "\(position): Copy did not fire")
                     try require(harness.deleteCount == 0 && harness.saveAsCount == 0,
-                                "\(position): Copy All Screenshots fired another action")
+                                "\(position): Copy fired another action")
                 default:
                     throw Failure("Unexpected action title \(title)")
                 }
@@ -235,26 +239,83 @@ struct HubWindowBehaviorTests {
         }
     }
 
+    private static func testActionLabelsStayShort() throws {
+        let harness = Harness(position: .right)
+        harness.hub.debugSetExpansionProgress(1)
+        let titles = harness.hub.debugSnapshot().actionPills.map(\.title)
+        try require(titles == ["Delete", "Save", "Copy"], "Unexpected action labels: \(titles)")
+        try require(titles.allSatisfy { $0.count <= 6 }, "Action labels must stay compact: \(titles)")
+    }
+
+    private static func testCompactShellUsesOneStroke() throws {
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            let harness = Harness(position: position)
+            harness.hub.debugSetExpansionProgress(0)
+            let snapshot = harness.hub.debugSnapshot()
+
+            try require(abs(snapshot.shellBorderWidth - 1) <= 0.001,
+                        "\(position): compact shell must use exactly one layer border")
+            try require(snapshot.shellSublayerCount == 0,
+                        "\(position): compact shell must not stack decorative ring sublayers")
+        }
+    }
+
     private static func testBlankShellAreaIsInert() throws {
         let progressFrames: [CGFloat] = [0.08, 0.18, 0.33]
 
         for position in [TrayPosition.right, .left, .bottom, .top] {
             let harness = Harness(position: position)
+            var checkedPoints = 0
             for progress in progressFrames {
                 harness.hub.debugSetExpansionProgress(progress)
-                let snapshot = harness.hub.debugSnapshot()
-                let blankPointInHub: NSPoint
-                if position == .left {
-                    blankPointInHub = NSPoint(x: snapshot.actionClipFrame.maxX - 2, y: snapshot.shellBounds.midY)
-                } else {
-                    blankPointInHub = NSPoint(x: snapshot.actionClipFrame.minX + 2, y: snapshot.shellBounds.midY)
-                }
-                let blankPoint = harness.hub.view.convert(blankPointInHub, to: harness.root)
+                guard let blankPoint = harness.blankShellPoint() else { continue }
+                checkedPoints += 1
                 harness.dispatchClickIfPossible(at: blankPoint)
                 try require(harness.toggleCount == 0,
                             "\(position) progress \(progress): blank shell click toggled tray")
                 try require(harness.deleteCount == 0 && harness.saveAsCount == 0 && harness.copyAllCount == 0,
                             "\(position) progress \(progress): blank shell click triggered action")
+            }
+            try require(checkedPoints > 0, "\(position): no blank shell point was available to test")
+        }
+    }
+
+    private static func testInteractiveActionPillsClickDuringReveal() throws {
+        let progressFrames: [CGFloat] = [0.33, 0.55, 0.78, 0.95]
+
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            var partialTitles = Set<String>()
+            for progress in progressFrames {
+                for title in ["Delete", "Save", "Copy"] {
+                    let harness = Harness(position: position)
+                    harness.hub.debugSetExpansionProgress(progress)
+                    let snapshot = harness.hub.debugSnapshot()
+                    guard snapshot.actionPills.first(where: { $0.title == title })?.isInteractive == true else {
+                        continue
+                    }
+
+                    let point = try harness.actionPoint(title: title)
+                    try harness.click(at: point)
+                    partialTitles.insert(title)
+                    try requireOnlyAction(title, in: harness, context: "\(position) progress \(progress)")
+                }
+            }
+
+            try require(partialTitles == Set(["Delete", "Save", "Copy"]),
+                        "\(position): every action should become clickable before the fully expanded frame, got \(partialTitles)")
+        }
+    }
+
+    private static func testActionPressSurvivesShellMouseExit() throws {
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            for title in ["Delete", "Save", "Copy"] {
+                let harness = Harness(position: position)
+                harness.hub.debugSetExpansionProgress(1)
+                let point = try harness.actionPoint(title: title)
+
+                try harness.pressThenShellExitAndRelease(at: point)
+
+                try requireOnlyAction(title, in: harness, context: "\(position) \(title)")
             }
         }
     }
@@ -272,6 +333,26 @@ struct HubWindowBehaviorTests {
 
     private static func require(_ condition: @autoclosure () -> Bool, _ message: String) throws {
         if !condition() { throw Failure(message) }
+    }
+
+    private static func requireOnlyAction(_ title: String, in harness: Harness, context: String) throws {
+        try require(harness.toggleCount == 0, "\(context): action click must not toggle tray")
+        switch title {
+        case "Delete":
+            try require(harness.deleteCount == 1, "\(context): Delete did not fire once")
+            try require(harness.saveAsCount == 0 && harness.copyAllCount == 0,
+                        "\(context): Delete fired another action")
+        case "Save":
+            try require(harness.saveAsCount == 1, "\(context): Save did not fire once")
+            try require(harness.deleteCount == 0 && harness.copyAllCount == 0,
+                        "\(context): Save fired another action")
+        case "Copy":
+            try require(harness.copyAllCount == 1, "\(context): Copy did not fire once")
+            try require(harness.deleteCount == 0 && harness.saveAsCount == 0,
+                        "\(context): Copy fired another action")
+        default:
+            throw Failure("\(context): unexpected action title \(title)")
+        }
     }
 
     private struct Failure: Error, CustomStringConvertible {
@@ -336,6 +417,18 @@ struct HubWindowBehaviorTests {
             root.layoutSubtreeIfNeeded()
         }
 
+        func pressThenShellExitAndRelease(at point: NSPoint) throws {
+            let pointInHub = hub.view.convert(point, from: root)
+            guard let hit = hub.view.hitTest(pointInHub), hit !== hub.view else {
+                throw Failure("No interactive view at \(point)")
+            }
+
+            hit.mouseDown(with: event(.leftMouseDown, at: point))
+            hub.view.mouseExited(with: event(.mouseMoved, at: NSPoint(x: -20, y: -20)))
+            hit.mouseUp(with: event(.leftMouseUp, at: point))
+            root.layoutSubtreeIfNeeded()
+        }
+
         func firstActionPoint() throws -> NSPoint {
             let y = hub.center.y
             var x = hub.view.frame.minX + 2
@@ -361,6 +454,24 @@ struct HubWindowBehaviorTests {
             let pointInHub = NSPoint(x: snapshot.actionClipFrame.minX + pill.frame.midX,
                                      y: snapshot.actionClipFrame.minY + pill.frame.midY)
             return hub.view.convert(pointInHub, to: root)
+        }
+
+        func blankShellPoint() -> NSPoint? {
+            let snapshot = hub.debugSnapshot()
+            let clip = snapshot.actionClipFrame.insetBy(dx: 2, dy: 2)
+            guard clip.width > 0, clip.height > 0 else { return nil }
+
+            var x = clip.minX
+            while x <= clip.maxX {
+                let pointInHub = NSPoint(x: x, y: clip.midY)
+                let hit = hub.view.hitTest(pointInHub)
+                if hit == nil || hit === hub.view {
+                    return hub.view.convert(pointInHub, to: root)
+                }
+                x += 2
+            }
+
+            return nil
         }
 
         func requireVisibleDescendantsInsideShell() throws {
