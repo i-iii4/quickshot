@@ -1,5 +1,11 @@
 import CoreGraphics
 
+struct CaptureDisplay {
+    let id: CGDirectDisplayID
+    let frame: CGRect
+    let scale: CGFloat
+}
+
 enum CaptureError: Error, CustomStringConvertible {
     case permissionDenied
     case noDisplay

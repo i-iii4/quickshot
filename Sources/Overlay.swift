@@ -524,6 +524,20 @@ final class OverlayController {
               pendingMouseDownAt: initialMouseDownAt)
     }
 
+    /// Показать selection overlay уже поверх готовых frozen snapshots. Это Mio-style
+    /// путь: сначала свежая заморозка, затем интерактивная рамка и кастомный курсор.
+    func beginFrozenSelection(screens: [NSScreen],
+                              backdrops: [CGDirectDisplayID: CGImage],
+                              initialMouseDownAt: NSPoint?,
+                              onComplete: @escaping (NSRect, NSScreen) -> Void,
+                              onCancel: @escaping () -> Void) {
+        begin(screens: screens,
+              backdrops: backdrops,
+              onComplete: onComplete,
+              onCancel: onCancel,
+              pendingMouseDownAt: initialMouseDownAt)
+    }
+
     private func begin(screens: [NSScreen],
                        backdrops: [CGDirectDisplayID: CGImage],
                        onComplete: @escaping (NSRect, NSScreen) -> Void,
@@ -550,7 +564,7 @@ final class OverlayController {
             w.isReleasedWhenClosed = false
             WindowCaptureProtection.excludeFromScreenCapture(w)
             w.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))   // выше строки меню
-            // БЕЗ .canJoinAllSpaces: оверлей выделения привязан к своему Space (модальный момент),
+            // Без режима all-spaces: оверлей выделения привязан к своему Space (модальный момент),
             // а не таскается за свайпом, показывая протухший замороженный кадр. Свайп Spaces —
             // отменяем захват (наблюдатель ниже).
             w.collectionBehavior = [.fullScreenAuxiliary, .stationary]

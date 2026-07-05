@@ -2,7 +2,7 @@ import AppKit
 import CoreGraphics
 import OSLog
 
-/// Оркестратор запуска захвата. Сам цикл захвата живёт в `CaptureSession`: так у одного
+/// Оркестратор запуска захвата. Сам цикл захвата живёт в `CaptureSession`: у одного
 /// hotkey-цикла есть явное состояние, один владелец overlay и один путь завершения.
 @MainActor
 final class CaptureController {
@@ -10,7 +10,7 @@ final class CaptureController {
     nonisolated private static let log = Logger(subsystem: "com.iiii.quickshot", category: "capture")
     private static let permissionGrantedKey = "screenCaptureAccessGranted"
 
-    private let frameCache = ScreenFrameCache()
+    private let freezer = ScreenFreezePipeline()
     private let thumbnails = ThumbnailManager()
     private var session: CaptureSession?
     private var prewarmTask: Task<Void, Never>?
@@ -22,10 +22,8 @@ final class CaptureController {
         prewarmTask?.cancel()
         let prewarmID = UUID()
         self.prewarmID = prewarmID
-        let displays = Self.captureDisplays()
-        let bundleID = Bundle.main.bundleIdentifier
-        let frameCache = self.frameCache
-        prewarmTask = Task.detached(priority: .userInitiated) { [weak self] in
+        let freezer = self.freezer
+        prewarmTask = Task.detached(priority: .utility) { [weak self] in
             let preflightStartedAt = CFAbsoluteTimeGetCurrent()
             let accessGranted = CGPreflightScreenCaptureAccess()
             let preflightMs = (CFAbsoluteTimeGetCurrent() - preflightStartedAt) * 1000
@@ -36,9 +34,8 @@ final class CaptureController {
                 UserDefaults.standard.set(accessGranted, forKey: Self.permissionGrantedKey)
                 Self.log.info("capture permission preflight granted=\(accessGranted, privacy: .public) ms=\(preflightMs, privacy: .public) phase=prewarm")
             }
-            guard accessGranted else { return }
-            guard !Task.isCancelled else { return }
-            await frameCache.start(displays: displays, excludingBundleIdentifier: bundleID)
+            guard accessGranted, !Task.isCancelled else { return }
+            await freezer.prewarm()
         }
     }
 
@@ -46,7 +43,6 @@ final class CaptureController {
         guard session == nil else { return }
         Self.log.info("capture trigger accepted")
 
-        // Проверяем доступ ДО любого overlay, чтобы не показывать UI поверх неизбежного system prompt.
         if hasScreenCaptureAccess != true {
             let preflightStartedAt = CFAbsoluteTimeGetCurrent()
             let accessGranted = CGPreflightScreenCaptureAccess()
@@ -68,7 +64,7 @@ final class CaptureController {
         }
 
         let s = CaptureSession(
-            frameCache: frameCache,
+            freezer: freezer,
             onImage: { [weak self] image, screen in
                 self?.deliverCapturedImage(image, on: screen)
             },
@@ -102,22 +98,7 @@ final class CaptureController {
         prewarmID = UUID()
         session?.shutdown()
         session = nil
-        frameCache.shutdown()
-    }
-
-    private static func captureDisplays() -> [CaptureDisplay] {
-        let pointer = NSEvent.mouseLocation
-        return NSScreen.screens
-            .sorted { lhs, rhs in
-                displayWarmupRank(lhs, pointer: pointer) < displayWarmupRank(rhs, pointer: pointer)
-            }
-            .map { CaptureDisplay(id: displayID(of: $0), frame: $0.frame) }
-    }
-
-    private static func displayWarmupRank(_ screen: NSScreen, pointer: NSPoint) -> Int {
-        if NSMouseInRect(pointer, screen.frame, false) { return 0 }
-        if let main = NSScreen.main, displayID(of: main) == displayID(of: screen) { return 1 }
-        return 2
+        Task { await freezer.shutdown() }
     }
 
     private func handleCaptureError(_ error: Error) {
@@ -156,32 +137,27 @@ final class CaptureController {
             }
         }
     }
-
-    private static func displayID(of screen: NSScreen) -> CGDirectDisplayID {
-        CGDirectDisplayID(
-            (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
-    }
 }
 
-/// Одна сессия захвата:
-/// 1. показывает interactive overlay immediately, so the user can start selection without waiting;
-/// 2. скрывает уже видимые окна QuickShot перед frozen-frame work, чтобы они не попали в кадр;
-/// 3. installs a fresh frozen ScreenCaptureKit frame into that overlay when it arrives;
-/// 4. кадрирует только тот же fresh frozen image, никогда старый pre-request frame.
+/// Mio-style сессия захвата:
+/// 1. фиксирует раннее состояние мыши;
+/// 2. скрывает окна QuickShot, чтобы они не попали в freeze;
+/// 3. делает fresh full-display snapshots через ScreenCaptureKit;
+/// 4. показывает overlay уже поверх frozen pixels;
+/// 5. кадрирует только этот immutable frozen image.
 @MainActor
 private final class CaptureSession {
 
     nonisolated private static let log = Logger(subsystem: "com.iiii.quickshot", category: "capture")
-    nonisolated private static let frozenFrameWaitNanoseconds: UInt64 = 1_200_000_000
 
     private enum Phase {
         case freezing
-        case frozen
+        case selecting
         case finishing
         case cancelled
     }
 
-    private let frameCache: ScreenFrameCache
+    private let freezer: ScreenFreezePipeline
     private let onImage: (CGImage, NSScreen) -> Void
     private let onError: (Error) -> Void
     private let onEnd: () -> Void
@@ -189,21 +165,22 @@ private final class CaptureSession {
     private var phase: Phase = .freezing
     private var overlay: OverlayController?
     private var frozen: [CGDirectDisplayID: FrozenScreen] = [:]
-    private var pendingSelection: (rect: NSRect, screen: NSScreen)?
+    private var screens: [NSScreen] = []
+    private var displays: [CaptureDisplay] = []
     private var freezeTask: Task<Void, Never>?
     private var hiddenWindows: HiddenAppWindows?
     private var gestureSnapshot: CaptureGestureSnapshot?
-    private var targetDisplay: CaptureDisplay?
+    private var preOverlayMouseTracker: PreOverlayMouseTracker?
     private var endOutcome = "unknown"
     private var didEnd = false
     private let startedAt: CFAbsoluteTime
 
-    init(frameCache: ScreenFrameCache,
+    init(freezer: ScreenFreezePipeline,
          onImage: @escaping (CGImage, NSScreen) -> Void,
          onError: @escaping (Error) -> Void,
          onEnd: @escaping () -> Void,
          startedAt: CFAbsoluteTime) {
-        self.frameCache = frameCache
+        self.freezer = freezer
         self.onImage = onImage
         self.onError = onError
         self.onEnd = onEnd
@@ -213,80 +190,72 @@ private final class CaptureSession {
     func start() {
         let snapshot = CaptureGestureSnapshot()
         gestureSnapshot = snapshot
+        preOverlayMouseTracker = PreOverlayMouseTracker(initialMouseDownAt: snapshot.initialMouseDownAt)
         Self.log.info("capture hot path gesture snapshot ready ms=\(self.elapsedMs, privacy: .public)")
 
-        let targetScreen = Self.screen(containing: snapshot.preferredStartPoint) ?? NSScreen.main ?? NSScreen.screens.first
-        guard let targetScreen else {
+        let orderedScreens = Self.captureScreens(pointer: snapshot.preferredStartPoint)
+        guard !orderedScreens.isEmpty else {
             freezeFailed(CaptureError.noDisplay)
             return
         }
-        let targetDisplay = CaptureDisplay(id: Self.displayID(of: targetScreen), frame: targetScreen.frame)
-        self.targetDisplay = targetDisplay
-        let requestedAt = ScreenFrameCache.captureClock
-        Self.log.info("capture start targetDisplay=\(targetDisplay.id, privacy: .public)")
-        Self.log.info("capture hot path target resolved ms=\(self.elapsedMs, privacy: .public)")
 
-        beginOverlay(on: targetScreen)
+        screens = orderedScreens
+        displays = orderedScreens.map(Self.captureDisplay)
+        let displayList = displays.map { String($0.id) }.joined(separator: ",")
+        Self.log.info("capture freeze pending displays=\(displayList, privacy: .public)")
+
         hiddenWindows = HiddenAppWindows.hideVisibleApplicationWindows()
         Self.log.info("capture hot path windows hidden ms=\(self.elapsedMs, privacy: .public)")
-        startFreezeTask(targetDisplay: targetDisplay, requestedAt: requestedAt)
+        startFreezeTask(displays: displays)
     }
 
-    private func startFreezeTask(targetDisplay: CaptureDisplay, requestedAt: TimeInterval) {
-        frameCache.prioritize(display: targetDisplay)
-        let frameCache = self.frameCache
-        let bundleID = Bundle.main.bundleIdentifier
+    private func startFreezeTask(displays: [CaptureDisplay]) {
+        let freezer = self.freezer
         let startedAt = self.startedAt
 
         freezeTask = Task.detached(priority: .userInitiated) { [weak self] in
             let elapsedMs = { (CFAbsoluteTimeGetCurrent() - startedAt) * 1000 }
-
-            Self.log.info("capture cache pending targetDisplay=\(targetDisplay.id, privacy: .public); waiting for fresh stream cache timeoutMs=\(Double(Self.frozenFrameWaitNanoseconds) / 1_000_000, privacy: .public)")
-            let cacheStart = await frameCache.start(displays: [targetDisplay], excludingBundleIdentifier: bundleID)
-            if !cacheStart.isUsable {
-                if let rectSnapshot = await frameCache.rectSnapshotFrozenScreen(for: targetDisplay,
-                                                                                reason: cacheStart.unavailableReason) {
-                    await MainActor.run { [weak self] in
-                        guard let self, !Task.isCancelled else { return }
-                        Self.log.info("capture cache rect snapshot ready targetDisplay=\(targetDisplay.id, privacy: .public) ms=\(elapsedMs(), privacy: .public)")
-                        self.freezeCompleted([rectSnapshot], targetDisplayID: targetDisplay.id)
-                    }
-                    return
-                }
+            do {
+                let shots = try await freezer.captureFrozenScreens(displays: displays)
                 await MainActor.run { [weak self] in
                     guard let self, !Task.isCancelled else { return }
-                    Self.log.error("capture cache unavailable at start targetDisplay=\(targetDisplay.id, privacy: .public) reason=\(cacheStart.unavailableReason, privacy: .public) ms=\(elapsedMs(), privacy: .public)")
-                    self.freezeFailed(CaptureError.captureStackUnavailable("\(cacheStart.unavailableReason); rect snapshot failed"))
+                    Self.log.info("capture freeze completed ms=\(elapsedMs(), privacy: .public)")
+                    self.freezeCompleted(shots)
                 }
-                return
-            }
-
-            if let cached = await frameCache.waitForFrozenScreen(for: targetDisplay,
-                                                                 requestedAt: requestedAt,
-                                                                 timeoutNanoseconds: Self.frozenFrameWaitNanoseconds) {
+            } catch {
                 await MainActor.run { [weak self] in
                     guard let self, !Task.isCancelled else { return }
-                    Self.log.info("capture cache ready targetDisplay=\(targetDisplay.id, privacy: .public) ms=\(elapsedMs(), privacy: .public)")
-                    self.freezeCompleted([cached], targetDisplayID: targetDisplay.id)
+                    Self.log.error("capture freeze failed ms=\(elapsedMs(), privacy: .public) error=\(String(describing: error), privacy: .public)")
+                    self.freezeFailed(error)
                 }
-                return
-            }
-
-            await MainActor.run { [weak self] in
-                guard let self, !Task.isCancelled else { return }
-                Self.log.error("capture cache unavailable targetDisplay=\(targetDisplay.id, privacy: .public) ms=\(elapsedMs(), privacy: .public)")
-                self.freezeFailed(CaptureError.captureStackUnavailable("fresh stream frame unavailable before timeout"))
             }
         }
     }
 
-    private func beginOverlay(on targetScreen: NSScreen) {
+    private func freezeCompleted(_ shots: [FrozenScreen]) {
+        guard isRunning else { return }
+        guard !shots.isEmpty else {
+            freezeFailed(CaptureError.noDisplay)
+            return
+        }
+
+        frozen = Dictionary(uniqueKeysWithValues: shots.map { ($0.displayID, $0) })
+        phase = .selecting
+        Self.log.info("capture frozen ready displays=\(shots.count, privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
+        beginOverlay(backdrops: Dictionary(uniqueKeysWithValues: shots.map { ($0.displayID, $0.image) }))
+    }
+
+    private func beginOverlay(backdrops: [CGDirectDisplayID: CGImage]) {
         let overlayStartedAt = CFAbsoluteTimeGetCurrent()
         let overlay = OverlayController()
         self.overlay = overlay
-        overlay.beginLiveSelection(
-            screens: [targetScreen],
-            initialMouseDownAt: gestureSnapshot?.initialMouseDownAt,
+        let initialMouseDownAt = preOverlayMouseTracker?.mouseDownSeedPoint()
+        preOverlayMouseTracker?.stop()
+        preOverlayMouseTracker = nil
+        overlay.beginFrozenSelection(
+            screens: screens,
+            backdrops: backdrops,
+            initialMouseDownAt: initialMouseDownAt,
             onComplete: { [weak self] rect, screen in
                 self?.selectionCompleted(rect, screen)
             },
@@ -298,33 +267,10 @@ private final class CaptureSession {
         Self.log.info("capture overlay ready ms=\(self.elapsedMs, privacy: .public)")
     }
 
-    private func freezeCompleted(_ shots: [FrozenScreen], targetDisplayID: CGDirectDisplayID) {
-        guard isRunning else { return }
-        guard !shots.isEmpty else {
-            freezeFailed(CaptureError.noDisplay)
-            return
-        }
-        guard Self.screen(forDisplayID: targetDisplayID) != nil else {
-            freezeFailed(CaptureError.noDisplay)
-            return
-        }
-
-        frozen = Dictionary(uniqueKeysWithValues: shots.map { ($0.displayID, $0) })
-        phase = .frozen
-        Self.log.info("capture frozen ready displays=\(shots.count, privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
-
-        overlay?.installFrozenBackdrops(Dictionary(uniqueKeysWithValues: shots.map { ($0.displayID, $0.image) }))
-
-        if let pendingSelection {
-            Self.log.info("capture pending selection resolved ms=\(self.elapsedMs, privacy: .public)")
-            completeSelection(pendingSelection.rect, pendingSelection.screen)
-            return
-        }
-
-    }
-
     private func freezeFailed(_ error: Error) {
         guard isRunning else { return }
+        preOverlayMouseTracker?.stop()
+        preOverlayMouseTracker = nil
         overlay?.dismiss()
         overlay = nil
         phase = .cancelled
@@ -335,18 +281,7 @@ private final class CaptureSession {
 
     private func selectionCompleted(_ globalRect: NSRect, _ screen: NSScreen) {
         guard isRunning else { return }
-        if frozen[Self.displayID(of: screen)] == nil {
-            pendingSelection = (globalRect, screen)
-            dismissCompletedOverlayAwaitingFrozenFrame()
-            return
-        }
         completeSelection(globalRect, screen)
-    }
-
-    private func dismissCompletedOverlayAwaitingFrozenFrame() {
-        Self.log.info("capture pending selection awaiting frozen frame ms=\(self.elapsedMs, privacy: .public)")
-        overlay?.dismiss()
-        overlay = nil
     }
 
     private func completeSelection(_ globalRect: NSRect, _ screen: NSScreen) {
@@ -359,7 +294,6 @@ private final class CaptureSession {
         overlay?.dismiss()
         overlay = nil
         frozen = [:]
-        pendingSelection = nil
 
         guard let shot else {
             endOutcome = "missing-frozen-frame"
@@ -413,7 +347,6 @@ private final class CaptureSession {
         overlay?.dismiss()
         overlay = nil
         frozen = [:]
-        pendingSelection = nil
         end()
     }
 
@@ -424,47 +357,57 @@ private final class CaptureSession {
         overlay?.dismiss()
         overlay = nil
         frozen = [:]
-        pendingSelection = nil
-        end(prepareNext: false)
+        end()
     }
 
     private var isRunning: Bool {
         switch phase {
-        case .freezing, .frozen, .finishing:
+        case .freezing, .selecting, .finishing:
             return !didEnd
         case .cancelled:
             return false
         }
     }
 
-    private func end(prepareNext: Bool = true) {
+    private func end() {
         guard !didEnd else { return }
         didEnd = true
         freezeTask?.cancel()
         freezeTask = nil
+        preOverlayMouseTracker?.stop()
+        preOverlayMouseTracker = nil
         gestureSnapshot = nil
-        let displayToPrepare = targetDisplay
-        targetDisplay = nil
         hiddenWindows?.restore()
         hiddenWindows = nil
         Self.log.info("capture end outcome=\(self.endOutcome, privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
         onEnd()
-        if prepareNext, let displayToPrepare {
-            frameCache.prepareForNextCapture(display: displayToPrepare)
-        }
     }
 
     private var elapsedMs: Double {
         (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
     }
 
+    private static func captureScreens(pointer: NSPoint) -> [NSScreen] {
+        NSScreen.screens.sorted { lhs, rhs in
+            displayRank(lhs, pointer: pointer) < displayRank(rhs, pointer: pointer)
+        }
+    }
+
+    private static func displayRank(_ screen: NSScreen, pointer: NSPoint) -> Int {
+        if NSMouseInRect(pointer, screen.frame, false) { return 0 }
+        if let main = NSScreen.main, displayID(of: main) == displayID(of: screen) { return 1 }
+        return 2
+    }
+
+    private static func captureDisplay(for screen: NSScreen) -> CaptureDisplay {
+        CaptureDisplay(id: displayID(of: screen),
+                       frame: screen.frame,
+                       scale: screen.backingScaleFactor)
+    }
+
     private static func displayID(of screen: NSScreen) -> CGDirectDisplayID {
         CGDirectDisplayID(
             (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
-    }
-
-    private static func screen(containing point: NSPoint) -> NSScreen? {
-        NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) }
     }
 
     private static func screen(forDisplayID displayID: CGDirectDisplayID) -> NSScreen? {
@@ -496,6 +439,49 @@ private final class HiddenAppWindows {
     func restore() {
         for window in windows where !window.isVisible {
             window.orderFrontRegardless()
+        }
+    }
+}
+
+@MainActor
+private final class PreOverlayMouseTracker {
+    private var monitor: Any?
+    private var firstMouseDownAt: NSPoint?
+    private var latestPoint: NSPoint
+
+    init(initialMouseDownAt: NSPoint?) {
+        self.firstMouseDownAt = initialMouseDownAt
+        self.latestPoint = NSEvent.mouseLocation
+        monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
+            let type = event.type
+            let point = NSEvent.mouseLocation
+            Task { @MainActor [weak self] in
+                self?.record(type: type, point: point)
+            }
+        }
+    }
+
+    func mouseDownSeedPoint() -> NSPoint? {
+        guard CGEventSource.buttonState(.combinedSessionState, button: .left) else { return nil }
+        return firstMouseDownAt ?? latestPoint
+    }
+
+    func stop() {
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+        }
+    }
+
+    private func record(type: NSEvent.EventType, point: NSPoint) {
+        latestPoint = point
+        switch type {
+        case .leftMouseDown:
+            if firstMouseDownAt == nil { firstMouseDownAt = point }
+        case .leftMouseUp:
+            break
+        default:
+            break
         }
     }
 }

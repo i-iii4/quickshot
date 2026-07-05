@@ -4,6 +4,30 @@
 
 ---
 
+## 05.07.2026 — capture-flow переведен на Mio-style fresh freeze
+
+После исследования Mio и macshot старый live-frame cache путь заменен на более простой
+freeze-first contract: QuickShot скрывает свои окна, делает fresh full-display snapshots через
+`SCScreenshotManager.captureImage`, затем показывает overlay уже поверх immutable frozen pixels.
+Это сознательно убирает класс регрессов, где повторный снимок мог получить старую картинку из
+кеша. Новый владелец нижнего слоя - `ScreenFreezePipeline`; старый `ScreenFrameCache` удален.
+
+Архитектура сохраняет наши UI-контракты поверх Mio-подхода: overlay по-прежнему использует точные
+`NSScreen.frame`, не учитывает Dock/menu bar, остается Space-scoped, скрывает системный курсор и
+рисует собственную cursor/frame систему с clean separator. Для быстрого hotkey+drag до появления
+overlay сессия временно трекает pre-overlay mouse-down и передает seed point в selection tool.
+
+Regression gates обновлены под новую реальность: `ScreenFreezePipelineBehaviorTests` фиксирует tiny
+2x2 prewarm, display batch cap `3` и bounded capture timeout; `CaptureHotPathStaticTests` теперь
+требует freeze-before-overlay ordering, `SCScreenshotManager.captureImage`, `showsCursor = false`,
+удаление старой cache-лексики из активных контрактов и сохранение off-main crop / prepared clipboard
+handoff. `README.md`, `PRODUCT_CONTRACT.md` и log-only `verify-capture-observed.sh` тоже переведены
+на fresh-freeze terminology.
+
+Проверено: `./scripts/test.sh` и `./build.sh`.
+
+---
+
 ## 04.07.2026 — active capture больше не принимает pre-request pixels
 
 Закрыт путь, где повторный снимок мог получить старое состояние экрана: `ScreenFrameCache` принимал

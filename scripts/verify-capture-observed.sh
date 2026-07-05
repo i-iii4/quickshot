@@ -5,10 +5,9 @@ cd "$(dirname "$0")/.."
 APP="$PWD/QuickShot.app"
 BIN="$APP/Contents/MacOS/QuickShot"
 WINDOW_SECONDS="${WINDOW_SECONDS:-60}"
-MAX_OVERLAY_MS="${MAX_OVERLAY_MS:-100}"
+MAX_OVERLAY_MS="${MAX_OVERLAY_MS:-250}"
 ALLOW_PERMISSION_PREFLIGHT="${ALLOW_PERMISSION_PREFLIGHT:-0}"
 REQUIRE_HOTKEY_EVENT="${REQUIRE_HOTKEY_EVENT:-0}"
-REQUIRE_POST_CAPTURE_PREPARE="${REQUIRE_POST_CAPTURE_PREPARE:-0}"
 REQUIRE_COMPLETED_SELECTION="${REQUIRE_COMPLETED_SELECTION:-0}"
 
 pid="$(pgrep -f "$BIN" | head -1 || true)"
@@ -31,6 +30,11 @@ if [ "$REQUIRE_HOTKEY_EVENT" = "1" ] && ! echo "$logs" | rg -q "hotkey event rec
   exit 1
 fi
 
+if ! echo "$logs" | rg -q "capture frozen ready"; then
+  echo "Observed capture verification: frozen screenshot readiness was not observed." >&2
+  exit 1
+fi
+
 if ! echo "$logs" | rg -q "capture overlay ready"; then
   echo "Observed capture verification: overlay readiness was not observed." >&2
   exit 1
@@ -46,48 +50,22 @@ if ! echo "$logs" | rg -q "overlay activation completed"; then
   exit 1
 fi
 
-if echo "$logs" | rg -q "capture cache unavailable|cache wait expired|falling back|one-shot"; then
-  echo "Observed capture verification: capture failed or used a forbidden fallback path." >&2
-  exit 1
-fi
-
-if echo "$logs" | rg -q "capture cache old frame accepted"; then
-  echo "Observed capture verification: stale cache frame was accepted as screenshot source." >&2
-  exit 1
-fi
-
-if accepted_without_source="$(echo "$logs" | rg "capture cache frame accepted" | rg -v "source=post-request" || true)" && [ -n "$accepted_without_source" ]; then
-  echo "$accepted_without_source"
-  echo "Observed capture verification: accepted cache frame did not report its acceptance source." >&2
-  exit 1
-fi
-
-if forbidden_source="$(echo "$logs" | rg "capture cache frame accepted .*source=(responsive|validated)" || true)" && [ -n "$forbidden_source" ]; then
-  echo "$forbidden_source"
-  echo "Observed capture verification: forbidden pre-request cache frame source was accepted." >&2
-  exit 1
-fi
-
-if echo "$logs" | rg -q "capture cache fresh frame request escalating .*reason=post-capture prewarm"; then
-  echo "Observed capture verification: post-capture prewarm performed an aggressive stream restart." >&2
-  exit 1
-fi
-
 if [ "$ALLOW_PERMISSION_PREFLIGHT" != "1" ] && echo "$logs" | rg -q "capture permission preflight .*phase=trigger"; then
   echo "Observed capture verification: hotkey path performed permission preflight despite cached access." >&2
   exit 1
 fi
 
-if [ "$REQUIRE_POST_CAPTURE_PREPARE" = "1" ] && ! echo "$logs" | rg -q "capture cache post-capture prepare"; then
-  echo "Observed capture verification: post-capture preparation for the next screenshot was not observed." >&2
+if echo "$logs" | rg -q "old frame accepted|cache frame accepted|source=responsive|source=validated"; then
+  echo "Observed capture verification: stale cached-frame vocabulary appeared in the fresh-freeze path." >&2
+  exit 1
+fi
+
+if echo "$logs" | rg -q "overlay cursor hide failed"; then
+  echo "Observed capture verification: cursor suppression failed." >&2
   exit 1
 fi
 
 if [ "$REQUIRE_COMPLETED_SELECTION" = "1" ]; then
-  if ! echo "$logs" | rg -q "capture frozen ready"; then
-    echo "Observed capture verification: frozen backdrop readiness was not observed." >&2
-    exit 1
-  fi
   if ! echo "$logs" | rg -q "capture crop complete width=[0-9]+ height=[0-9]+"; then
     echo "Observed capture verification: completed crop was not observed." >&2
     exit 1
@@ -112,14 +90,12 @@ if [ "$REQUIRE_COMPLETED_SELECTION" = "1" ]; then
     echo "Observed capture verification: completed capture session end was not observed." >&2
     exit 1
   fi
-  if ! echo "$logs" | rg -q "capture cache post-capture prepare"; then
-    echo "Observed capture verification: completed capture did not prepare the next screenshot." >&2
-    exit 1
-  fi
 fi
 
 overlay_ms="$(echo "$logs" | sed -n 's/.*capture overlay ready ms=\([0-9.]*\).*/\1/p' | awk 'max < $1 { max = $1 } END { if (NR) print max }')"
+freeze_ms="$(echo "$logs" | sed -n 's/.*capture frozen ready displays=[0-9]* ms=\([0-9.]*\).*/\1/p' | awk 'max < $1 { max = $1 } END { if (NR) print max }')"
 overlay_construct_ms="$(echo "$logs" | sed -n 's/.*capture hot path overlay constructed ms=\([0-9.]*\).*/\1/p' | awk 'max < $1 { max = $1 } END { if (NR) print max }')"
+
 if [ -z "$overlay_ms" ]; then
   echo "Observed capture verification: could not parse overlay readiness timing." >&2
   exit 1
@@ -133,11 +109,6 @@ fi
 source="menu-or-unknown"
 if echo "$logs" | rg -q "hotkey event received"; then
   source="hotkey"
-fi
-
-post_capture_prepare="no"
-if echo "$logs" | rg -q "capture cache post-capture prepare"; then
-  post_capture_prepare="yes"
 fi
 
 completed_selection="no"
@@ -154,9 +125,4 @@ elif echo "$logs" | rg -q "capture delivery outcome=handoff-failed"; then
   delivery_outcome="handoff-failed"
 fi
 
-rect_snapshot="no"
-if echo "$logs" | rg -q "capture cache rect snapshot"; then
-  rect_snapshot="yes"
-fi
-
-echo "Observed capture verification passed: source=${source} overlay=${overlay_ms}ms overlayConstruct=${overlay_construct_ms:-n/a}ms cacheFrameSource=post-request rectSnapshot=${rect_snapshot} completedSelection=${completed_selection} deliveryOutcome=${delivery_outcome} postCapturePrepare=${post_capture_prepare} pid=$pid"
+echo "Observed capture verification passed: source=${source} freeze=${freeze_ms:-n/a}ms overlay=${overlay_ms}ms overlayConstruct=${overlay_construct_ms:-n/a}ms completedSelection=${completed_selection} deliveryOutcome=${delivery_outcome} pid=$pid"
