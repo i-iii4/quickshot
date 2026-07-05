@@ -13,8 +13,9 @@ implementation that violates these rules is a regression, even if it compiles.
 3. No cached desktop pixels may become the frozen backdrop or final crop. Every
    frozen image used for a session must be produced after that session's trigger.
 4. Normal warm capture should feel near-instant. The target budget for
-   hotkey-to-overlay-ready is 200 ms; 2-3 seconds is a product failure. The
-   capture path logs both `capture frozen ready` and `capture overlay ready`.
+   hotkey-to-overlay-ready is 200 ms, with Mio's public target in the tens of
+   milliseconds after prewarm. The capture path logs both `capture frozen ready`
+   and `capture overlay ready`.
 5. Startup prewarm uses only a tiny ScreenCaptureKit screenshot to warm the
    system path. It must not show UI and must not block app launch.
 6. Full-display captures are bounded and batched. The current batch cap is 3
@@ -24,7 +25,8 @@ implementation that violates these rules is a regression, even if it compiles.
    user does not have to release and start again.
 8. QuickShot UI must never appear in the frozen frame or final screenshot:
    selection overlay, custom cursor, selection frame, hub, thumbnails, settings,
-   and helper windows are hidden before freeze or excluded from capture.
+   and helper windows are hidden before freeze or excluded from capture with
+   window sharing protection.
 9. Releasing a valid selection dismisses the overlay before PNG/TIFF encoding,
    temporary file payload work, thumbnail layout, or clipboard publication. The
    session logs `capture end outcome=completed`, then schedules background crop
@@ -49,8 +51,9 @@ implementation that violates these rules is a regression, even if it compiles.
    The overlay must not be shifted by Dock, menu bar, or `visibleFrame`.
 2. The overlay is modal to the current Space. If the active Space changes during
    selection, the capture is cancelled and all overlay/cursor state is restored.
-3. The frozen backdrop is static for the whole session. The unselected area may
-   be dimmed, but the selected area shows the same frozen pixels at full contrast.
+3. The frozen backdrop is present when the overlay is constructed and stays
+   static for the whole session. The unselected area may be dimmed, but the
+   selected area shows the same frozen pixels at full contrast.
 4. `Esc` cancels the active session from any screen.
 5. Completion dismisses every overlay window exactly once and restores all cursor
    suppression state.
@@ -109,8 +112,8 @@ implementation that violates these rules is a regression, even if it compiles.
    windows and starts freeze work, while overlay construction happens only after
    `capture frozen ready`.
 6. Static gates must verify that the freezer uses `SCScreenshotManager.captureImage`,
-   `showsCursor = false`, tiny prewarm, capped display batches, and bounded
-   capture timeouts.
+   `SCShareableContent.current`, `showsCursor = false`, tiny prewarm, and capped
+   display batches.
 7. Runtime verification after capture-flow changes should prefer log-only checks
    unless the user explicitly opts into synthetic input. Synthetic scripts must
    keep `QUICKSHOT_ALLOW_SYNTHETIC_INPUT=1`.
@@ -118,3 +121,10 @@ implementation that violates these rules is a regression, even if it compiles.
    not only `Esc` cancellation. The completed path must prove crop completion,
    clipboard output, cursor restoration, and absence of overlay/cursor pixels in
    the final image.
+9. Performance baselines must be documented separately from the product budget.
+   The 2026-07-05 Mio-style baseline is approximately 590-660 ms to
+   `capture overlay ready` on the warm path, with the dominant cost in
+   `SCScreenshotManager.captureImage`. This does not relax the 200 ms contract.
+10. The next performance gate should split freeze logs into
+    `SCShareableContent.current` time and `SCScreenshotManager.captureImage`
+    time before changing UX again.

@@ -139,6 +139,17 @@ fi
 rg -q "ScreenFreezePipeline" Sources/CaptureController.swift
 rg -q "captureFrozenScreens" Sources/ScreenFreezePipeline.swift
 rg -q "SCScreenshotManager.captureImage" Sources/ScreenFreezePipeline.swift
+rg -q "SCShareableContent.current" Sources/ScreenFreezePipeline.swift
+if output="$(rg -n "CaptureImageRace|captureTimeoutNanoseconds|prewarmTimeoutNanoseconds|excludingDesktopWindows\\(false, onScreenWindowsOnly: true\\)" Sources/ScreenFreezePipeline.swift)"; then
+  echo "$output"
+  echo "Capture architecture regression: Mio-style full-display freeze must use direct SCScreenshotManager over SCShareableContent.current without hybrid timeout/window-list wrappers." >&2
+  exit 1
+fi
+if output="$(rg -n "beginLiveSelection|beginOverlay\\(backdrops: \\[:\\]\\)|installFrozenBackdrops|PendingSelection|freezeFailure|finishFailedSelection|capture selection awaiting frozen frame" Sources/CaptureController.swift Sources/Overlay.swift)"; then
+  echo "$output"
+  echo "Capture architecture regression: CaptureController must not use the hybrid live-overlay-before-freeze path." >&2
+  exit 1
+fi
 rg -q "beginFrozenSelection" Sources/CaptureController.swift
 rg -q "capture frozen ready" Sources/CaptureController.swift
 rg -q "capture overlay ready" Sources/CaptureController.swift
@@ -146,11 +157,6 @@ rg -F -q "w.isReleasedWhenClosed = false" Sources/Overlay.swift
 rg -F -q "guard !isDismissed else { return }" Sources/Overlay.swift
 rg -F -q "w.close()" Sources/Overlay.swift
 rg -F -q "Task.detached(priority: .userInitiated)" Sources/CaptureController.swift
-if output="$(rg -n "6_000_000_000|2_000_000_000" Sources/CaptureController.swift Sources/ScreenFreezePipeline.swift)"; then
-  echo "$output"
-  echo "Capture flow regression: fresh freeze must not use old multi-second deadlines." >&2
-  exit 1
-fi
 rg -q "CaptureError.captureStackUnavailable" Sources/CaptureController.swift
 rg -q "capture stack unavailable" Sources/CaptureController.swift
 rg -q "presentCaptureStackFailureNotice" Sources/CaptureController.swift

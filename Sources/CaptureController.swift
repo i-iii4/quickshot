@@ -143,7 +143,7 @@ final class CaptureController {
 /// 1. фиксирует раннее состояние мыши;
 /// 2. скрывает окна QuickShot, чтобы они не попали в freeze;
 /// 3. делает fresh full-display snapshots через ScreenCaptureKit;
-/// 4. показывает overlay уже поверх frozen pixels;
+/// 4. показывает selection overlay уже поверх immutable frozen pixels;
 /// 5. кадрирует только этот immutable frozen image.
 @MainActor
 private final class CaptureSession {
@@ -273,6 +273,7 @@ private final class CaptureSession {
         preOverlayMouseTracker = nil
         overlay?.dismiss()
         overlay = nil
+        frozen = [:]
         phase = .cancelled
         endOutcome = "failed"
         onError(error)
@@ -286,26 +287,31 @@ private final class CaptureSession {
 
     private func completeSelection(_ globalRect: NSRect, _ screen: NSScreen) {
         guard isRunning else { return }
-        phase = .finishing
+
+        let clamped = globalRect.intersection(screen.frame)
+        guard clamped.width >= 3, clamped.height >= 3 else {
+            endOutcome = "ignored-small-selection"
+            overlay?.dismiss()
+            overlay = nil
+            frozen = [:]
+            end()
+            return
+        }
 
         let did = Self.displayID(of: screen)
-        let shot = frozen[did]
-
-        overlay?.dismiss()
-        overlay = nil
-        frozen = [:]
-
-        guard let shot else {
+        guard let shot = frozen[did] else {
+            overlay?.dismiss()
+            overlay = nil
+            frozen = [:]
             endOutcome = "missing-frozen-frame"
             end()
             return
         }
-        let clamped = globalRect.intersection(screen.frame)
-        guard clamped.width >= 3, clamped.height >= 3 else {
-            endOutcome = "ignored-small-selection"
-            end()
-            return
-        }
+
+        phase = .finishing
+        overlay?.dismiss()
+        overlay = nil
+        frozen = [:]
         endOutcome = "completed"
         end()
         scheduleCropAndDelivery(shot: shot, selection: clamped, screen: screen)

@@ -60,17 +60,25 @@ struct CaptureHotPathStaticTests {
         try require(startBody.contains("startFreezeTask(displays: displays)"),
                     "CaptureSession.start must explicitly begin the freeze task")
         try require(!startBody.contains("beginOverlay("),
-                    "Mio-style flow must not show overlay before fresh frozen pixels exist")
+                    "Mio-style capture must not show selection UI before frozen screenshots are ready")
+        guard let hideRange = startBody.range(of: "HiddenAppWindows.hideVisibleApplicationWindows()"),
+              let freezeRange = startBody.range(of: "startFreezeTask(displays: displays)") else {
+            throw Failure("CaptureSession.start is missing Mio freeze-first ordering anchors")
+        }
+        try require(hideRange.lowerBound < freezeRange.lowerBound,
+                    "CaptureSession.start must hide QuickShot windows before fresh freeze work")
 
         let freezeCompletedBody = try functionBody(named: "freezeCompleted", in: source, after: "private final class CaptureSession")
         try require(freezeCompletedBody.contains("capture frozen ready"),
                     "Frozen readiness must stay observable")
         try require(freezeCompletedBody.contains("beginOverlay(backdrops:"),
-                    "Overlay must be shown only after fresh frozen screenshots are available")
+                    "Selection UI must be constructed only after frozen screenshots are available")
 
         let beginOverlayBody = try functionBody(named: "beginOverlay", in: source, after: "private final class CaptureSession")
         try require(beginOverlayBody.contains("beginFrozenSelection"),
                     "Overlay must receive ready frozen backdrops at construction")
+        try require(!beginOverlayBody.contains("beginLiveSelection"),
+                    "CaptureController must not use the hybrid live overlay path")
         try require(beginOverlayBody.contains("capture overlay ready"),
                     "Overlay readiness must stay logged")
         try require(beginOverlayBody.contains("preOverlayMouseTracker?.mouseDownSeedPoint()"),
@@ -84,8 +92,8 @@ struct CaptureHotPathStaticTests {
                     "Pipeline must keep Mio's ScreenCaptureKit prewarm")
         try require(source.contains("func captureFrozenScreens(displays requestedDisplays: [CaptureDisplay]) async throws -> [FrozenScreen]"),
                     "Pipeline must expose full-display fresh freeze capture")
-        try require(source.contains("SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)"),
-                    "Pipeline should use a tight shareable-content listing before fallback")
+        try require(source.contains("SCShareableContent.current"),
+                    "Mio-style full-display capture should use SCShareableContent.current")
         try require(source.contains("SCScreenshotManager.captureImage"),
                     "Mio-style fresh freeze must use ScreenCaptureKit screenshot capture")
         try require(source.contains("config.showsCursor = false"),
@@ -96,7 +104,7 @@ struct CaptureHotPathStaticTests {
                     "Prewarm must remain a tiny dummy screenshot")
         try require(source.contains("capture freeze screens ready"),
                     "Freeze timing must be observable")
-        for forbidden in ["SCStream(", "CVPixelBuffer", "CachedFrame", "validatedAt", "preparedFrozenScreens"] {
+        for forbidden in ["SCStream(", "CVPixelBuffer", "CachedFrame", "validatedAt", "preparedFrozenScreens", "CaptureImageRace"] {
             try require(!source.contains(forbidden), "Fresh freezer must not keep old stream-cache token \(forbidden)")
         }
     }
@@ -105,6 +113,10 @@ struct CaptureHotPathStaticTests {
                                                                    protectionSource: String) throws {
         try require(overlaySource.contains("func beginFrozenSelection"),
                     "Overlay must expose a frozen-start path")
+        try require(!overlaySource.contains("func beginLiveSelection"),
+                    "Overlay must not keep the hybrid live-start entry point")
+        try require(!overlaySource.contains("func installFrozenBackdrops"),
+                    "Frozen backdrops must be present when the overlay is constructed")
         try require(overlaySource.contains("WindowCaptureProtection.excludeFromScreenCapture(w)"),
                     "Overlay windows must opt out of screen capture")
         try require(protectionSource.contains("window.sharingType = .none"),

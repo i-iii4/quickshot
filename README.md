@@ -9,29 +9,52 @@
 2. QuickShot скрывает свои окна.
 3. `ScreenFreezePipeline` делает свежие full-display snapshots через
    ScreenCaptureKit, в стиле Mio.
-4. Overlay появляется уже поверх замороженных пикселей.
-5. Ты выделяешь область; итоговый crop берётся только из этого frozen кадра.
+4. Overlay появляется уже поверх готовых frozen backdrops.
+5. Ты выделяешь область; итоговый crop берётся только из свежего frozen кадра.
 6. У угла экрана появляется миниатюра, снимок копируется в буфер обмена.
 
 `Esc` во время выделения отменяет capture.
 
 ## Capture Architecture
 
-Текущий capture-flow - **Mio-style freeze first**. Мы больше не держим последний
-кадр рабочего стола как источник истины для следующего снимка. Каждый capture
-request получает свежий full-display screenshot после trigger, поэтому старая
-картинка из предыдущего снимка не может попасть в backdrop или final crop.
+Текущий capture-flow - **Mio-style freeze first**. Мы больше не держим
+последний кадр рабочего стола как источник истины для следующего снимка. Каждый
+capture request получает свежий full-display screenshot после trigger, поэтому
+старая картинка из предыдущего снимка не может попасть в backdrop или final
+crop.
 
 На старте приложение делает tiny prewarm: 2x2 `SCScreenshotManager.captureImage`.
 Это прогревает ScreenCaptureKit путь, но не показывает UI и не блокирует работу.
 На hotkey сессия скрывает видимые окна QuickShot, снимает дисплеи батчами с
 cap `3`, затем показывает overlay с готовыми frozen backdrops.
 
-Overlay появляется после `capture frozen ready`, а не до него. Целевой warm-path
-budget для `capture overlay ready` - 200 ms; задержка 2-3 секунды считается
-провалом продукта. Если пользователь уже держит drag к моменту появления
-overlay, раннее состояние мыши передаётся в selection tool, чтобы не заставлять
-отпускать кнопку и начинать заново.
+Overlay появляется после `capture frozen ready`, как в Mio. Целевой warm-path
+budget для `capture overlay ready` - до 200 ms, с ориентиром Mio на десятки
+миллисекунд после prewarm. Задержка 2-3 секунды до overlay считается
+performance-регрессом, который нужно устранять в freeze pipeline, а не обходить
+пустым live overlay.
+
+### Current Timing Baseline
+
+Последний log-only замер текущей freeze-first версии после перезапуска:
+
+- `capture overlay ready`: стабильный диапазон около 590-660 ms, последний
+  замер 630 ms, стабильное среднее после первых трёх попыток около 644 ms;
+- `capture display ready`: стабильное среднее после первых трёх попыток около
+  551 ms;
+- `capture frozen ready`: стабильное среднее после первых трёх попыток около
+  599 ms;
+- `capture overlay constructed`: стабильное среднее около 45 ms;
+- холодные/ранние выбросы были около 1.24s и 1.75s.
+
+Это лучше прежнего 2-3s поведения, но всё ещё выше продуктового бюджета.
+Основная стоимость сейчас находится в `SCScreenshotManager.captureImage`, а не
+в создании overlay. Следующий speed work должен сначала доказать эффективность
+prewarm и разложить freeze timing на `SCShareableContent.current` отдельно от
+самого `SCScreenshotManager.captureImage`. Если после корректного prewarm
+one-shot ScreenCaptureKit всё равно остаётся около 500-600 ms, путь к
+sub-200 ms UX потребует отдельного архитектурного решения с persistent
+stream/cache, а не только полировки overlay.
 
 Все окна QuickShot дополнительно выставляют `NSWindow.sharingType = .none`;
 selection overlay, hub, thumbnails, settings и helper windows не должны
@@ -81,9 +104,9 @@ QuickShot, без системного Liquid Glass.
 
 - хаб и action pills, включая live window dispatch;
 - кликабельность controls на отдельных карточках;
-- `ScreenFreezePipeline` prewarm/batch/timeout параметры;
+- `ScreenFreezePipeline` prewarm/batch параметры;
 - selection cursor/frame geometry;
-- static gates для Mio-style freeze-first порядка;
+- static gates для Mio-style freeze-before-overlay порядка;
 - off-main crop и prepared clipboard payload path.
 
 Визуальная проверка хаба:

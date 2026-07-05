@@ -4,6 +4,92 @@
 
 ---
 
+## 05.07.2026 — задокументирован latency baseline Mio-style freeze-first
+
+После перезапуска актуального билда и log-only проверки зафиксирован текущий
+performance baseline без синтетического управления экраном. Freeze-first путь
+больше не показывает старый кадр и больше не даёт 2-3s ожидание в обычном
+warm-path, но до целевого бюджета ещё далеко.
+
+Замер текущих логов: `capture overlay ready` стабильно держится примерно в
+диапазоне 590-660 ms, последний замер 630 ms, стабильное среднее после первых
+трёх попыток около 644 ms. `capture display ready` даёт стабильное среднее
+около 551 ms, `capture frozen ready` около 599 ms, а `capture overlay
+constructed` около 45 ms. Ранние выбросы были около 1.24s и 1.75s.
+
+Вывод: главный оставшийся тормоз находится в ScreenCaptureKit one-shot path,
+скорее всего внутри `SCScreenshotManager.captureImage`, а не в AppKit overlay.
+Следующий speed work должен сначала проверить и усилить prewarm, затем разнести
+логами `SCShareableContent.current` и сам `SCScreenshotManager.captureImage`.
+Если после этого one-shot capture остаётся около 500-600 ms, sub-200 ms UX
+потребует отдельного решения с persistent stream/cache, а не косметической
+полировки overlay.
+
+---
+
+## 05.07.2026 — production path снова приведён к Mio freeze-first architecture
+
+После уточнения требования убран гибридный visible-start путь. Production capture теперь снова следует
+Mio-порядку: `CaptureSession.start` скрывает окна QuickShot, запускает fresh full-display freeze и
+создаёт selection overlay только после `capture frozen ready`, передавая готовые backdrops в
+`beginFrozenSelection`.
+
+`ScreenFreezePipeline` также приближен к исходной Mio-структуре: full-display freeze использует
+`SCShareableContent.current` и прямой `SCScreenshotManager.captureImage`, prewarm делает тот же 2x2
+dummy capture без искусственного timeout-race, display batch cap остаётся `3`. Удалены production
+hooks для `beginLiveSelection`, `installFrozenBackdrops`, `PendingSelection`, `CaptureImageRace` и
+активных freeze timeouts.
+
+Regression gates теперь запрещают hybrid live-overlay-before-freeze path и проверяют, что overlay
+создаётся только после готовых frozen screenshots. Предыдущие записи от 05.07 про visible-start и
+background freeze timeout считаются superseded этой записью.
+
+Проверено: `./scripts/test.sh` и `./build.sh`.
+
+---
+
+## 05.07.2026 — hotkey/menu больше не блокируются ожиданием fresh freeze
+
+После перехода на Mio-style `SCScreenshotManager.captureImage` обнаружился жёсткий UX-регресс:
+если full-display screenshot не успевал в bounded timeout, hotkey и menu command выглядели как
+полностью нерабочие. Live-log показывал `capture freeze failed ... ScreenCaptureKit screenshot timed
+out`, но пользователь не видел даже selection overlay, потому что previous implementation снова
+сделала путь freeze-first-only.
+
+State machine возвращён к visible-start контракту без возврата старого stale-cache риска: capture
+сразу скрывает окна QuickShot, показывает `beginLiveSelection`, затем запускает `ScreenFreezePipeline`
+и устанавливает fresh frozen backdrops через `installFrozenBackdrops`. Если пользователь завершил
+selection раньше готовности fresh frame, selection сохраняется как `PendingSelection`, fullscreen
+overlay сразу dismiss'ится, а crop/delivery продолжаются только после `capture frozen ready`.
+
+`CaptureHotPathStaticTests`, `scripts/test.sh`, `README.md` и `PRODUCT_CONTRACT.md` обновлены, чтобы
+будущий regression gate требовал порядок visible-start -> fresh freeze, а не закреплял молчаливое
+ожидание ScreenCaptureKit.
+
+Проверено: `./scripts/test.sh` и `./build.sh`.
+
+---
+
+## 05.07.2026 — background freeze timeout больше не сносит активный overlay
+
+Ручная проверка показала следующий дефект: overlay появлялся, через секунду исчезал, и дальше ничего
+не происходило. Live-log подтвердил `capture freeze failed ... ScreenCaptureKit screenshot timed out`
+примерно через 0.9-1.9s. Причина была в том, что active full-display freeze использовал тот же
+direct-manipulation timeout, что и видимый старт, хотя после `beginLiveSelection` это уже фоновая
+работа.
+
+Active freeze timeout увеличен до 6s как background failure ceiling; tiny prewarm остаётся 500ms.
+`freezeFailed` больше не dismiss'ит overlay во время активного выбора: ошибка сохраняется как
+`freezeFailure` и применяется только если selection уже завершён и ждёт fresh frame. Так медленный
+ScreenCaptureKit больше не превращает hotkey/menu capture в “overlay мигнул и исчез”.
+
+Regression gates обновлены: `ScreenFreezePipelineBehaviorTests` теперь требует длинный bounded
+active-freeze budget, а `CaptureHotPathStaticTests` запрещает dismiss overlay внутри `freezeFailed`.
+
+Проверено: `./scripts/test.sh` и `./build.sh`.
+
+---
+
 ## 05.07.2026 — capture-flow переведен на Mio-style fresh freeze
 
 После исследования Mio и macshot старый live-frame cache путь заменен на более простой

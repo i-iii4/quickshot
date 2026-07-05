@@ -10,8 +10,6 @@ actor ScreenFreezePipeline {
     private static let log = Logger(subsystem: "com.iiii.quickshot", category: "capture")
     private static let prewarmPixelSize = 2
     private static let captureBatchSize = 3
-    private static let captureTimeoutNanoseconds: UInt64 = 900_000_000
-    private static let prewarmTimeoutNanoseconds: UInt64 = 500_000_000
 
     private var isShuttingDown = false
 
@@ -21,7 +19,7 @@ actor ScreenFreezePipeline {
         guard !isShuttingDown else { return }
         let startedAt = CFAbsoluteTimeGetCurrent()
         do {
-            let content = try await Self.loadShareableContent()
+            let content = try await SCShareableContent.current
             guard let display = content.displays.first else {
                 Self.log.warning("capture freeze prewarm skipped reason=no-display")
                 return
@@ -34,9 +32,8 @@ actor ScreenFreezePipeline {
             config.showsCursor = false
             config.scalesToFit = true
 
-            _ = try await Self.captureImage(contentFilter: filter,
-                                            configuration: config,
-                                            timeoutNanoseconds: Self.prewarmTimeoutNanoseconds)
+            _ = try await SCScreenshotManager.captureImage(contentFilter: filter,
+                                                           configuration: config)
             let ms = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
             Self.log.info("capture freeze prewarm ready ms=\(ms, privacy: .public)")
         } catch {
@@ -53,28 +50,14 @@ actor ScreenFreezePipeline {
             throw CaptureError.noDisplay
         }
 
-        let startedAt = CFAbsoluteTimeGetCurrent()
-        let content: SCShareableContent
-        do {
-            content = try await Self.loadShareableContent()
-        } catch {
-            throw Self.captureError(from: error, context: "shareable content unavailable")
-        }
-
-        let availableDisplayIDs = Set(content.displays.map(\.displayID))
-        let missing = requestedDisplays.filter { !availableDisplayIDs.contains($0.id) }
-        guard missing.isEmpty else {
-            throw CaptureError.captureStackUnavailable("ScreenCaptureKit display missing: \(missing.map { String($0.id) }.joined(separator: ","))")
-        }
-
         var result: [FrozenScreen] = []
+        let startedAt = CFAbsoluteTimeGetCurrent()
         for batchStart in stride(from: 0, to: requestedDisplays.count, by: Self.captureBatchSize) {
             let batch = Array(requestedDisplays[batchStart..<min(batchStart + Self.captureBatchSize, requestedDisplays.count)])
             try await withThrowingTaskGroup(of: FrozenScreen.self) { group in
                 for display in batch {
-                    guard let scDisplay = content.displays.first(where: { $0.displayID == display.id }) else { continue }
                     group.addTask {
-                        try await Self.captureDisplay(display, scDisplay: scDisplay)
+                        try await Self.captureFullDisplay(display)
                     }
                 }
 
@@ -98,8 +81,19 @@ actor ScreenFreezePipeline {
         Self.log.info("capture freeze pipeline shutdown")
     }
 
-    private static func captureDisplay(_ display: CaptureDisplay, scDisplay: SCDisplay) async throws -> FrozenScreen {
-        let filter = SCContentFilter(display: scDisplay, excludingWindows: [])
+    private static func captureFullDisplay(_ display: CaptureDisplay) async throws -> FrozenScreen {
+        let content: SCShareableContent
+        do {
+            content = try await SCShareableContent.current
+        } catch {
+            throw captureError(from: error, context: "shareable content unavailable")
+        }
+
+        guard let targetDisplay = content.displays.first(where: { $0.displayID == display.id }) else {
+            throw CaptureError.captureStackUnavailable("No SCDisplay matching displayID \(display.id)")
+        }
+
+        let filter = SCContentFilter(display: targetDisplay, excludingWindows: [])
         let config = SCStreamConfiguration()
         config.width = max(2, Int(display.frame.width * display.scale))
         config.height = max(2, Int(display.frame.height * display.scale))
@@ -109,9 +103,8 @@ actor ScreenFreezePipeline {
 
         let startedAt = CFAbsoluteTimeGetCurrent()
         do {
-            let image = try await captureImage(contentFilter: filter,
-                                               configuration: config,
-                                               timeoutNanoseconds: captureTimeoutNanoseconds)
+            let image = try await SCScreenshotManager.captureImage(contentFilter: filter,
+                                                                    configuration: config)
             let ms = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
             log.info("capture freeze display ready display=\(display.id, privacy: .public) ms=\(ms, privacy: .public)")
             return FrozenScreen(displayID: display.id,
@@ -120,37 +113,6 @@ actor ScreenFreezePipeline {
                                 image: image)
         } catch {
             throw captureError(from: error, context: "display \(display.id) freeze failed")
-        }
-    }
-
-    private static func loadShareableContent() async throws -> SCShareableContent {
-        do {
-            return try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        } catch {
-            log.warning("capture freeze shareable content primary failed: \(String(describing: error), privacy: .public)")
-            return try await SCShareableContent.current
-        }
-    }
-
-    private static func captureImage(contentFilter: SCContentFilter,
-                                     configuration: SCStreamConfiguration,
-                                     timeoutNanoseconds: UInt64) async throws -> CGImage {
-        try await withThrowingTaskGroup(of: CGImage.self) { group in
-            group.addTask {
-                try await SCScreenshotManager.captureImage(contentFilter: contentFilter,
-                                                           configuration: configuration)
-            }
-            group.addTask {
-                try await Task.sleep(nanoseconds: timeoutNanoseconds)
-                throw CaptureError.captureStackUnavailable("ScreenCaptureKit screenshot timed out")
-            }
-
-            guard let image = try await group.next() else {
-                group.cancelAll()
-                throw CaptureError.captureStackUnavailable("ScreenCaptureKit screenshot returned no image")
-            }
-            group.cancelAll()
-            return image
         }
     }
 
@@ -167,7 +129,5 @@ actor ScreenFreezePipeline {
 #if TESTING
     nonisolated static var debugPrewarmPixelSize: Int { prewarmPixelSize }
     nonisolated static var debugCaptureBatchSize: Int { captureBatchSize }
-    nonisolated static var debugCaptureTimeoutNanoseconds: UInt64 { captureTimeoutNanoseconds }
-    nonisolated static var debugPrewarmTimeoutNanoseconds: UInt64 { prewarmTimeoutNanoseconds }
 #endif
 }

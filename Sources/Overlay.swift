@@ -511,19 +511,6 @@ final class OverlayController {
         dismiss()
     }
 
-    /// Показать live selection chrome немедленно. Frozen backdrop будет установлен позже через
-    /// `installFrozenBackdrops`: рамка и курсор уже работают, а картинка под ними догружается.
-    func beginLiveSelection(screens: [NSScreen],
-                            initialMouseDownAt: NSPoint?,
-                            onComplete: @escaping (NSRect, NSScreen) -> Void,
-                            onCancel: @escaping () -> Void) {
-        begin(screens: screens,
-              backdrops: [:],
-              onComplete: onComplete,
-              onCancel: onCancel,
-              pendingMouseDownAt: initialMouseDownAt)
-    }
-
     /// Показать selection overlay уже поверх готовых frozen snapshots. Это Mio-style
     /// путь: сначала свежая заморозка, затем интерактивная рамка и кастомный курсор.
     func beginFrozenSelection(screens: [NSScreen],
@@ -624,12 +611,6 @@ final class OverlayController {
             self.windows.first?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             Self.log.info("overlay activation completed")
-        }
-    }
-
-    func installFrozenBackdrops(_ backdrops: [CGDirectDisplayID: CGImage]) {
-        for (did, image) in backdrops {
-            backdropViews[did]?.setImage(image)
         }
     }
 
