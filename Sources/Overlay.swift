@@ -505,28 +505,20 @@ final class OverlayController {
     private var backdropViews: [CGDirectDisplayID: BackdropView] = [:]
     private weak var activeGlobalSelection: SelectionView?
     private var completedSelection = false
+    private var isDismissed = false
+
+    deinit {
+        dismiss()
+    }
 
     /// Показать live selection chrome немедленно. Frozen backdrop будет установлен позже через
     /// `installFrozenBackdrops`: рамка и курсор уже работают, а картинка под ними догружается.
-    func beginLiveSelection(initialMouseDownAt: NSPoint?,
+    func beginLiveSelection(screens: [NSScreen],
+                            initialMouseDownAt: NSPoint?,
                             onComplete: @escaping (NSRect, NSScreen) -> Void,
                             onCancel: @escaping () -> Void) {
-        begin(screens: NSScreen.screens,
-              backdrops: [:],
-              onComplete: onComplete,
-              onCancel: onCancel,
-              pendingMouseDownAt: initialMouseDownAt)
-    }
-
-    /// Показать selection chrome только после того, как frozen backdrop уже готов.
-    /// Это продуктовый путь: пользователь не видит живой desktop под инструментом выделения.
-    func beginFrozenSelection(screens: [NSScreen],
-                              backdrops: [CGDirectDisplayID: CGImage],
-                              initialMouseDownAt: NSPoint?,
-                              onComplete: @escaping (NSRect, NSScreen) -> Void,
-                              onCancel: @escaping () -> Void) {
         begin(screens: screens,
-              backdrops: backdrops,
+              backdrops: [:],
               onComplete: onComplete,
               onCancel: onCancel,
               pendingMouseDownAt: initialMouseDownAt)
@@ -555,6 +547,8 @@ final class OverlayController {
             w.isFloatingPanel = true
             w.hidesOnDeactivate = false
             w.becomesKeyOnlyIfNeeded = false
+            w.isReleasedWhenClosed = false
+            WindowCaptureProtection.excludeFromScreenCapture(w)
             w.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))   // выше строки меню
             // БЕЗ .canJoinAllSpaces: оверлей выделения привязан к своему Space (модальный момент),
             // а не таскается за свайпом, показывая протухший замороженный кадр. Свайп Spaces —
@@ -581,13 +575,10 @@ final class OverlayController {
             container.addSubview(backdropView)           // статичный фон снизу
             container.addSubview(chrome)                 // лёгкий хром сверху
             w.contentView = container
-            w.displayIfNeeded()                          // отрисовать содержимое ДО показа — атомарно
             windows.append(w)
         }
 
         for w in windows { w.orderFrontRegardless() }
-        windows.first?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
         Self.log.info("overlay begin windows=\(self.windows.count, privacy: .public) frozenBackdrops=\(backdrops.count, privacy: .public)")
         hideSystemCursor()
         selectionView(containing: NSEvent.mouseLocation)?.moveCrosshair(atGlobalPoint: NSEvent.mouseLocation)
@@ -612,6 +603,13 @@ final class OverlayController {
         spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
             self?.onCancel?()
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.windows.isEmpty else { return }
+            self.windows.first?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            Self.log.info("overlay activation completed")
         }
     }
 
@@ -703,12 +701,18 @@ final class OverlayController {
     }
 
     func dismiss() {
+        guard !isDismissed else { return }
+        isDismissed = true
         Self.log.info("overlay dismiss windows=\(self.windows.count, privacy: .public)")
         showSystemCursor()
         if let escMonitor { NSEvent.removeMonitor(escMonitor); self.escMonitor = nil }
         if let spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver); self.spaceObserver = nil }
         if let globalDragMonitor { NSEvent.removeMonitor(globalDragMonitor); self.globalDragMonitor = nil }
-        for w in windows { w.orderOut(nil) }
+        for w in windows {
+            w.orderOut(nil)
+            w.contentView = nil
+            w.close()
+        }
         windows.removeAll()
         selectionViews.removeAll()
         backdropViews.removeAll()
@@ -716,12 +720,5 @@ final class OverlayController {
         completedSelection = false
         onComplete = nil
         onCancel = nil
-    }
-
-    deinit {
-        showSystemCursor()
-        if let escMonitor { NSEvent.removeMonitor(escMonitor) }
-        if let spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver) }
-        if let globalDragMonitor { NSEvent.removeMonitor(globalDragMonitor) }
     }
 }

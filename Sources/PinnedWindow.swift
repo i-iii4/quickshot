@@ -9,6 +9,7 @@ private final class PinnedContentView: NSView {
     private let imageView = NSImageView()
     private let copyButton = GlassButton(symbol: "doc.on.doc", title: "Копировать", a11y: "Скопировать в буфер обмена")
     private var trackingArea: NSTrackingArea?
+    private var preparedClipboardImage: Clipboard.PreparedImage?
     var onClose: (() -> Void)?
     private var titleResetWork: DispatchWorkItem?
 
@@ -28,6 +29,7 @@ private final class PinnedContentView: NSView {
         copyButton.toolTip = "Скопировать (⌘C)"
         copyButton.isHidden = true
         addSubview(copyButton)
+        prepareClipboardPayload()
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -66,13 +68,34 @@ private final class PinnedContentView: NSView {
     override func mouseExited(with event: NSEvent) { copyButton.isHidden = true }
 
     private func doCopy() {
-        Clipboard.copy(cgImage: image)
+        copyButton.isHidden = false
+        if let preparedClipboardImage {
+            publishCopy(preparedClipboardImage)
+            return
+        }
+
+        let image = image
+        Clipboard.prepareImage(cgImage: image) { [weak self] prepared in
+            self?.preparedClipboardImage = prepared
+            self?.publishCopy(prepared)
+        }
+    }
+
+    private func publishCopy(_ prepared: Clipboard.PreparedImage) {
+        Clipboard.copy(preparedImage: prepared)
         copyButton.isHidden = false
         copyButton.showCheck(true)
         titleResetWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.copyButton.showCheck(false) }
         titleResetWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
+    }
+
+    private func prepareClipboardPayload() {
+        let image = image
+        Clipboard.prepareImage(cgImage: image, qos: .utility) { [weak self] prepared in
+            self?.preparedClipboardImage = prepared
+        }
     }
 }
 
@@ -106,6 +129,7 @@ final class PinnedWindowController: NSObject, NSWindowDelegate {
         win.isReleasedWhenClosed = false
         win.level = .floating
         win.delegate = self
+        WindowCaptureProtection.excludeFromScreenCapture(win)
 
         let content = PinnedContentView(image: image)
         content.onClose = { [weak win] in win?.performClose(nil) }

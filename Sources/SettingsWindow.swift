@@ -58,6 +58,7 @@ final class SettingsController: NSObject, NSWindowDelegate {
         w.title = "Настройки QuickShot"
         w.isReleasedWhenClosed = false
         w.delegate = self
+        WindowCaptureProtection.excludeFromScreenCapture(w)
         w.contentView = content
         w.setContentSize(content.fittingSize)       // окно по контенту, без магических размеров
         window = w

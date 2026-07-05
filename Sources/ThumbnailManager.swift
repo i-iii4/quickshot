@@ -37,9 +37,8 @@ enum TrayPosition: String {
 }
 
 /// Окно-хост всего трея: ОДНА прозрачная nonactivating-панель на весь экран. Карточки и хаб —
-/// её сабвью. Так стекло рисуется в активном виде (активный вид даёт только key-окно — публичного
-/// способа показать активное стекло в не-key окне нет, подтверждено Apple DevForums), клики по
-/// стеклянным кнопкам диспатчатся штатно, нет флаппинга между панелями и обрезки press-lift.
+/// её сабвью. Панель может стать key внутри процесса, не активируя чужое приложение; так первый
+/// клик стабильно доходит до controls трея, без флаппинга между несколькими панелями.
 /// По прозрачным пикселям borderless-окно пропускает клики в приложения под треем (per-pixel hit),
 /// поэтому полноэкранный хост не перехватывает мышь в пустых областях.
 final class TrayHostPanel: NSPanel {
@@ -47,7 +46,7 @@ final class TrayHostPanel: NSPanel {
 }
 
 /// Менеджер трея миниатюр. Карточки выкладываются у угла (колонка/ряд), у самого угла —
-/// круглый Liquid Glass хаб со счётчиком. Клик по хабу растворяет карточки в него
+/// Vercel/Geist-подобный command hub со счётчиком. Клик по хабу растворяет карточки в него
 /// (сворачивание) или проявляет обратно (разворачивание). Новый снимок авто-разворачивает.
 /// Общая ширина карточки сохраняется между сессиями.
 final class ThumbnailManager {
@@ -58,7 +57,7 @@ final class ThumbnailManager {
     private let hub = HubWindow()
 
     private let host: TrayHostPanel
-    private let hostContent = NSView()
+    private let hostContent = TrayHostContentView()
 
     private let defaults = UserDefaults.standard
     private let widthKey = "thumbnailCardWidth"
@@ -74,7 +73,8 @@ final class ThumbnailManager {
         host.level = .statusBar
         host.isFloatingPanel = true
         host.hidesOnDeactivate = false
-        host.becomesKeyOnlyIfNeeded = false           // makeKey должен срабатывать для активного стекла
+        host.becomesKeyOnlyIfNeeded = false           // makeKey должен срабатывать для controls трея
+        WindowCaptureProtection.excludeFromScreenCapture(host)
         host.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         hostContent.wantsLayer = true
         host.contentView = hostContent
@@ -91,8 +91,8 @@ final class ThumbnailManager {
         NotificationCenter.default.addObserver(
             self, selector: #selector(trayPositionChanged),
             name: TrayPosition.changedNotification, object: nil)
-        // Смена Spaces/экрана свайпом снимает key с хоста → стекло гаснет («disabled»). Если курсор
-        // над треем (пользователь его трогает) — пере-key'им, чтобы стекло ожило без out-and-back.
+        // Смена Spaces/экрана свайпом снимает key с хоста. Если курсор над треем
+        // (пользователь его трогает) — пере-key'им, чтобы первый клик снова шёл в controls.
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(activeSpaceChanged),
             name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
@@ -141,7 +141,7 @@ final class ThumbnailManager {
     @objc private func activeSpaceChanged() {
         guard host.isVisible else { return }
         host.orderFrontRegardless()             // доталкиваем трей в текущий Space (вкл. фуллскрин via fullScreenAuxiliary)
-        if mouseOverTray() { host.makeKey() }   // карточные стеклянные кнопки оживают, если курсор над треем
+        if mouseOverTray() { host.makeKey() }   // controls трея остаются доступны, если курсор над ним
     }
 
     /// Курсор над картой/хабом (в глобальных координатах)? Хост полноэкранный, поэтому проверяем
@@ -174,10 +174,10 @@ final class ThumbnailManager {
 
     private func showHost() {
         host.orderFrontRegardless()
-        host.makeKey()                                // одно окно — без флаппинга; стекло активно
+        host.makeKey()                                // одно окно — без флаппинга
     }
 
-    /// Запрос key у хоста (вызывает карточка на ховере): стеклянные кнопки светлеют без клика.
+    /// Запрос key у хоста (вызывает карточка на ховере): controls получают первый клик без активации app.
     func hostBecomeKey() { if host.isVisible { host.makeKey() } }
 
     // MARK: добавление/удаление
@@ -202,13 +202,27 @@ final class ThumbnailManager {
 
     /// Копирование НЕ закрывает карточку — только короткий фидбэк.
     func copy(_ t: ThumbnailWindow) {
-        Clipboard.copy(cgImage: t.image)
-        t.flashCopied()
+        if let prepared = t.cachedClipboardPayload() {
+            Clipboard.copy(preparedImage: prepared)
+            t.flashCopied()
+            return
+        }
+
+        let image = t.image
+        Clipboard.prepareImage(cgImage: image) { [weak t] prepared in
+            Clipboard.copy(preparedImage: prepared)
+            t?.flashCopied()
+        }
     }
 
     func copyAll() {
-        Clipboard.copyAll(cgImages: items.map(\.image))
-        items.last?.flashCopied()
+        let images = items.map(\.image)
+        guard !images.isEmpty else { return }
+        let last = items.last
+        Clipboard.prepareImages(cgImages: images) { [weak last] prepared in
+            Clipboard.copy(preparedImages: prepared)
+            last?.flashCopied()
+        }
     }
 
     func deleteAll() {

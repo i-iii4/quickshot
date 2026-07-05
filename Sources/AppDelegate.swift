@@ -20,8 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Глобальный хоткей ⌘⇧4. Carbon RegisterEventHotKey не требует никаких прав
         // (ни Accessibility, ни Input Monitoring) — работает с первого запуска.
-        GlobalHotKey.shared.register { [weak self] in
-            self?.capture.triggerCapture()
+        GlobalHotKey.shared.register { [weak self] startedAt in
+            self?.capture.triggerCapture(startedAt: startedAt)
         }
         Self.log.info("app hotkey registered")
         capture.prewarmCapturePipeline()
@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        capture.shutdown()
         GlobalHotKey.shared.unregister()
     }
 }

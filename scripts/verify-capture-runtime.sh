@@ -4,9 +4,18 @@ cd "$(dirname "$0")/.."
 
 APP="$PWD/QuickShot.app"
 BIN="$APP/Contents/MacOS/QuickShot"
-MAX_OVERLAY_MS="${MAX_OVERLAY_MS:-250}"
+MAX_OVERLAY_MS="${MAX_OVERLAY_MS:-100}"
 MAX_CACHE_HIT_MS="${MAX_CACHE_HIT_MS:-50}"
 CAPTURE_REPEAT="${CAPTURE_REPEAT:-3}"
+
+if [ "${QUICKSHOT_ALLOW_SYNTHETIC_INPUT:-0}" != "1" ]; then
+  cat >&2 <<'EOF'
+verify-capture-runtime.sh posts synthetic hotkey events and opens the capture overlay.
+Set QUICKSHOT_ALLOW_SYNTHETIC_INPUT=1 to run it intentionally.
+For non-interruptive verification, use scripts/verify-capture-observed.sh after a manual capture.
+EOF
+  exit 2
+fi
 
 ./build.sh >/tmp/quickshot-build.log
 
@@ -29,7 +38,7 @@ predicate="processID == $pid AND subsystem == \"com.iiii.quickshot\""
 cache_ready=false
 for _ in {1..30}; do
   logs="$(/usr/bin/log show --last 30s --info --debug --style compact --predicate "$predicate" 2>/dev/null || true)"
-  if echo "$logs" | rg -q "capture cache first frame"; then
+  if echo "$logs" | rg -q "capture cache first frame|capture cache no stream candidates"; then
     cache_ready=true
     break
   fi
@@ -37,7 +46,7 @@ for _ in {1..30}; do
 done
 
 if [ "$cache_ready" != true ]; then
-  echo "ScreenFrameCache did not produce a frame for QuickShot pid $pid." >&2
+  echo "ScreenFrameCache neither produced a frame nor reported rect-snapshot recovery eligibility for QuickShot pid $pid." >&2
   /usr/bin/log show --last 30s --info --debug --style compact --predicate "$predicate" | tail -80 >&2 || true
   exit 1
 fi
@@ -80,18 +89,35 @@ sleep 0.5
 logs="$(/usr/bin/log show --last 20s --info --debug --style compact --predicate "$predicate")"
 echo "$logs" | tail -80
 
-if echo "$logs" | rg -q "capture cache miss|capture cache pending|capture cache unavailable|cache wait expired|falling back|one-shot"; then
-  echo "Runtime regression: warm capture did not use immediate stream-cache hit." >&2
+if echo "$logs" | rg -q "capture cache unavailable|cache wait expired|falling back|one-shot"; then
+  echo "Runtime regression: capture fell back or failed instead of using stream cache." >&2
   exit 1
 fi
 
-if ! echo "$logs" | rg -q "capture cache hit"; then
-  echo "Runtime regression: capture cache hit was not observed." >&2
+if echo "$logs" | rg -q "capture cache old frame accepted"; then
+  echo "Runtime regression: stale cache frame was accepted as screenshot source." >&2
+  exit 1
+fi
+
+if accepted_without_source="$(echo "$logs" | rg "capture cache frame accepted" | rg -v "source=post-request" || true)" && [ -n "$accepted_without_source" ]; then
+  echo "$accepted_without_source"
+  echo "Runtime regression: accepted cache frame did not report its acceptance source." >&2
+  exit 1
+fi
+
+if forbidden_source="$(echo "$logs" | rg "capture cache frame accepted .*source=(responsive|validated)" || true)" && [ -n "$forbidden_source" ]; then
+  echo "$forbidden_source"
+  echo "Runtime regression: forbidden pre-request cache frame source was accepted." >&2
+  exit 1
+fi
+
+if echo "$logs" | rg -q "capture cache fresh frame request escalating .*reason=post-capture prewarm"; then
+  echo "Runtime regression: post-capture prewarm performed an aggressive stream restart." >&2
   exit 1
 fi
 
 if ! echo "$logs" | rg -q "capture overlay ready"; then
-  echo "Runtime regression: frozen overlay readiness was not observed." >&2
+  echo "Runtime regression: overlay readiness was not observed." >&2
   exit 1
 fi
 
@@ -110,19 +136,18 @@ if ! echo "$logs" | rg -q "overlay cursor restored"; then
   exit 1
 fi
 
+if ! echo "$logs" | rg -q "capture cache post-capture prepare"; then
+  echo "Runtime regression: post-capture preparation for the next screenshot was not observed." >&2
+  exit 1
+fi
+
 if echo "$logs" | rg -q "overlay cursor hide failed"; then
   echo "Runtime regression: cursor suppression failed." >&2
   exit 1
 fi
 
-hit_count="$(echo "$logs" | rg -c "capture cache hit|capture cache late hit" || true)"
-if ! awk -v hits="$hit_count" -v expected="$CAPTURE_REPEAT" 'BEGIN { exit !(hits >= expected) }'; then
-  echo "Runtime regression: observed ${hit_count} cache hit(s), expected at least ${CAPTURE_REPEAT}." >&2
-  exit 1
-fi
-
 cache_ms="$(echo "$logs" | awk '
-  /capture cache (late )?hit/ {
+  /capture cache (ready|(late )?hit)/ {
     for (i = 1; i <= NF; i++) {
       if ($i ~ /^ms=/) {
         sub(/^ms=/, "", $i)
@@ -134,8 +159,13 @@ cache_ms="$(echo "$logs" | awk '
   END { if (max != "") print max }
 ')"
 overlay_ms="$(echo "$logs" | sed -n 's/.*capture overlay ready ms=\([0-9.]*\).*/\1/p' | awk 'max < $1 { max = $1 } END { if (NR) print max }')"
+frame_age_ms="$(echo "$logs" | sed -n 's/.*capture cache frame accepted display=.* ageMs=\([0-9.]*\).*/\1/p' | awk 'max < $1 { max = $1 } END { if (NR) print max }')"
+rect_snapshot="no"
+if echo "$logs" | rg -q "capture cache rect snapshot"; then
+  rect_snapshot="yes"
+fi
 
-if ! awk -v ms="$cache_ms" -v max="$MAX_CACHE_HIT_MS" 'BEGIN { exit !(ms <= max) }'; then
+if [ -n "$cache_ms" ] && ! awk -v ms="$cache_ms" -v max="$MAX_CACHE_HIT_MS" 'BEGIN { exit !(ms <= max) }'; then
   echo "Runtime regression: cache hit took ${cache_ms}ms, max ${MAX_CACHE_HIT_MS}ms." >&2
   exit 1
 fi
@@ -145,4 +175,4 @@ if ! awk -v ms="$overlay_ms" -v max="$MAX_OVERLAY_MS" 'BEGIN { exit !(ms <= max)
   exit 1
 fi
 
-echo "Capture runtime verification passed: cache=${cache_ms}ms overlay=${overlay_ms}ms pid=$pid"
+echo "Capture runtime verification passed: cache=${cache_ms:-n/a}ms overlay=${overlay_ms}ms frameAge=${frame_age_ms:-n/a}ms rectSnapshot=${rect_snapshot} pid=$pid"

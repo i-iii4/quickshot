@@ -6,7 +6,16 @@ APP="$PWD/QuickShot.app"
 BIN="$APP/Contents/MacOS/QuickShot"
 COLD_HOTKEY_DELAY="${COLD_HOTKEY_DELAY:-0.05}"
 COLD_WAIT_SECONDS="${COLD_WAIT_SECONDS:-4.00}"
-MAX_COLD_OVERLAY_MS="${MAX_COLD_OVERLAY_MS:-2500}"
+MAX_COLD_OVERLAY_MS="${MAX_COLD_OVERLAY_MS:-100}"
+
+if [ "${QUICKSHOT_ALLOW_SYNTHETIC_INPUT:-0}" != "1" ]; then
+  cat >&2 <<'EOF'
+verify-capture-cold-start.sh posts synthetic hotkey events and opens the capture overlay.
+Set QUICKSHOT_ALLOW_SYNTHETIC_INPUT=1 to run it intentionally.
+For non-interruptive verification, use scripts/verify-capture-observed.sh after a manual capture.
+EOF
+  exit 2
+fi
 
 ./build.sh >/tmp/quickshot-cold-build.log
 
@@ -105,8 +114,25 @@ if echo "$logs" | rg -q "capture cache unavailable|cache wait expired|capture ca
   exit 1
 fi
 
-if ! echo "$logs" | rg -q "capture cache hit|capture cache late hit"; then
-  echo "Cold-start regression: no stream-cache hit was observed." >&2
+if echo "$logs" | rg -q "capture cache old frame accepted"; then
+  echo "Cold-start regression: stale cache frame was accepted as screenshot source." >&2
+  exit 1
+fi
+
+if accepted_without_source="$(echo "$logs" | rg "capture cache frame accepted" | rg -v "source=post-request" || true)" && [ -n "$accepted_without_source" ]; then
+  echo "$accepted_without_source"
+  echo "Cold-start regression: accepted cache frame did not report its acceptance source." >&2
+  exit 1
+fi
+
+if forbidden_source="$(echo "$logs" | rg "capture cache frame accepted .*source=(responsive|validated)" || true)" && [ -n "$forbidden_source" ]; then
+  echo "$forbidden_source"
+  echo "Cold-start regression: forbidden pre-request cache frame source was accepted." >&2
+  exit 1
+fi
+
+if echo "$logs" | rg -q "capture cache fresh frame request escalating .*reason=post-capture prewarm"; then
+  echo "Cold-start regression: post-capture prewarm performed an aggressive stream restart." >&2
   exit 1
 fi
 
@@ -125,10 +151,20 @@ if ! echo "$logs" | rg -q "overlay cursor restored"; then
   exit 1
 fi
 
+if ! echo "$logs" | rg -q "capture cache post-capture prepare"; then
+  echo "Cold-start regression: post-capture preparation for the next screenshot was not observed." >&2
+  exit 1
+fi
+
 overlay_ms="$(echo "$logs" | sed -n 's/.*capture overlay ready ms=\([0-9.]*\).*/\1/p' | tail -1)"
 if ! awk -v ms="$overlay_ms" -v max="$MAX_COLD_OVERLAY_MS" 'BEGIN { exit !(ms <= max) }'; then
   echo "Cold-start regression: overlay ready took ${overlay_ms}ms, max ${MAX_COLD_OVERLAY_MS}ms." >&2
   exit 1
 fi
 
-echo "Capture cold-start verification passed: overlay=${overlay_ms}ms pid=$pid"
+rect_snapshot="no"
+if echo "$logs" | rg -q "capture cache rect snapshot"; then
+  rect_snapshot="yes"
+fi
+
+echo "Capture cold-start verification passed: overlay=${overlay_ms}ms rectSnapshot=${rect_snapshot} pid=$pid"

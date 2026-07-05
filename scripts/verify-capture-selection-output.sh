@@ -4,7 +4,16 @@ cd "$(dirname "$0")/.."
 
 APP="$PWD/QuickShot.app"
 BIN="$APP/Contents/MacOS/QuickShot"
-MAX_OVERLAY_MS="${MAX_OVERLAY_MS:-250}"
+MAX_OVERLAY_MS="${MAX_OVERLAY_MS:-100}"
+
+if [ "${QUICKSHOT_ALLOW_SYNTHETIC_INPUT:-0}" != "1" ]; then
+  cat >&2 <<'EOF'
+verify-capture-selection-output.sh posts synthetic hotkey and mouse events and opens the capture overlay.
+Set QUICKSHOT_ALLOW_SYNTHETIC_INPUT=1 to run it intentionally.
+For non-interruptive verification, use scripts/verify-capture-observed.sh after a manual capture.
+EOF
+  exit 2
+fi
 
 ./build.sh >/tmp/quickshot-selection-build.log
 
@@ -26,7 +35,7 @@ predicate="processID == $pid AND subsystem == \"com.iiii.quickshot\""
 cache_ready=false
 for _ in {1..30}; do
   logs="$(/usr/bin/log show --last 30s --info --debug --style compact --predicate "$predicate" 2>/dev/null || true)"
-  if echo "$logs" | rg -q "capture cache first frame"; then
+  if echo "$logs" | rg -q "capture cache first frame|capture cache no stream candidates"; then
     cache_ready=true
     break
   fi
@@ -34,7 +43,7 @@ for _ in {1..30}; do
 done
 
 if [ "$cache_ready" != true ]; then
-  echo "ScreenFrameCache did not produce a frame for QuickShot pid $pid." >&2
+  echo "ScreenFrameCache neither produced a frame nor reported rect-snapshot recovery eligibility for QuickShot pid $pid." >&2
   exit 1
 fi
 
@@ -223,13 +232,50 @@ sleep 0.5
 logs="$(/usr/bin/log show --last 20s --info --debug --style compact --predicate "$predicate" 2>/dev/null || true)"
 echo "$logs" | tail -100
 
-if echo "$logs" | rg -q "capture cache pending|capture cache unavailable|cache wait expired|falling back|one-shot"; then
-  echo "Selection output regression: warm selection did not use immediate stream-cache hit." >&2
+if echo "$logs" | rg -q "capture cache unavailable|cache wait expired|falling back|one-shot"; then
+  echo "Selection output regression: capture failed or used a forbidden fallback path." >&2
+  exit 1
+fi
+
+if echo "$logs" | rg -q "capture cache old frame accepted"; then
+  echo "Selection output regression: stale cache frame was accepted as screenshot source." >&2
+  exit 1
+fi
+
+if accepted_without_source="$(echo "$logs" | rg "capture cache frame accepted" | rg -v "source=post-request" || true)" && [ -n "$accepted_without_source" ]; then
+  echo "$accepted_without_source"
+  echo "Selection output regression: accepted cache frame did not report its acceptance source." >&2
+  exit 1
+fi
+
+if forbidden_source="$(echo "$logs" | rg "capture cache frame accepted .*source=(responsive|validated)" || true)" && [ -n "$forbidden_source" ]; then
+  echo "$forbidden_source"
+  echo "Selection output regression: forbidden pre-request cache frame source was accepted." >&2
+  exit 1
+fi
+
+if echo "$logs" | rg -q "capture cache fresh frame request escalating .*reason=post-capture prewarm"; then
+  echo "Selection output regression: post-capture prewarm performed an aggressive stream restart." >&2
   exit 1
 fi
 
 if ! echo "$logs" | rg -q "capture crop complete width=[0-9]+ height=[0-9]+"; then
   echo "Selection output regression: crop completion was not observed." >&2
+  exit 1
+fi
+
+if ! echo "$logs" | rg -q "capture clipboard copied width=[0-9]+ height=[0-9]+"; then
+  echo "Selection output regression: clipboard copy was not observed." >&2
+  exit 1
+fi
+
+if ! echo "$logs" | rg -q "capture delivery outcome=completed"; then
+  echo "Selection output regression: completed image delivery outcome was not observed." >&2
+  exit 1
+fi
+
+if ! echo "$logs" | rg -q "capture end outcome=completed"; then
+  echo "Selection output regression: completed capture session end was not observed." >&2
   exit 1
 fi
 
@@ -239,9 +285,14 @@ if ! echo "$logs" | rg -q "overlay cursor restored"; then
 fi
 
 overlay_ms="$(echo "$logs" | sed -n 's/.*capture overlay ready ms=\([0-9.]*\).*/\1/p' | tail -1)"
+frame_age_ms="$(echo "$logs" | sed -n 's/.*capture cache frame accepted display=.* ageMs=\([0-9.]*\).*/\1/p' | tail -1)"
+rect_snapshot="no"
+if echo "$logs" | rg -q "capture cache rect snapshot"; then
+  rect_snapshot="yes"
+fi
 if ! awk -v ms="$overlay_ms" -v max="$MAX_OVERLAY_MS" 'BEGIN { exit !(ms <= max) }'; then
   echo "Selection output regression: overlay ready took ${overlay_ms}ms, max ${MAX_OVERLAY_MS}ms." >&2
   exit 1
 fi
 
-echo "Capture selection output verification passed: overlay=${overlay_ms}ms pid=$pid"
+echo "Capture selection output verification passed: overlay=${overlay_ms}ms frameAge=${frame_age_ms:-n/a}ms rectSnapshot=${rect_snapshot} pid=$pid"

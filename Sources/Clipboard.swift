@@ -1,4 +1,6 @@
 import AppKit
+import ImageIO
+import UniformTypeIdentifiers
 
 /// Кладёт изображение в буфер обмена максимально совместимо.
 ///
@@ -13,21 +15,24 @@ import AppKit
 /// Нельзя в одной транзакции мешать writeObjects([...]) и setData(...)/setString(...) — это
 /// портит содержимое буфера; поэтому всё через declareTypes + setData/setString.
 enum Clipboard {
+    struct PreparedImage {
+        let png: Data?
+        let tiff: Data?
+        let fileURLString: String?
 
-    static func pngData(cgImage: CGImage) -> Data? {
-        NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:])
+        var isEmpty: Bool {
+            png == nil && tiff == nil && fileURLString == nil
+        }
     }
 
-    static func copy(cgImage: CGImage) {
-        let nsImage = NSImage(cgImage: cgImage,
-                              size: NSSize(width: cgImage.width, height: cgImage.height))
-        let pb = NSPasteboard.general
-        pb.clearContents()
+    static func pngData(cgImage: CGImage) -> Data? {
+        imageData(cgImage: cgImage, type: .png)
+    }
 
+    static func prepareImage(cgImage: CGImage) -> PreparedImage {
         let png = pngData(cgImage: cgImage)
-        let tiff = nsImage.tiffRepresentation
+        let tiff = imageData(cgImage: cgImage, type: .tiff)
 
-        // Временный файл под fileURL (путь для терминалов).
         var fileURLString: String?
         if let png {
             let url = FileManager.default.temporaryDirectory
@@ -35,42 +40,92 @@ enum Clipboard {
             if (try? png.write(to: url)) != nil { fileURLString = url.absoluteString }
         }
 
-        // Порядок: сначала image-типы (картиночные приложения берут их), fileURL последним
-        // (терминалы и файловые приложения берут путь).
-        var types: [NSPasteboard.PasteboardType] = [.png, .tiff]
-        if fileURLString != nil { types.append(.fileURL) }
-        pb.declareTypes(types, owner: nil)
-
-        if let png  { pb.setData(png,  forType: .png) }
-        if let tiff { pb.setData(tiff, forType: .tiff) }
-        if let fileURLString { pb.setString(fileURLString, forType: .fileURL) }
+        return PreparedImage(png: png, tiff: tiff, fileURLString: fileURLString)
     }
 
-    static func copyAll(cgImages: [CGImage]) {
-        guard !cgImages.isEmpty else { return }
-        if cgImages.count == 1 {
-            copy(cgImage: cgImages[0])
+    static func copy(preparedImage prepared: PreparedImage) {
+        let pb = NSPasteboard.general
+        let types = pasteboardTypes(for: prepared)
+        guard !types.isEmpty else { return }
+        pb.declareTypes(types, owner: nil)
+
+        if let png = prepared.png { pb.setData(png, forType: .png) }
+        if let tiff = prepared.tiff { pb.setData(tiff, forType: .tiff) }
+        if let fileURLString = prepared.fileURLString { pb.setString(fileURLString, forType: .fileURL) }
+    }
+
+    static func prepareImages(cgImages: [CGImage]) -> [PreparedImage] {
+        cgImages.map { prepareImage(cgImage: $0) }.filter { !$0.isEmpty }
+    }
+
+    static func prepareImage(cgImage: CGImage,
+                             qos: DispatchQoS.QoSClass = .userInitiated,
+                             completion: @escaping (PreparedImage) -> Void) {
+        DispatchQueue.global(qos: qos).async {
+            let prepared = prepareImage(cgImage: cgImage)
+            DispatchQueue.main.async {
+                completion(prepared)
+            }
+        }
+    }
+
+    static func prepareImages(cgImages: [CGImage],
+                              qos: DispatchQoS.QoSClass = .userInitiated,
+                              completion: @escaping ([PreparedImage]) -> Void) {
+        DispatchQueue.global(qos: qos).async {
+            let prepared = prepareImages(cgImages: cgImages)
+            DispatchQueue.main.async {
+                completion(prepared)
+            }
+        }
+    }
+
+    static func copy(preparedImages: [PreparedImage]) {
+        let preparedImages = preparedImages.filter { !$0.isEmpty }
+        guard !preparedImages.isEmpty else { return }
+        if preparedImages.count == 1 {
+            copy(preparedImage: preparedImages[0])
             return
         }
 
-        let items = cgImages.compactMap { image -> NSPasteboardItem? in
-            let nsImage = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
-            let item = NSPasteboardItem()
-            guard let png = pngData(cgImage: image) else { return nil }
-            item.setData(png, forType: .png)
-            if let tiff = nsImage.tiffRepresentation { item.setData(tiff, forType: .tiff) }
-
-            let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("QuickShot-\(UUID().uuidString.prefix(8)).png")
-            if (try? png.write(to: url)) != nil {
-                item.setString(url.absoluteString, forType: .fileURL)
-            }
-            return item
-        }
+        let items = preparedImages.compactMap { pasteboardItem(preparedImage: $0) }
         guard !items.isEmpty else { return }
 
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.writeObjects(items)
+    }
+
+    static func pasteboardItem(preparedImage prepared: PreparedImage) -> NSPasteboardItem? {
+        let types = pasteboardTypes(for: prepared)
+        guard !types.isEmpty else { return nil }
+        let item = NSPasteboardItem()
+        if let png = prepared.png { item.setData(png, forType: .png) }
+        if let tiff = prepared.tiff { item.setData(tiff, forType: .tiff) }
+        if let fileURLString = prepared.fileURLString { item.setString(fileURLString, forType: .fileURL) }
+        return item
+    }
+
+    private static func imageData(cgImage: CGImage, type: UTType) -> Data? {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data as CFMutableData,
+                                                                 type.identifier as CFString,
+                                                                 1,
+                                                                 nil) else {
+            return nil
+        }
+        CGImageDestinationAddImage(destination, cgImage, nil)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return data as Data
+    }
+
+    private static func pasteboardTypes(for prepared: PreparedImage) -> [NSPasteboard.PasteboardType] {
+        // Порядок: сначала image-типы (картиночные приложения берут их), fileURL последним
+        // (терминалы и файловые приложения берут путь).
+        var types: [NSPasteboard.PasteboardType] = []
+        if prepared.png != nil { types.append(.png) }
+        if prepared.tiff != nil { types.append(.tiff) }
+        if prepared.fileURLString != nil { types.append(.fileURL) }
+        return types
     }
 }

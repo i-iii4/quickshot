@@ -4,6 +4,660 @@
 
 ---
 
+## 04.07.2026 — active capture больше не принимает pre-request pixels
+
+Закрыт путь, где повторный снимок мог получить старое состояние экрана: `ScreenFrameCache` принимал
+cached frame как `responsive` или `validated`, даже если pixel buffer был создан до нового capture
+request. Это было быстрым компромиссом для статичного desktop, но нарушало главный UX-контракт:
+пользователь просит снимок текущего состояния, а не ближайшего старого кадра.
+
+Теперь active capture принимает live stream frame только при `updatedAt >= requestedAt`, а prepared
+frozen image тоже может быть использован только если создан после текущего request. `validatedAt`
+остаётся только сигналом maintenance/stream-health; он больше не является основанием показывать
+pre-request pixels. Логи accepted frame теперь допускают только `source=post-request`, а shell
+verifier'ы падают при `source=responsive` или `source=validated`.
+
+`ScreenFrameCacheBehaviorTests`, `CaptureHotPathStaticTests` и `scripts/test.sh` обновлены под новый
+инвариант: даже кадр на миллисекунды старше request должен быть отвергнут и отправлен в fresh
+stream/snapshot recovery, а не стать frozen backdrop.
+
+---
+
+## 04.07.2026 — crop ушёл с main mouse-up path
+
+Повторный снимок после completed capture мог визуально задерживать выделенную рамку после `mouseUp`:
+`completeSelection` уже вызывал `overlay.dismiss()` до delivery, но затем сразу же делал
+`FrozenScreen.crop(globalSelection:)` на MainActor в том же mouse-up turn. Если `CGImage.cropping`
+занимал заметное время, WindowServer не получал шанс убрать overlay до возврата run loop, и для
+пользователя это выглядело как задержка завершения выделения.
+
+Теперь `completeSelection` только валидирует selection, dismiss'ит overlay, восстанавливает окна,
+логирует `capture end outcome=completed` и планирует `scheduleCropAndDelivery`. Сам crop выполняется
+на background `DispatchQueue.global(qos: .userInitiated)`, а на main queue возвращаются только лог
+`capture crop complete` и handoff в thumbnail/clipboard path. Через background boundary передаётся
+display id, а не `NSScreen`, чтобы не тащить non-Sendable AppKit объект в background closure.
+
+`CaptureHotPathStaticTests` и `scripts/test.sh` теперь запрещают `.crop(globalSelection:)` внутри
+`completeSelection`, требуют background crop queue, лог `capture crop failed` для async-ошибки и
+повторное разрешение target screen на main queue перед delivery.
+
+Дополнительно выровнен реальный task priority с логическим `RefreshPriority`: active capture
+recovery остаётся `.userInitiated`, а maintenance и post-capture `idle` refresh запускаются как
+`.utility`. До этого `allowsStreamRestart: false` защищал от destructive stream restart, но сама
+idle-задача всё равно стартовала с userInitiated priority и могла конкурировать с background crop
+или доставкой только что сделанного снимка.
+
+---
+
+## 04.07.2026 — rect snapshot recovery получил hot-path budget и cooldown
+
+Probe нижнего слоя показал системный отказ: `CGPreflightScreenCaptureAccess()` возвращал `true`, но
+все варианты `SCShareableContent` отдавали пустой `displays`, `SCScreenshotManager` падал
+`SCStreamErrorDomain -3811`, а `/usr/sbin/screencapture -x -R ...` тоже не мог создать rect image.
+При такой внешней поломке QuickShot не должен на каждом повторном capture платить старый
+2-секундный `rectSnapshotTimeoutNanoseconds` после `mouseUp`.
+
+`rectSnapshotTimeoutNanoseconds` ужат до короткого active-path бюджета, а `ScreenFrameCache` теперь
+помнит recent rect-snapshot failure через `recentRectSnapshotFailure`. Пока действует
+`rectSnapshotFailureCooldown`, повторный `rectSnapshotFrozenScreen` логирует
+`capture cache rect snapshot skipped` и сразу возвращает `nil`, переводя сессию в typed
+`captureStackUnavailable`, вместо повторного зависания на системном screenshot API. Успешный
+shareable-content display listing или успешный rect snapshot очищает failure state.
+
+Отдельно добавлен `recentShareableDisplayFailure`: пустой `SCShareableContent.displays` тоже
+становится health-состоянием, а не просто строкой в логах. Пока действует
+`shareableDisplayFailureCooldown`, active capture логирует `capture cache shareable content skipped`
+и не прогоняет заново весь retry-chain `SCShareableContent` после уже доказанного no-displays state.
+Успешный display listing очищает этот failure отдельно от rect-snapshot health.
+
+Чтобы первый пользовательский жест не был первым местом, где мы обнаруживаем отказ fallback, пустой
+`SCShareableContent.displays` теперь запускает background health probe: tiny 16x16
+`captureScreenshot(rect:)` через `scheduleRectSnapshotProbe`. Probe owner-scoped через
+`rectSnapshotProbeInFlight`, логирует `capture cache rect snapshot probe failed` и записывает тот же
+cooldown state, который потом пропускает active-path rect snapshot.
+
+Если active capture приходит пока health probe ещё выполняется, `rectSnapshotFrozenScreen` проходит
+через async `shouldAttemptRectSnapshotRecovery`: он коротко joins probe (`rectSnapshotProbeJoinNanoseconds`),
+но не запускает второй `SCScreenshotManager` fallback параллельно. Если probe не успел завершиться,
+active path логирует `previousFailure=probe-in-flight` и уходит в typed failure вместо новой
+многосекундной задержки.
+
+В `CaptureSession` старый безымянный `6_000_000_000` заменён на named
+`frozenFrameWaitNanoseconds`, чтобы frozen wait был явным direct-manipulation budget, а не скрытой
+многосекундной парковкой.
+
+Ещё одна граница стала typed: `ScreenFrameCache.start` больше не возвращает голый `Bool`.
+`StartResult.unavailableReason` принадлежит cache layer и передаётся в rect snapshot recovery и
+`CaptureError.captureStackUnavailable`. `CaptureSession` больше не собирает reason из догадки
+`shareable content unavailable...`, когда cache уже знает точную причину.
+
+Regression coverage:
+`ScreenFrameCacheBehaviorTests` проверяет короткий rect-snapshot timeout и cooldown semantics.
+`CaptureHotPathStaticTests` и `scripts/test.sh` запрещают возвращать старые multi-second constants
+для active frozen wait / rect snapshot recovery, требуют `shouldAttemptRectSnapshotRecovery` и
+background probe при пустом display listing, запрещают дублировать fallback, пока probe уже
+in flight, требуют `StartResult` вместо bare `Bool` на cache startup boundary и защищают
+`recentShareableDisplayFailure` как отдельный cooldown для repeated display-list failures.
+
+---
+
+## 04.07.2026 — pending/registered stream больше не считается usable cache
+
+`ScreenFrameCache.start()` раньше возвращал success, если нужный display был в `startingDisplays`,
+или если `CachedDisplayStream` уже лежал в `streams`, но `startCapture()` ещё не завершился. В узком
+окне между началом prewarm/startup, регистрацией stream и реальной готовностью active capture мог
+решить, что cache usable, а затем ждать fresh frozen frame до длинного frozen-frame deadline. Это
+снова создавало риск задержки, только уже не в UI path, а в cache-ownership semantics.
+
+Теперь `hasUsableCache` учитывает только real frame, prepared image или stream, явно отмеченный в
+`startedDisplays` после успешного `startCapture()`. Pending startup отделён в `hasPendingStartup` и
+`waitForUsableCacheOrFinishedStartup`: если другой startup уже идёт, active capture ждёт только
+короткое bounded окно готовности stream. Если source за это окно не стал usable, путь возвращает
+`false`, и `CaptureSession` переходит в cache-owned rect snapshot recovery / typed failure вместо
+ожидания полного frozen-frame timeout на чужом startup.
+
+Regression coverage:
+`CaptureHotPathStaticTests` и `scripts/test.sh` запрещают считать `startingDisplays` или raw
+`streams[id]` usable cache, требуют `startedDisplays`/`markStreamStarted` ownership gate и bounded
+pending-startup wait plus log line
+`capture cache pending startup did not become ready before short wait`.
+
+---
+
+## 04.07.2026 — startup prewarm стал owned lifecycle task
+
+`CaptureController.prewarmCapturePipeline()` раньше запускал startup-prewarm как detached work без
+явного owner'а. `ScreenFrameCache.shutdown()` уже защищал cache от позднего stream recreation через
+`isShuttingDown`, но сам controller всё ещё мог получить поздний permission-state update от старого
+prewarm после shutdown или после нового prewarm-запуска.
+
+Теперь `CaptureController` хранит `prewarmTask` и `prewarmID`. Новый prewarm сначала отменяет старый,
+shutdown отменяет owned prewarm, очищает task и инвалидирует id, а completion обновляет
+`hasScreenCaptureAccess` только если id всё ещё актуален. Так startup prewarm стал частью того же
+явного lifecycle, что active `CaptureSession` и `ScreenFrameCache`.
+
+Regression coverage:
+`CaptureHotPathStaticTests` и `scripts/test.sh` требуют owned `prewarmTask`, `prewarmID`,
+cancel-before-new-prewarm, stale-completion guard и cancellation в `CaptureController.shutdown()`.
+
+---
+
+## 04.07.2026 — delivery после mouse-up вынесен из жеста
+
+Новый вариант задержки проявился уже после готового выделения: на повторном снимке пользователь
+отпускал мышь, мог двигать курсором, но выделенный rect визуально оставался ещё 2-3 секунды. Даже
+если `overlay?.dismiss()` вызван в коде, AppKit не успевает реально убрать fullscreen window с
+экрана, пока тот же main-thread turn занят синхронным PNG/TIFF-кодированием, записью временного
+fileURL payload и раскладкой screenshot-card UI.
+
+`CaptureSession.completeSelection` теперь после crop сразу завершает session: dismiss overlay,
+restore hidden windows, `capture end outcome=completed`, post-capture prewarm. Image handoff
+запускается только после `Task.yield()` на MainActor, чтобы compositor получил шанс убрать overlay.
+`CaptureController.deliverCapturedImage` добавляет thumbnail отдельно, а clipboard payload готовит
+через централизованный `Clipboard.prepareImage(... completion:)`: ImageIO-кодирование и запись
+временного fileURL уходят на global queue, а на main возвращается только уже подготовленный
+PNG/TIFF/fileURL payload для публикации в `NSPasteboard`.
+
+Следом тот же payload contract распространён на остальные входы: thumbnail copy, `Copy all`,
+pinned-window copy и drag-out. `Clipboard.PreparedImage` стал единой структурой для PNG/TIFF/fileURL,
+`Clipboard.pasteboardItem(preparedImage:)` — единым builder'ом для drag/multi-copy, а карточки и
+pinned windows заранее прогревают payload в background task. Production controls больше не вызывают
+`NSBitmapImageRep(cgImage:)`, `tiffRepresentation` или `Clipboard.copy(cgImage:)` прямо из click/drag
+handlers; fallback-подготовка, если cached payload ещё не готов, идёт через централизованный
+`Clipboard.prepareImage(... completion:)`, который кодирует payload на global queue и возвращается на
+main только для публикации в pasteboard/feedback.
+Сами synchronous convenience API `Clipboard.copy(cgImage:)` и `Clipboard.copyAll(cgImages:)` удалены,
+чтобы future call sites не могли снова обойти prepared-payload boundary.
+
+Regression coverage:
+`CaptureHotPathStaticTests` требует, чтобы completed capture dismiss'ил overlay и вызывал `end()` до
+image handoff, запрещает синхронный `onImage(cropped, screen)` в `completeSelection`, и проверяет,
+что capture delivery использует centralized async `Clipboard.prepareImage`, а `capture clipboard
+copied` логируется только после `Clipboard.copy(preparedImage:)`. Дополнительно тест и
+`scripts/test.sh` запрещают direct AppKit PNG/TIFF encoding и synchronous `Clipboard.copy(cgImage:)`
+в thumbnail/pinned production paths, а также возвращение synchronous image-copy convenience API в
+сам `Clipboard`.
+
+---
+
+## 04.07.2026 — legacy RegionCapturer удалён из production architecture
+
+После переноса production capture на `ScreenFrameCache` в дереве оставался старый `RegionCapturer`
+с отдельным `captureFull` через `SCScreenshotManager`. Он уже не вызывался, но сохранял второй
+концептуальный capture path рядом с текущей архитектурой и мог вернуть будущий обход freshness,
+typed-failure и timeout policies.
+
+Общие типы вынесены в `CaptureTypes.swift`: `CaptureError` и `FrozenScreen.crop`. Legacy
+`RegionCapturer.swift` удалён. `scripts/test.sh` и `CaptureHotPathStaticTests` теперь явно запрещают
+возврат `RegionCapturer`/`captureFull` в `Sources`.
+
+После удаления legacy path из `CaptureError` также убраны старые `exclusionUnavailable` и untyped
+`failed(Error)`: они относились к `RegionCapturer`-era exclusion/screenshot wrapper и больше не
+представляют текущую production architecture. Контракт post-capture preparation также уточнён:
+idle prepare остаётся stream-only и не имеет права готовить snapshot/prepared-image work.
+
+Ещё одна наружная failure boundary переведена с generic cache timeout на
+`captureStackUnavailable`: если active stream wait истёк без fresh frozen frame, пользовательский
+outcome теперь получает reason `fresh stream frame unavailable before timeout`. Внутри
+`ScreenFrameCache` остались только private `RectSnapshotTimeout`/`SnapshotTimeout`, а общий
+`CaptureError` больше не содержит internal cache timeout case.
+
+Интерактивные verifier-скрипты теперь тоже защищены архитектурной границей: `verify-capture-runtime`,
+`verify-capture-selection-output` и `verify-capture-cold-start` отказываются постить synthetic
+hotkey/mouse events без `QUICKSHOT_ALLOW_SYNTHETIC_INPUT=1`. `verify-capture-observed` и
+`probe-screen-capture-stack` остаются log/probe-only и `scripts/test.sh` запрещает добавлять в них
+`CGEvent`/`cghidEventTap`.
+
+---
+
+## 04.07.2026 — mouse-up больше не держит overlay на повторном capture
+
+Новый симптом был уже не в появлении overlay: первый снимок после запуска был мгновенным, но после
+реально сделанного снимка следующий `mouseUp` оставлял выделенный прямоугольник висеть на экране ещё
+2-3 секунды. По коду это происходило в `selectionCompleted`: если frozen frame ещё не готов,
+selection сохранялся в `pendingSelection`, но overlay оставался видимым до `freezeCompleted`.
+
+Поведение разделено на две части. Завершённый пользовательский жест теперь закрывает overlay сразу:
+`selectionCompleted` записывает `pendingSelection`, логирует
+`capture pending selection awaiting frozen frame` и dismiss'ит overlay. Сессия при этом не
+заканчивается: QuickShot-окна остаются скрытыми, frozen frame догоняет в фоне, и crop выполняется
+по тому же frozen image, когда он готов. Так требование freeze-screen сохраняется, но пользователь не
+смотрит на застывший selection после отпускания мыши.
+
+Вторая причина задержки была в post-capture архитектуре. После успешного снимка idle-path запускал
+speculative `SCScreenshotManager.captureImage` через joinable prepared task. На следующем capture
+эта работа могла конкурировать со stream recovery и превращаться в ровно ту 2-3-секундную паузу.
+Post-capture prepare теперь stream-only: он только мягко просит/валидирует live `SCStream` frame
+(`allowsStreamRestart: false`) и больше не создаёт `preparedFrozenScreenTask`. Capture-time snapshot
+fallback остался как recovery, но стартует только после stream-validation grace
+(`streamSnapshotDelayNanoseconds` > `refreshEscalationDelayNanoseconds`), чтобы обычный stream успел
+закрыть статичный desktop без дорогого screenshot API.
+
+Regression coverage:
+`CaptureHotPathStaticTests` проверяет immediate dismiss pending selection, запрет joinable
+post-capture snapshot tasks и stream-only prepare. `ScreenFrameCacheBehaviorTests` проверяет, что
+snapshot fallback ждёт stream validation grace. Stream-owned `SCScreenshotManager.captureImage`
+fallback также получил свой timeout, чтобы поздняя fallback-задача не оставалась подвешенной за
+пределами active capture. `scripts/test.sh` дублирует эти gates.
+
+---
+
+## 04.07.2026 — system capture-stack failure больше не маскируется под noDisplay
+
+Диагностический probe показал отдельный нижний отказ macOS: `CGPreflightScreenCaptureAccess()`
+возвращал `true`, `SCShareableContent` отдавал windows/apps, но `displays` были пустыми; при этом
+`SCScreenshotManager.captureScreenshot(rect:)` падал `SCStreamErrorDomain -3811`, а системный
+`/usr/sbin/screencapture` тоже не мог создать rect image. Это не сценарий “нет монитора” и не
+ошибка UI QuickShot.
+
+Добавлен typed `CaptureError.captureStackUnavailable(String)`. Если shareable-content recovery не
+даёт usable cache и cache-owned rect snapshot тоже не сработал, `CaptureSession` завершает путь через
+`captureStackUnavailable` с cache-owned reason plus `rect snapshot failed`. `CaptureController`
+логирует `capture stack unavailable` и показывает одно немодальное уведомление, защищённое
+`didNotifyCaptureStackFailure`, через `NSApp.requestUserAttention(.informationalRequest)` вместо
+молчаливого `NSLog` или повторяющегося modal alert.
+
+Regression coverage:
+`CaptureHotPathStaticTests` и `scripts/test.sh` требуют typed failure, explicit reason и nonmodal
+one-shot notice для системного capture-stack отказа.
+
+---
+
+## 04.07.2026 — quick repeat capture больше не ждёт slow prepared task на mouse-up
+
+По live unified log пользовательского сценария стало видно: первый capture после запуска завершался
+быстро (`capture frozen ready` около 20ms), а следующие быстрые снимки входили в overlay за 2-10ms,
+но после отпускания мыши висели в locked selection до `capture frozen ready`. Причина была не UI, а
+freshness policy/cache wait:
+
+- live `SCStream` frame возрастом 1.6-5.9s отвергался как `old frame rejected`, хотя stream был живой
+  и мог не эмитить новый sample на статичном desktop;
+- `waitForFrozenScreen` добавлял child-task с `await preparedTask.value`, поэтому даже если fresh
+  stream frame приходил раньше, выход из `withTaskGroup` мог ждать медленный `SCScreenshotManager`.
+
+Модель разделена. Live stream frame теперь хранит два времени: `updatedAt` для реального sample
+buffer и `validatedAt` для успешного ответа stream на fresh-frame request после короткого
+grace-window без нового sample. Capture может принять frame как `post-request`, `responsive` или
+`validated`; это закрывает статичный desktop, где stream живой, но новый sample не приходит.
+Но validation не может бесконечно продлевать один старый pixel buffer: `validatedFrameMaxPixelAge`
+задаёт жёсткий ceiling для самих пикселей, после которого cache уходит в fresh/restart path. Suspect
+frames за пределами validation/pixel-age window по-прежнему rejected/refresh. Prepared one-shot image
+остаётся строгой: `immediatePreparedFrameAge = 0.20s`, так как у неё нет live-stream semantics.
+
+Acceptance стал диагностируемым: `capture cache frame accepted` теперь пишет `source=post-request`,
+`source=responsive` или `source=validated`, плюс `requestDeltaMs` и `validationDeltaMs`. Observed
+verifier падает, если source исчез, если responsive frame вышел за свой max window или если validated
+frame имеет слишком старую validation age или pixel age.
+
+Чтобы этот responsive window не стал новой ловушкой, age maintenance теперь опережает его: примерно
+перед истечением окна cache мягко просит fresh frame у live stream (`allowsStreamRestart: false`).
+Destructive background restart отделён в `streamRestartAge` и применяется только к намного более
+старому suspect stream. Так следующий capture не должен первым платить stale-stream recovery после
+короткого idle, но QuickShot всё ещё не рестартит stream каждые несколько секунд.
+
+Stream startup тоже стал наблюдаемым и bounded: перед `SCStream.startCapture()` логируется
+`capture cache stream starting`, а сам start имеет deadline. Если ScreenCaptureKit зависнет между
+`shareable content ready` и `stream started`, cache не остаётся молча в полуживом состоянии.
+Ещё один live-log кейс: `SCShareableContent` может вернуть пустой `displays` при успешном permission
+preflight. `loadShareableContent()` теперь предпочитает broad app listing для QuickShot exclusion, но
+если displays пустой, явно ретраит on-screen listing, desktop-excluded listing и затем
+`SCShareableContent.current`, логируя каждый fallback.
+`ScreenFrameCache.start` теперь возвращает `Bool`: если после recovery-chain нет usable cache,
+`CaptureSession` сначала пробует cache-owned rect snapshot recovery через
+`SCScreenshotManager.captureScreenshot(rect:)`. Этот путь остаётся внутри `ScreenFrameCache`, а не
+возвращается в `CaptureController`; все окна QuickShot получают `NSWindow.sharingType = .none`, чтобы
+emergency snapshot не запекал overlay/hub/card UI. Если rect snapshot тоже не получился,
+`CaptureSession` логирует `capture cache unavailable at start` и завершает сессию сразу, а не ждёт
+полный frozen timeout.
+Добавлен `scripts/probe-screen-capture-stack.sh`: он без overlay проверяет TCC preflight,
+`SCShareableContent` variants, `SCScreenshotManager` rect APIs и системный `/usr/sbin/screencapture`.
+Текущий probe показал: `preflight=true`, windows/apps есть, но `displays` пустой, rect screenshot
+падает `SCStreamErrorDomain -3811`, а `screencapture` пишет `could not create image from rect`.
+
+`waitForFrozenScreen` больше не ждёт `preparedTask.value`. Он polling'ом принимает fresh stream frame
+или уже сохранённый prepared image, а если prepared task всё ещё slow после короткого grace window,
+запускает `startSnapshotFallback` в detached task. Slow fallback может помочь, но не имеет права
+удерживать mouse-up, если stream frame уже пришёл.
+
+Regression coverage:
+`ScreenFrameCacheBehaviorTests` проверяет responsive stream window отдельно от strict prepared window.
+`CaptureHotPathStaticTests` и `scripts/test.sh` запрещают возвращать blocking
+`await preparedTask.value` в frozen wait и требуют soft maintenance refresh до destructive restart.
+
+---
+
+## 04.07.2026 — cleanup refresh/prewarm переведён на guaranteed path
+
+После сообщения о залипшем fullscreen screenshot проверили lifecycle overlay и cache-refresh путей.
+`OverlayController.dismiss()` уже закрывает окна жёстко (`orderOut`, detach `contentView`, `close`) и
+вызывается из `deinit`; старый PID при этом не имел capture-событий в unified log, только стартовый
+prewarm.
+
+Убрали другой источник хрупкости: `prepareForNextCapture`, `requestFreshFrame` и maintenance refresh
+теперь чистят свои owner/task states через `defer`, а не через набор ручных `return`-веток. Это не даёт
+post-capture подготовке или refresh owner остаться подвешенными после раннего завершения, supersede или
+soft-refresh выхода.
+
+Добавили explicit shutdown chain: `applicationWillTerminate` вызывает `CaptureController.shutdown()`,
+активная `CaptureSession` dismiss'ит overlay и завершает `end(prepareNext: false)`, а
+`ScreenFrameCache.shutdown()` отменяет prepared tasks, очищает streams/owners/startup flags и ставит
+terminal `isShuttingDown` gate. Поздно вернувшийся async `start`/refresh теперь не может заново
+создать stream после shutdown.
+
+Regression coverage:
+`CaptureHotPathStaticTests` и `scripts/test.sh` требуют guaranteed cleanup для post-capture prepared
+task, refresh owner и explicit shutdown path.
+
+---
+
+## 04.07.2026 — post-capture prewarm больше не рестартит stream немедленно
+
+По unified log ручного completed capture стало видно, что post-capture prewarm делал aggressive
+`requestFreshFrame`: через 250ms без нового stream frame он начинал restart display stream, пока
+stream-owned snapshot ещё готовил prepared image. Это создавало ненужный gap в cache прямо после
+снимка: prepared image могла уже истечь, а новый stream ещё не успеть отдать first frame.
+
+Политики разделены. Capture-time stale-frame recovery остаётся aggressive
+(`allowsStreamRestart: true`), потому что overlay уже активен и нам нужно спасать свежий кадр.
+Post-capture idle prewarm стал soft (`allowsStreamRestart: false`): он просит fresh frame, запускает
+prepared snapshot bridge, но не разбирает текущий stream немедленным teardown/restart. Более тяжёлые
+stream restarts остаются для активного recovery или дальнейшей maintenance, а не для первых
+миллисекунд после завершения снимка.
+
+Regression coverage:
+`CaptureHotPathStaticTests` и `scripts/test.sh` проверяют, что `prepareForNextCapture` вызывает
+soft refresh, а capture-time stale recovery всё ещё может эскалировать. Runtime/observed verifier
+скрипты теперь отдельно падают, если в логах появляется
+`capture cache fresh frame request escalating ... reason=post-capture prewarm`.
+
+Дополнительно refresh коалесинг стал owner/prioritized. Раньше один `refreshInFlight` на display мог
+заставить active capture recovery молча не стартовать, если idle post-capture refresh ещё держал
+флаг. Теперь `RefreshPriority.capture` supersede'ит idle/maintenance owner, а `endRefresh` снимает
+флаг только если task всё ещё владеет тем же `refreshID`. Это защищает быстрый повторный снимок от
+случая, где idle prewarm сам становится причиной ожидания.
+
+---
+
+## 04.07.2026 — prepared image acceptance ужата до immediate window
+
+Разделили два разных понятия, которые раньше были смешаны: retention prepared image в памяти и право
+использовать её как источник нового screenshot. Prepared image может храниться дольше для cleanup и
+join in-flight подготовки, но если она была сделана до нового capture request, она теперь принимается
+только внутри того же very-short immediate-cache window, что и обычный stream frame. Если prepared
+task завершилась до текущего запроса и уже вышла за этот window, `waitForFrozenScreen` логирует
+`capture cache prepared task rejected` и идёт в sequential fresh fallback.
+
+Это снижает риск повторить старый регресс со «старой картинкой»: post-capture prewarm остаётся
+latency bridge, но не получает отдельный 1.25s stale allowance. Prepared image, произведённая после
+текущего request, по-прежнему принимается сразу.
+
+Regression coverage:
+`ScreenFrameCacheBehaviorTests` теперь отдельно проверяет post-request prepared accept и rejection
+pre-request prepared image вне immediate window. `CaptureHotPathStaticTests` проверяет, что
+in-flight prepared task валидируется через `shouldServePreparedFrozenScreen(updatedAt:requestedAt:)`
+перед accepted.
+
+---
+
+## 04.07.2026 — strict observed verification для completed capture
+
+Усилена non-invasive проверка ручного снимка. Production path теперь логирует
+`capture clipboard copied` сразу после `Clipboard.copy(cgImage:)`, без содержимого экрана и без
+пиксельных данных. Это даёт log-only verifier-у доказуемый факт, что crop дошёл до буфера обмена.
+
+`verify-capture-observed.sh` получил режим `REQUIRE_COMPLETED_SELECTION=1`: после ручного снимка он
+ничего не нажимает и только читает unified log, но требует весь завершённый путь — `capture frozen
+ready`, `capture crop complete`, `capture clipboard copied`, `overlay dismiss`, `overlay cursor
+restored`, `capture end outcome=completed` и `capture cache post-capture prepare`.
+
+`CaptureSession` теперь ведёт явный `endOutcome`: completed, cancelled, failed,
+ignored-small-selection, missing-frozen-frame или crop-failed. Это важно для log-only verification:
+cancel/no-op session больше не может выглядеть как успешный completed capture только потому, что
+у неё был общий `capture end`.
+
+Regression coverage:
+`CaptureHotPathStaticTests` проверяет, что clipboard-copy лог стоит после `Clipboard.copy`, а
+`scripts/test.sh` фиксирует presence строгого observed режима, explicit end outcome и summary
+`completedSelection`.
+
+---
+
+## 04.07.2026 — display-scoped stream startup и expiry prepared image
+
+Убрали ещё один источник случайных задержек: `ScreenFrameCache` больше не использует один глобальный
+`startInFlight` для всех мониторов. Startup/restart stream теперь коалесится по display через
+`startingDisplays`, поэтому recovery одного экрана не может молча заблокировать старт другого экрана
+и оставить следующий capture ждать fallback.
+
+Prepared frozen image также получила явный lifecycle: после post-capture подготовки она удаляется
+после короткого bridge window. Это закрепляет продуктовый контракт: prepared image ускоряет быстрый
+повторный снимок, но не становится ещё одним долгоживущим источником старого скриншота.
+
+Regression coverage:
+`CaptureHotPathStaticTests` запрещает возврат глобального `startInFlight` и проверяет display-scoped
+startup gate. `ScreenFrameCacheBehaviorTests` проверяет expiry prepared image, а `scripts/test.sh`
+дублирует эти инварианты shell-gates.
+
+---
+
+## 04.07.2026 — post-capture prewarm для следующего снимка
+
+Разобрали оставшуюся задержку после реально сделанного скриншота: overlay входил за миллисекунды,
+но следующий capture иногда платил 1-3 секунды за stale-frame recovery. Причина была в том, что
+строгая защита от старого кадра (`old frame rejected`) запускала fresh-frame request и stream-owned
+snapshot уже на следующем пользовательском жесте.
+
+Архитектура изменена на idle-first: `CaptureSession.end()` теперь после освобождения сессии вызывает
+`ScreenFrameCache.prepareForNextCapture(display:)`. Этот путь фоном просит свежий frame у существующего
+`SCStream`, а если поток не отдаёт кадр быстро, заранее готовит `PreparedFrozenScreen` через уже
+созданный stream/filter. Следующий capture может использовать prepared image только в коротком окне
+свежести; он не становится новым долгоживущим fallback и не отменяет запрет на старые кадры.
+
+Подготовка теперь tracked/joinable: если следующий capture приходит до завершения post-capture
+snapshot, `waitForFrozenScreen` ждёт уже запущенную `preparedFrozenScreenTask`, а не создаёт
+параллельный recovery. Это закрывает быстрый повторный сценарий сразу после сделанного скриншота,
+где idle-подготовка ещё не успела записать готовый prepared image.
+
+Два edge-case инварианта добавлены сразу: non-dropping stream restart (`dropFrame: false`) не отменяет
+in-flight prepared task, а prepared snapshot не записывается, если `SCStream` уже успел отдать fresh
+frame для того же post-capture request. Так prepared image остаётся latency bridge, а не гонкой с
+более свежим stream frame.
+
+Duplicate prepare также дедуплицируется до refresh work: `prepareForNextCapture` сначала регистрирует
+joinable task, и только потом вызывает `requestFreshFrame`. Если подготовка уже идёт, новый вызов
+логируется как `post-capture prepare already running` и не запускает второй stream refresh.
+
+В `waitForFrozenScreen` join теперь настоящий: если есть `preparedFrozenScreenTask`, capture-time
+snapshot fallback не добавляется параллельно. Следующий capture ждёт in-flight post-capture подготовку
+и обычный stream polling, не создавая вторую дорогую `SCScreenshotManager` работу на том же display.
+Если joined prepared task завершилась без кадра, `waitForFrozenScreen` запускает snapshot fallback
+последовательно (`prepared task unavailable; starting sequential snapshot fallback`), а не ждёт до
+общего timeout.
+
+Regression coverage:
+`ScreenFrameCacheBehaviorTests` проверяет, что recent prepared image может закрыть следующий capture,
+а old prepared image истекает. `CaptureHotPathStaticTests` проверяет, что `prepareForNextCapture`
+вызывается из `CaptureSession.end`, а не до overlay activation, и что frozen wait присоединяется
+к in-flight post-capture preparation.
+
+---
+
+## 04.07.2026 — overlay activation отделён от frozen-frame conversion
+
+Причина оставшейся визуальной задержки была не только в ожидании fresh frame. `CaptureSession`
+создавал overlay, но затем мог сразу синхронно резолвить cached `CVPixelBuffer` в `CGImage` на
+main actor до того, как AppKit успевал показать окно. В результате окно уже было сконструировано,
+а пользователь всё равно видел паузу до первого paint.
+
+Hotkey path теперь делает минимальные UI-шаги на main actor: одноразовый gesture snapshot, target screen,
+`beginLiveSelection`, лог `capture overlay ready`. Скрытие окон QuickShot перенесено после overlay
+activation, но до frozen-frame work: это сохраняет защиту от попадания UI в capture и не блокирует
+первый видимый overlay. Вся работа с `ScreenFrameCache`, ожиданием fresh frame, `CVPixelBuffer` ->
+`CGImage` и stream-owned snapshot уехала в `Task.detached`; на main actor возвращается только
+готовый `FrozenScreen` для `installFrozenBackdrops`.
+
+Вторая причина 3-секундных провалов — повторный `SCShareableContent` на capture-time fallback.
+В логах текущего процесса такой вызов занимал `3737ms`, поэтому fallback больше не строит новый
+content/filter во время capture. Если нужен быстрый snapshot, он берётся только через уже созданный
+stream/filter; иначе overlay остаётся интерактивным, а fresh frame догружается off-main.
+
+Freeze wait увеличен как фоновый deadline: если hotkey попал в момент медленного startup-prewarm,
+overlay не должен исчезать через 1.5 секунды только потому, что ScreenCaptureKit ещё строит stream.
+Это не меняет overlay budget: cold-start verifier теперь тоже требует `capture overlay ready` в
+пределах 100ms, а не прежние 2500ms.
+
+Ещё один hot-path источник вынесен из обычной дороги: `CGPreflightScreenCaptureAccess()` теперь
+кэшируется и обновляется в фоне при prewarm. После подтверждённого доступа hotkey больше не делает
+TCC/preflight IPC до overlay activation; remembered granted state переживает restart, поэтому даже
+первый hotkey сразу после launch не обязан ждать prewarm. Повторная проверка на trigger остаётся
+только для состояния unknown/denied.
+
+Regression gate в `scripts/test.sh` теперь запрещает `frameCache.frozenScreen` и
+`beginFrozenSelection` в `CaptureController`, чтобы future change не вернул synchronous freeze на
+главный поток. Прямой public `ScreenFrameCache.frozenScreen(...)` удалён; наружу остаётся только
+async `waitForFrozenScreen`, который вызывается из detached freeze task.
+
+Добавлены фазовые логи main hot path: `tracker ready`, `windows hidden`, `target resolved`,
+`overlay constructed`, затем итоговый `capture overlay ready`. Если ручной тест всё ещё увидит
+паузу, `verify-capture-observed.sh` покажет, сидит ли она до overlay construction или уже вне
+QuickShot-логики/первого paint.
+
+После дополнительного аудита метрика стала end-to-end для глобального хоткея: `GlobalHotKey` ставит
+timestamp сразу в Carbon callback (`hotkey event received`) и передаёт его в
+`CaptureController.triggerCapture(startedAt:)`. Если callback уже пришёл на main thread, обработчик
+вызывается синхронно, без лишнего `DispatchQueue.main.async` turn. Поэтому `capture overlay ready`
+теперь включает задержку от системной доставки хоткея до интерактивного overlay.
+
+Добавлен `CaptureHotPathStaticTests`: он парсит `CaptureController.swift` и проверяет, что
+`CaptureSession.start` вызывает `beginOverlay` до `HiddenAppWindows.hideVisibleApplicationWindows()`
+и до `startFreezeTask`, но скрытие окон всё ещё происходит до frozen-frame work. До overlay
+activation нет `waitForFrozenScreen`, `frameCache.start`, `SCShareableContent`,
+`SCScreenshotManager`, `createCGImage`, permission preflight, global monitor registration или
+window-hide. Это более точный guard, чем одиночные `rg`.
+
+Старый `CaptureGestureTracker` удалён: он регистрировал global mouse monitor до overlay, что было
+нужно только при позднем overlay. Теперь до overlay сохраняется только `CaptureGestureSnapshot`
+(позиция мыши и факт зажатой левой кнопки), а дальнейшее выделение ведёт сам `OverlayController`.
+
+Из `OverlayController.begin` убран `w.displayIfNeeded()` до `orderFrontRegardless`. На больших
+экранах forced synchronous full-screen render сам мог стать задержкой перед первым видимым overlay.
+Теперь hot path только создаёт view/layer tree и сразу order-front'ит окна; AppKit рисует лёгкий
+selection chrome естественным paint. `scripts/test.sh` запрещает возвращать `displayIfNeeded()` в
+`Overlay.swift`.
+
+`makeKeyAndOrderFront` и `NSApp.activate(ignoringOtherApps:)` также вынесены из первой overlay-дороги
+в `DispatchQueue.main.async`. Окно сначала становится visible через `orderFrontRegardless`, а
+activation/key assignment догоняют следующим main-loop turn для Esc/key handling. Static test
+проверяет, что activation не происходит до `overlay begin`.
+
+---
+
+## 04.07.2026 — карточные controls переведены с Liquid Glass на command-buttons
+
+Убрали нативные `.glass` кнопки с самих thumbnail-карточек. `ThumbnailView` теперь использует
+`DesignSystemButton`: тёмная Vercel/Geist-подобная pill/circle surface, template SF Symbol, тонкая
+обводка, hover/pressed-состояния и собственный hit-testing без зависимости от системного стекла.
+
+`Copy` остаётся pill с иконкой и подписью, close остаётся круглой icon-button с destructive hover.
+Feedback копирования (`Скопировано`) теперь пересчитывает layout карточки, чтобы текст не
+обрезался старой шириной. `GlassButton` оставлен для отдельных нативных surface вроде full-size
+окна, но продуктовый контракт запрещает возвращать его в per-thumbnail controls.
+
+---
+
+## 04.07.2026 — immediate overlay поверх fresh stream-cache
+
+Убрана архитектурная причина 3-секундной задержки: `CaptureSession` больше не ждёт frozen frame до
+показа overlay. Hotkey теперь сразу скрывает окна QuickShot и запускает `beginLiveSelection` на
+целевом экране; `capture overlay ready` снова измеряет интерактивный слой, а не готовность картинки.
+
+Свежий ScreenCaptureKit frame устанавливается вторым шагом через `installFrozenBackdrops`. Если
+пользователь успел завершить выделение до готовности fresh frame, selection сохраняется как pending
+и кадрируется только после `capture frozen ready`. Старый pre-request cached frame по-прежнему
+отвергается и не может стать backdrop/final crop.
+
+Regression gate в `scripts/test.sh` теперь требует `beginLiveSelection` и `installFrozenBackdrops`
+в `CaptureController`; `cache pending` в runtime-verifiers больше не считается UX-регрессом, если
+overlay уже active, зато `capture cache old frame accepted` остаётся hard failure.
+
+---
+
+## 04.07.2026 — hotkey path больше не блокируется TTL кадра
+
+Эта запись описывала промежуточный компромисс и затем была superseded: old-frame fallback оказался
+продуктовым регрессом, потому что запекал старое состояние экрана в новый screenshot. Текущий
+контракт ниже: старый pre-request frame отвергается, а cache обязан дождаться frame после текущего
+capture request.
+
+Исправлен регресс скорости capture-flow: предыдущий stale-frame guard считал любой cached frame
+старше `1s` непригодным, удалял stream и заставлял hotkey ждать новый ScreenCaptureKit frame.
+На статичном рабочем столе это ошибочная модель: stream может не присылать новый sample buffer, хотя
+последний кадр всё ещё визуально актуален. В unified log это проявлялось как `capture cache stale
+frame` -> `capture cache pending` -> `capture overlay ready` через секунды.
+
+Промежуточно wall-clock age перестал блокировать hotkey path: старый cached frame принимался как
+fallback, логировался как `old frame accepted`, а stream обновлялся фоном. Это оказалось неверным
+продуктово и заменено текущим pre-request rejection контрактом.
+
+Regression gates теперь фиксируют, что старый кадр, полученный до текущего capture request, не
+может стать screenshot source.
+
+---
+
+## 04.07.2026 — старые pre-request frames больше не попадают в screenshot
+
+Исправлен регресс, где `ScreenFrameCache` принимал frame ageMs в секунды и десятки секунд как
+`cache hit`, из-за чего overlay/final crop получали старое состояние экрана. `CaptureSession` теперь
+передаёт timestamp текущего capture request в `ScreenFrameCache`; cached frame допустим только если
+он пришёл после этого timestamp или попадает в очень короткое immediate-cache окно.
+
+Если warm cache старее текущего запроса, `frozenScreen` возвращает `nil`, логирует
+`capture cache old frame rejected` и запрашивает свежий frame у существующего `SCStream` через
+`updateConfiguration`/`updateContentFilter`. Если новый frame не приходит быстро, refresh
+эскалируется до stream restart. Старый frame при этом больше не может стать frozen backdrop.
+
+`ScreenFrameCacheBehaviorTests` обновлён: очень свежий warm frame сохраняет fast path, old
+pre-request frame rejected, frame after request accepted.
+
+---
+
+## 04.07.2026 — stale-frame guard и реальный host hit-testing для хаба
+
+Capture-часть этой записи зафиксировала промежуточную гипотезу hard TTL. Текущий контракт заменён
+записью выше: wall-clock age больше не блокирует hotkey path, а обслуживает фоновый refresh.
+
+Пойман критичный capture-регресс: `ScreenFrameCache` записывал `CachedFrame.updatedAt`, но
+`frozenScreen(for:)` не проверял возраст кадра. Если `SCStream` зависал или переставал обновляться,
+15-минутный `CVPixelBuffer` всё равно считался `cache hit` и попадал в overlay/final crop.
+
+В промежуточной версии cached frame получил hard TTL (`1s`), а старый по времени frame удалял stream
+и запускал новый warm stream через обычный `cache pending/cache late hit` путь. Это оказалось
+неверным для статичного desktop и заменено текущим фоновым refresh-контрактом. Полезная часть
+осталась: старые stream callback больше не могут воскресить удалённый state, потому что каждый
+`CachedDisplayStream` имеет `UUID`, а `storeFrame` принимает кадр только от актуального stream-id.
+
+Параллельно найден реальный источник повторяющейся некликабельности hub action buttons. Старые тесты
+кликали `HubWindow` напрямую, минуя родительское окно. В настоящем tray путь идёт через
+fullscreen-прозрачный host content view; обычный `NSView` мог вернуть себя вместо расширившегося
+`HubActionPill`. Добавлен `TrayHostContentView`, который вручную hit-test'ит интерактивные сабвью
+сверху вниз и возвращает `nil` для пустого прозрачного пространства. Это сохраняет click-through
+пустоты и пропускает реальные клики в expanded hub.
+
+Regression gates усилены: текущий `ScreenFrameCacheBehaviorTests` фиксирует hot-path для старых
+по времени кадров, а
+`HubWindowLiveClickTests` создаёт настоящий `NSPanel` + `TrayHostContentView` и отправляет mouse
+events через window dispatch. Теперь сценарий «изолированный hub кликается, а реальное окно трея нет»
+падает в `./scripts/test.sh`.
+
+Следом пойман побочный регресс этого же слоя: стеклянный `x` у отдельной карточки визуально был
+показан, но click path останавливался на `ThumbnailView`, а не доходил до `GlassButton`.
+`ThumbnailView` и `CardContainer` теперь явно маршрутизируют hit-testing к controls перед телом
+карточки. Добавлен `ThumbnailWindowLiveClickTests`: настоящий `NSPanel`, `TrayHostContentView`,
+реальная карточка и window-dispatch click по центру close button; тест падает, если карточка не
+удаляется.
+
+---
+
 ## 04.07.2026 — Vercel/Geist-подобный hover hub без кликовых регрессов
 
 Хаб закреплён как тёмная Vercel/Geist-подобная command-pill, а не инженерный набор из вложенных
@@ -46,7 +700,7 @@ frozen/final кадр, а быстрый hotkey+drag не требует пов�
   прогрева hotkey может брать frame из памяти. В серийной live-проверке после перезапуска:
   худший `cache hit 27.3ms`, худший `overlay ready 42.6ms`, без cache miss.
 
-Итоговая архитектура: `ScreenFrameCache` стартует по одному `SCStream` на дисплей после запуска
+Историческая frozen-first архитектура: `ScreenFrameCache` стартует по одному `SCStream` на дисплей после запуска
 приложения, создаёт stream-объекты для дисплеев и стартует их параллельно, используя
 `SCContentFilter(display:excludingApplications:exceptingWindows:)`, чтобы весь QuickShot исключался
 на уровне приложения. `CaptureSession` по hotkey скрывает видимые окна QuickShot, берёт cached
@@ -54,6 +708,9 @@ frozen/final кадр, а быстрый hotkey+drag не требует пов�
 экране через `beginFrozenSelection`. Если hotkey попал на границу прогрева, session ждёт
 stream-cache и завершает путь через `cache late hit`; `SCScreenshotManager` больше не вызывается из
 hotkey-path `CaptureController`.
+
+Эта frozen-first часть superseded записью выше от 04.07.2026: overlay снова стартует сразу через
+`beginLiveSelection`, а fresh backdrop ставится позже через `installFrozenBackdrops`.
 
 Добавлен `scripts/verify-capture-runtime.sh`: он пересобирает и перезапускает app bundle,
 дожидается первого stream-cache frame, синтетически отправляет серию `Command-Shift-4`/`Esc` и

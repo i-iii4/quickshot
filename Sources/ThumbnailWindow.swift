@@ -94,7 +94,7 @@ private final class EdgeHandle: NSView {
     override func mouseUp(with event: NSEvent) { endResize?() }
 }
 
-/// Тело карточки: сам скриншот (скруглённый) и контролы — нативные Liquid Glass кнопки
+/// Тело карточки: сам скриншот (скруглённый) и контролы дизайн-системы QuickShot
 /// [Копировать] [закрыть] в верхнем ряду, появляются/исчезают плавным fade. Ресайз — НЕ здесь
 /// (краевая ручка `EdgeHandle`); тело отвечает за drag-out и даблклик. Курсор не трогаем.
 private final class ThumbnailView: NSView, NSDraggingSource {
@@ -110,8 +110,9 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     private let nsImage: NSImage
     private var displayNSImage: NSImage
     private let displayView = PassthroughImageView()
-    private let copyButton = GlassButton(symbol: "doc.on.doc", title: "Копировать", a11y: "Скопировать в буфер обмена")
-    private let closeButton = GlassButton(symbol: "xmark", a11y: "Отбросить снимок")
+    private let copyButton = DesignSystemButton(symbol: "doc.on.doc", title: "Копировать", a11y: "Скопировать в буфер обмена")
+    private let closeButton = DesignSystemButton(symbol: "xmark", a11y: "Отбросить снимок", role: .destructive)
+    private var preparedClipboardImage: Clipboard.PreparedImage?
     private var trackingArea: NSTrackingArea?
 
     private var startMouse: NSPoint = .zero
@@ -141,11 +142,21 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         }
         closeButton.toolTip = "Отбросить снимок"
         for b in [copyButton, closeButton] { b.alphaValue = 0; b.isHidden = true; addSubview(b) }
+        prepareClipboardPayload()
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden, alphaValue > 0.01, bounds.contains(point) else { return nil }
+        for control in [closeButton, copyButton] where !control.isHidden && control.alphaValue > 0.01 {
+            let converted = convert(point, to: control)
+            if let hit = control.hitTest(converted) { return hit }
+        }
+        return self
+    }
 
     // Tracking-область — только ховер кнопок.
     override func updateTrackingAreas() {
@@ -228,6 +239,10 @@ private final class ThumbnailView: NSView, NSDraggingSource {
 
     private func doCopy() { if let owner { manager?.copy(owner) } }
 
+    func cachedClipboardPayload() -> Clipboard.PreparedImage? {
+        preparedClipboardImage
+    }
+
     private func openFull() {
         guard let screen = owner?.screen ?? NSScreen.main else { return }
         PinnedWindowController.show(image: image, on: screen)
@@ -237,10 +252,12 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         copyButton.isHidden = false
         copyButton.alphaValue = 1
         copyButton.showCheck(true)
+        layoutContents()
         titleResetWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.copyButton.showCheck(false)
+            self.layoutContents()
             if !self.isMouseInside() { self.setControlsVisible(false) }
         }
         titleResetWork = work
@@ -252,20 +269,40 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         return bounds.contains(convert(win.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil))
     }
 
+#if TESTING
+    func debugShowControls() {
+        setControlsVisible(true, animated: false)
+        layoutContents()
+    }
+
+    func debugCloseButtonCenterInSelf() -> NSPoint {
+        NSPoint(x: closeButton.frame.midX, y: closeButton.frame.midY)
+    }
+
+    func debugCloseButtonState() -> String {
+        let center = NSPoint(x: closeButton.bounds.midX, y: closeButton.bounds.midY)
+        let directHit = closeButton.hitTest(center).map { String(describing: type(of: $0)) } ?? "nil"
+        let superHit = hitTest(debugCloseButtonCenterInSelf()).map { String(describing: type(of: $0)) } ?? "nil"
+        return "closeFrame=\(closeButton.frame) hidden=\(closeButton.isHidden) alpha=\(closeButton.alphaValue) enabled=\(closeButton.isEnabled) directHit=\(directHit) thumbHit=\(superHit)"
+    }
+#endif
+
     // MARK: drag-out
 
     private func beginDragOut(with event: NSEvent) {
-        let item = NSPasteboardItem()
-        if let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) {
-            item.setData(png, forType: .png)
-            let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("QuickShot-\(UUID().uuidString.prefix(8)).png")
-            if (try? png.write(to: url)) != nil { item.setString(url.absoluteString, forType: .fileURL) }
-        }
-        if let tiff = nsImage.tiffRepresentation { item.setData(tiff, forType: .tiff) }
+        let prepared = preparedClipboardImage ?? Clipboard.prepareImage(cgImage: image)
+        if preparedClipboardImage == nil { preparedClipboardImage = prepared }
+        guard let item = Clipboard.pasteboardItem(preparedImage: prepared) else { return }
         let dragItem = NSDraggingItem(pasteboardWriter: item)
         dragItem.setDraggingFrame(displayView.frame, contents: displayNSImage)
         beginDraggingSession(with: [dragItem], event: event, source: self)
+    }
+
+    private func prepareClipboardPayload() {
+        let image = image
+        Clipboard.prepareImage(cgImage: image, qos: .utility) { [weak self] prepared in
+            self?.preparedClipboardImage = prepared
+        }
     }
 
     func draggingSession(_ session: NSDraggingSession,
@@ -277,8 +314,12 @@ private final class ThumbnailView: NSView, NSDraggingSource {
 /// (не ручка, не карточка) пропускают клики сквозь — иначе поля стали бы мёртвой зоной.
 private final class CardContainer: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? {
-        let v = super.hitTest(point)
-        return v === self ? nil : v          // ловят только сабвью (ручка/карточка); поля — сквозь
+        guard !isHidden, alphaValue > 0.01, bounds.contains(point) else { return nil }
+        for child in subviews.reversed() where !child.isHidden && child.alphaValue > 0.01 {
+            let converted = child.convert(point, from: self)
+            if let hit = child.hitTest(converted) { return hit }
+        }
+        return nil          // ловят только сабвью (ручка/карточка); поля — сквозь
     }
 }
 
@@ -383,6 +424,19 @@ final class ThumbnailWindow {
 
     func setCollapsed(_ b: Bool) { view.collapsed = b }
     func flashCopied() { view.flashCopied() }
+    func cachedClipboardPayload() -> Clipboard.PreparedImage? { view.cachedClipboardPayload() }
+
+#if TESTING
+    func debugShowControls() { view.debugShowControls() }
+
+    func debugCloseButtonCenterInHost() -> NSPoint {
+        let pointInView = view.debugCloseButtonCenterInSelf()
+        let pointInContainer = view.convert(pointInView, to: container)
+        return container.convert(pointInContainer, to: container.superview)
+    }
+
+    func debugCloseButtonState() -> String { view.debugCloseButtonState() }
+#endif
 
     // MARK: анимация (CADisplayLink, ease-out без overshoot) — двигаем контейнер
 

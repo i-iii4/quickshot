@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import OSLog
 
 /// Глобальный системный хоткей через Carbon RegisterEventHotKey.
 ///
@@ -14,10 +15,11 @@ import Carbon.HIToolbox
 final class GlobalHotKey {
 
     static let shared = GlobalHotKey()
+    private static let log = Logger(subsystem: "com.iiii.quickshot", category: "capture")
 
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
-    private var onTrigger: (() -> Void)?
+    private var onTrigger: ((CFAbsoluteTime) -> Void)?
 
     private let signature: OSType = 0x5153_6874   // 'QSht'
     private let keyID: UInt32 = 1
@@ -28,7 +30,7 @@ final class GlobalHotKey {
     /// главного run loop (applicationDidFinishLaunching это обеспечивает).
     func register(keyCode: UInt32 = UInt32(kVK_ANSI_4),
                   modifiers: UInt32 = UInt32(cmdKey | shiftKey),
-                  handler: @escaping () -> Void) {
+                  handler: @escaping (CFAbsoluteTime) -> Void) {
 
         unregister()                 // идемпотентно
         onTrigger = handler
@@ -76,9 +78,13 @@ final class GlobalHotKey {
 
     fileprivate func fire(_ id: EventHotKeyID) {
         guard id.signature == signature, id.id == keyID else { return }
-        // Колбэк приходит на главном потоке, но хоп через main.async гарантирует
-        // корректный контекст для последующей работы с UI.
-        DispatchQueue.main.async { [weak self] in self?.onTrigger?() }
+        let receivedAt = CFAbsoluteTimeGetCurrent()
+        Self.log.info("hotkey event received")
+        if Thread.isMainThread {
+            onTrigger?(receivedAt)
+        } else {
+            DispatchQueue.main.async { [weak self] in self?.onTrigger?(receivedAt) }
+        }
     }
 
     deinit { unregister() }
