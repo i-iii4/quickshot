@@ -19,17 +19,14 @@ Live-log показал, что при двух снимках в tray трет�
 через `NSWindow.sharingType = .none`.
 
 `ScreenFreezePipeline` теперь сохраняет строгий первый путь: post-hide complete
-или post-hide idle heartbeat. Если heartbeat не пришёл вовремя, freezer
-допускает latest complete frame из активного matching `SCStream`. Это не
-возвращает detached stale-cache: кадры очищаются при остановке stream или
-изменении display, а fallback логируется отдельно как
-`capture stream latest active frame accepted reason=missing-post-hide-heartbeat`
-и `freshness=latest-active-stream`.
+или post-hide idle heartbeat. Если heartbeat не пришёл вовремя, freezer делает
+fresh `SCScreenshotManager.captureImage` fallback. Старый stream buffer больше
+не принимается без post-hide подтверждения.
 
-Regression gates обновлены, чтобы требовать warm-stream guard, отдельный
-freshness label и observability для fallback. Первичная попытка с `2.5 s`
-age-limit была недостаточной: через минуту после первого thumbnail второй
-capture снова падал на `display=1:stale`.
+Regression gates обновлены, чтобы требовать fresh one-shot fallback и запрещать
+`latest-active-stream` acceptance. Первичные попытки с `2.5 s` age-limit и затем
+unbounded latest-active stream были неверными: первая снова падала на
+`display=1:stale`, вторая реально отдала кадр с `maxAgeMs=132024`.
 
 ---
 

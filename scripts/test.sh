@@ -146,9 +146,12 @@ rg -q "CMSampleBufferGetImageBuffer" Sources/ScreenFreezePipeline.swift
 rg -q "frame.receivedAt >= acceptedAfter" Sources/ScreenFreezePipeline.swift
 rg -q "freshFrameDeadlineNanoseconds" Sources/ScreenFreezePipeline.swift
 rg -q "SCShareableContent.current" Sources/ScreenFreezePipeline.swift
+rg -q "SCScreenshotManager\\.captureImage" Sources/ScreenFreezePipeline.swift
+rg -q "capture stream fallback to one-shot" Sources/ScreenFreezePipeline.swift
+rg -q "source=one-shot-fallback" Sources/ScreenFreezePipeline.swift
 if output="$(awk 'index($0, "func captureFrozenScreens(") { in_body = 1 } in_body { print } index($0, "func shutdown()") { exit }' Sources/ScreenFreezePipeline.swift | rg -n "SCShareableContent\\.current|SCScreenshotManager\\.captureImage")"; then
   echo "$output"
-  echo "Capture architecture regression: hot stream path must not enumerate shareable content or call one-shot screenshots." >&2
+  echo "Capture architecture regression: preferred stream path must not directly enumerate shareable content or call one-shot screenshots." >&2
   exit 1
 fi
 if output="$(rg -n "CaptureImageRace|captureTimeoutNanoseconds|prewarmTimeoutNanoseconds|excludingDesktopWindows\\(false, onScreenWindowsOnly: true\\)" Sources/ScreenFreezePipeline.swift)"; then
@@ -156,9 +159,9 @@ if output="$(rg -n "CaptureImageRace|captureTimeoutNanoseconds|prewarmTimeoutNan
   echo "Capture architecture regression: stream-backed freeze must not keep old timeout/window-list wrappers." >&2
   exit 1
 fi
-if output="$(rg -n "SCScreenshotManager\\.captureImage|source=one-shot|idleStopTask|streamIdleStopNanoseconds" Sources/ScreenFreezePipeline.swift)"; then
+if output="$(rg -n "latestActiveStreamFrame|latest-active-stream|freshness: \\.latestActiveStream|idleStopTask|streamIdleStopNanoseconds" Sources/ScreenFreezePipeline.swift)"; then
   echo "$output"
-  echo "Capture architecture regression: persistent stream freezer must not keep one-shot fallback or idle stop." >&2
+  echo "Capture architecture regression: persistent stream freezer must not accept stale latest stream frames or keep idle stop." >&2
   exit 1
 fi
 if output="$(rg -n "beginLiveSelection|beginOverlay\\(backdrops: \\[:\\]\\)|installFrozenBackdrops|PendingSelection|freezeFailure|finishFailedSelection|capture selection awaiting frozen frame" Sources/CaptureController.swift Sources/Overlay.swift)"; then

@@ -9,12 +9,11 @@ import OSLog
 /// Persistent stream freezer.
 ///
 /// Hot capture path contract:
-/// - no `SCShareableContent.current`;
-/// - no foreground screenshot fallback;
+/// - prefer warm `SCStream` frames for speed;
 /// - accept only a complete frame, or an idle heartbeat proving no display
 ///   change, after the trigger/post-hide boundary;
-/// - if ScreenCaptureKit withholds idle callbacks for a static display, accept
-///   the latest complete frame from the active matching stream.
+/// - if stream freshness cannot be proved, use a fresh ScreenCaptureKit
+///   one-shot capture instead of returning a stale stream buffer.
 actor ScreenFreezePipeline {
 
     private static let log = Logger(subsystem: "com.iiii.quickshot", category: "capture")
@@ -53,13 +52,25 @@ actor ScreenFreezePipeline {
         guard missing.isEmpty else {
             scheduleMaintenance(reason: "missing-stream")
             let ids = missing.map { String($0.id) }.joined(separator: ",")
-            throw CaptureError.captureStackUnavailable("warm stream unavailable for display(s): \(ids)")
+            Self.log.warning("capture stream fallback to one-shot reason=missing-stream displays=\(ids, privacy: .public)")
+            return try await captureOneShotScreens(displays: requestedDisplays,
+                                                   startedAt: startedAt,
+                                                   reason: "missing-stream")
         }
 
         let acceptedAfter = max(requestedAt, readyAfter) + Self.postHideSettleSeconds
-        let frames = try await waitForFreshFrames(displays: requestedDisplays,
+        let frames: [FreshStreamFrame]
+        do {
+            frames = try await waitForFreshFrames(displays: requestedDisplays,
                                                   acceptedAfter: acceptedAfter,
                                                   startedAt: startedAt)
+        } catch {
+            Self.log.warning("capture stream fallback to one-shot reason=\(String(describing: error), privacy: .public)")
+            return try await captureOneShotScreens(displays: requestedDisplays,
+                                                   startedAt: startedAt,
+                                                   reason: "freshness-missed")
+        }
+
         var frozen: [FrozenScreen] = []
         frozen.reserveCapacity(frames.count)
         for frame in frames {
@@ -97,16 +108,6 @@ actor ScreenFreezePipeline {
             try await Task.sleep(nanoseconds: Self.freshFramePollNanoseconds)
         }
 
-        let now = CFAbsoluteTimeGetCurrent()
-        let latest = requestedDisplays.compactMap { display -> FreshStreamFrame? in
-            latestActiveStreamFrame(display: display, now: now)
-        }
-        if latest.count == requestedDisplays.count {
-            let maxAgeMs = (latest.map { now - $0.frame.receivedAt }.max() ?? 0) * 1000
-            Self.log.info("capture stream latest active frame accepted reason=missing-post-hide-heartbeat maxAgeMs=\(maxAgeMs, privacy: .public)")
-            return latest
-        }
-
         let missing = requestedDisplays.compactMap { display -> String? in
             guard let frame = latestFrames[display.id] else { return String(display.id) }
             if frame.receivedAt >= acceptedAfter { return nil }
@@ -135,15 +136,6 @@ actor ScreenFreezePipeline {
                                     freshness: .idleHeartbeat)
         }
         return nil
-    }
-
-    private func latestActiveStreamFrame(display: CaptureDisplay,
-                                         now: CFAbsoluteTime) -> FreshStreamFrame? {
-        guard isWarm(display: display), let frame = latestFrames[display.id] else { return nil }
-        return FreshStreamFrame(display: display,
-                                frame: frame,
-                                confirmedAt: now,
-                                freshness: .latestActiveStream)
     }
 
     private func refreshWarmStreams(reason: String) async {
@@ -201,6 +193,63 @@ actor ScreenFreezePipeline {
         try await stream.startCapture()
         let ms = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
         Self.log.info("capture stream started display=\(display.id, privacy: .public) reason=\(reason, privacy: .public) ms=\(ms, privacy: .public)")
+    }
+
+    private func captureOneShotScreens(displays requestedDisplays: [CaptureDisplay],
+                                       startedAt: CFAbsoluteTime,
+                                       reason: String) async throws -> [FrozenScreen] {
+        var result: [FrozenScreen] = []
+        result.reserveCapacity(requestedDisplays.count)
+        try await withThrowingTaskGroup(of: FrozenScreen.self) { group in
+            for display in requestedDisplays {
+                group.addTask {
+                    try await Self.captureOneShotFullDisplay(display, sessionStartedAt: startedAt)
+                }
+            }
+
+            for try await frozen in group {
+                result.append(frozen)
+            }
+        }
+
+        guard result.count == requestedDisplays.count else {
+            throw CaptureError.captureStackUnavailable("one-shot fallback captured \(result.count) of \(requestedDisplays.count) displays")
+        }
+
+        let ms = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+        Self.log.info("capture freeze screens ready source=one-shot-fallback reason=\(reason, privacy: .public) displays=\(result.count, privacy: .public) ms=\(ms, privacy: .public)")
+        return result
+    }
+
+    private static func captureOneShotFullDisplay(_ display: CaptureDisplay,
+                                                  sessionStartedAt: CFAbsoluteTime) async throws -> FrozenScreen {
+        let content: SCShareableContent
+        do {
+            content = try await SCShareableContent.current
+        } catch {
+            throw captureError(from: error, context: "one-shot shareable content unavailable")
+        }
+
+        guard let targetDisplay = content.displays.first(where: { $0.displayID == display.id }) else {
+            throw CaptureError.captureStackUnavailable("No SCDisplay matching displayID \(display.id)")
+        }
+
+        let filter = SCContentFilter(display: targetDisplay, excludingWindows: [])
+        let config = streamConfiguration(for: display)
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        do {
+            let image = try await SCScreenshotManager.captureImage(contentFilter: filter,
+                                                                    configuration: config)
+            let captureMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+            let totalMs = (CFAbsoluteTimeGetCurrent() - sessionStartedAt) * 1000
+            log.info("capture freeze display ready source=one-shot-fallback display=\(display.id, privacy: .public) width=\(image.width, privacy: .public) height=\(image.height, privacy: .public) captureMs=\(captureMs, privacy: .public) totalMs=\(totalMs, privacy: .public)")
+            return FrozenScreen(displayID: display.id,
+                                frame: display.frame,
+                                scale: display.scale,
+                                image: image)
+        } catch {
+            throw captureError(from: error, context: "one-shot display \(display.id) freeze failed")
+        }
     }
 
     func recordFrame(displayID: CGDirectDisplayID,
@@ -325,6 +374,16 @@ actor ScreenFreezePipeline {
             (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
     }
 
+    private static func captureError(from error: Error, context: String) -> CaptureError {
+        if let captureError = error as? CaptureError {
+            return captureError
+        }
+        if let streamError = error as? SCStreamError, streamError.code == .userDeclined {
+            return .permissionDenied
+        }
+        return .captureStackUnavailable("\(context): \(error.localizedDescription)")
+    }
+
 #if TESTING
     nonisolated static var debugFreshFrameDeadlineNanoseconds: UInt64 { freshFrameDeadlineNanoseconds }
     nonisolated static var debugStreamFrameRate: Int32 { streamFrameRate }
@@ -377,7 +436,6 @@ private struct FreshStreamFrame {
 private enum StreamFrameFreshness {
     case complete
     case idleHeartbeat
-    case latestActiveStream
 
     var logValue: String {
         switch self {
@@ -385,8 +443,6 @@ private enum StreamFrameFreshness {
             return "complete"
         case .idleHeartbeat:
             return "idle-heartbeat"
-        case .latestActiveStream:
-            return "latest-active-stream"
         }
     }
 }

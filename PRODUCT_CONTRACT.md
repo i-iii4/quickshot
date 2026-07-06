@@ -24,12 +24,12 @@ implementation that violates these rules is a regression, even if it compiles.
    indicator is an accepted product tradeoff for deterministic hot capture.
 7. The stream path has a short fresh-frame deadline. It first prefers a
    post-hide complete frame or idle heartbeat; if ScreenCaptureKit withholds that
-   heartbeat on a static display, it may use the latest complete frame from the
-   active matching stream. It must not call one-shot screenshot capture on the
-   hot path.
-8. `SCScreenshotManager.captureImage` and `SCShareableContent.current` are
-   forbidden in the hot capture path. `SCShareableContent.current` is allowed
-   only in startup/background stream refresh.
+   heartbeat on a static display, it must use a fresh
+   `SCScreenshotManager.captureImage` fallback rather than a stale stream
+   buffer.
+8. `SCShareableContent.current` and `SCScreenshotManager.captureImage` are
+   allowed only in startup/background stream refresh or the explicit fresh
+   one-shot fallback after stream freshness is unavailable.
 9. If the user presses the hotkey and is already holding a drag when the overlay
    appears, QuickShot seeds the selection from the pre-overlay mouse state so the
    user does not have to release and start again.
@@ -123,10 +123,9 @@ implementation that violates these rules is a regression, even if it compiles.
    while overlay construction happens only after `capture frozen ready`.
 6. Static gates must verify that the freezer uses `SCStream`, `SCStreamOutput`,
    `SCFrameStatus.complete`, `SCFrameStatus.idle`, a post-hide freshness gate, no
-   idle stop, and no `SCScreenshotManager.captureImage` fallback. A pre-hide
-   complete pixel buffer is valid when a post-hide idle heartbeat proves the
-   display did not change, or when it is the latest complete frame from an active
-   matching stream.
+   idle stop, and fresh `SCScreenshotManager.captureImage` fallback. A pre-hide
+   complete pixel buffer is valid only when a post-hide idle heartbeat proves the
+   display did not change.
 7. Runtime verification after capture-flow changes should prefer log-only checks
    unless the user explicitly opts into synthetic input. Synthetic scripts must
    keep `QUICKSHOT_ALLOW_SYNTHETIC_INPUT=1`.
@@ -140,5 +139,6 @@ implementation that violates these rules is a regression, even if it compiles.
    does not relax the 200 ms contract.
 10. Stream-backed performance gates should track `capture stream frame accepted`
     with its `freshness` source, `capture stream fresh frame missed`, `capture
-    stream latest active frame accepted`, `capture freeze screens ready
-    source=stream`, and `capture overlay ready`.
+    stream fallback to one-shot`, `capture freeze screens ready source=stream`,
+    `capture freeze screens ready source=one-shot-fallback`, and `capture
+    overlay ready`.

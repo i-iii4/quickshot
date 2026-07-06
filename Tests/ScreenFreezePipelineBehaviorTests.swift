@@ -6,8 +6,8 @@ struct ScreenFreezePipelineBehaviorTests {
         run("persistent stream has a short fresh-frame deadline", testFreshFrameDeadlineIsShort)
         run("warm streams stay persistent", testWarmStreamsStayPersistent)
         run("stream path accepts complete frames or idle freshness heartbeats", testStreamPathAcceptsFreshCompleteFramesOrIdleHeartbeats)
-        run("stream path falls back to latest active stream frame", testLatestActiveStreamFallback)
-        run("hot path has no one-shot fallback", testHotPathHasNoOneShotFallback)
+        run("stream miss falls back to fresh one-shot capture", testStreamMissFallsBackToFreshOneShot)
+        run("hot path does not accept stale latest stream frames", testHotPathRejectsStaleLatestStreamFrames)
         print("ScreenFreezePipelineBehaviorTests: passed")
     }
 
@@ -67,31 +67,26 @@ struct ScreenFreezePipelineBehaviorTests {
                     "Old stale-prone CachedFrame model must not return")
     }
 
-    private static func testLatestActiveStreamFallback() throws {
+    private static func testStreamMissFallsBackToFreshOneShot() throws {
         let source = try String(contentsOfFile: "Sources/ScreenFreezePipeline.swift", encoding: .utf8)
-        try require(source.contains("latestActiveStreamFrame(display:"),
-                    "Fallback must explicitly require an active stream frame")
-        try require(source.contains("guard isWarm(display: display), let frame = latestFrames[display.id]"),
-                    "Fallback must use only frames from a warm matching stream")
-        try require(source.contains("freshness: .latestActiveStream"),
-                    "Latest active stream frames must be distinguishable from post-hide fresh frames")
-        try require(source.contains("capture stream latest active frame accepted"),
-                    "Latest active stream fallback must be observable in logs")
-        try require(source.contains("reason=missing-post-hide-heartbeat"),
-                    "Fallback logs must explain that ScreenCaptureKit did not provide a post-hide heartbeat")
+        try require(source.contains("captureOneShotScreens(displays:"),
+                    "Stream miss must have an explicit fresh one-shot fallback")
+        try require(source.contains("SCScreenshotManager.captureImage"),
+                    "Fallback must request a fresh ScreenCaptureKit image instead of reusing stale stream pixels")
+        try require(source.contains("capture stream fallback to one-shot"),
+                    "Stream-to-one-shot fallback must be observable")
+        try require(source.contains("source=one-shot-fallback"),
+                    "One-shot fallback completion must be observable separately from stream completion")
     }
 
-    private static func testHotPathHasNoOneShotFallback() throws {
+    private static func testHotPathRejectsStaleLatestStreamFrames() throws {
         let source = try String(contentsOfFile: "Sources/ScreenFreezePipeline.swift", encoding: .utf8)
-        let captureBody = try functionBody(named: "captureFrozenScreens", in: source, after: "actor ScreenFreezePipeline")
-        try require(!captureBody.contains("SCShareableContent.current"),
-                    "Hot capture path must not enumerate shareable content")
-        try require(!captureBody.contains("SCScreenshotManager.captureImage"),
-                    "Hot capture path must not call one-shot screenshot capture")
-        try require(!source.contains("SCScreenshotManager.captureImage"),
-                    "No-half-measures stream freezer must not keep one-shot fallback")
-        try require(!source.contains("capture freeze screens ready source=one-shot"),
-                    "One-shot fallback completion token must not remain")
+        try require(!source.contains("latestActiveStreamFrame"),
+                    "Hot capture path must not accept a stale latest active stream frame")
+        try require(!source.contains("freshness: .latestActiveStream")
+                    && !source.contains("latest-active-stream")
+                    && !source.contains("capture stream latest active frame accepted"),
+                    "Stale latest-active-stream acceptance markers must not return")
         try require(!source.contains("CaptureImageRace"),
                     "Stream freezer must not reintroduce the old timeout race wrapper")
         try require(!source.contains("excludingDesktopWindows(false, onScreenWindowsOnly: true)"),

@@ -27,21 +27,21 @@ backdrop строится из последнего complete `CVPixelBuffer`, н
 `SCFrameStatus.complete`, либо `SCFrameStatus.idle`, который по ScreenCaptureKit
 значит, что новый кадр не был создан, потому что дисплей не изменился.
 Если ScreenCaptureKit не присылает post-hide idle heartbeat для статичного
-дисплея в коротком бюджете, допускается latest complete frame из активного
-matching stream с отдельным логом `freshness=latest-active-stream`.
+дисплея в коротком бюджете, QuickShot делает fresh one-shot
+`SCScreenshotManager.captureImage` fallback. Старый stream buffer в этом месте
+не используется.
 
 Старый stale-frame класс багов закрывается freshness gate: pre-hide pixels не
 могут стать frozen backdrop сами по себе. Если complete frame старше
-`acceptedAfter`, он допускается только при наличии post-hide idle heartbeat или
-как latest frame из живого matching stream. Frames очищаются при остановке
-stream или изменении display, поэтому detached stale buffers не принимаются.
+`acceptedAfter`, он допускается только при наличии post-hide idle heartbeat.
+Если такого подтверждения нет, единственный fallback - fresh one-shot capture.
 `acceptedAfter` считается от момента, когда QuickShot уже спрятал свои окна,
 плюс маленький settle-интервал на следующий display frame.
 
 Stream path ждёт свежий frame только короткий direct-manipulation budget
-(`150 ms`). Если stream не успел, capture быстро завершается ошибкой и
-запускает background maintenance; hot path не уходит в one-shot fallback, потому
-что такой fallback и создавал 3-10 секундные провалы.
+(`150 ms`). Если stream не успел, capture запускает background maintenance и
+переходит в one-shot fallback: это медленнее, но не может подставить старый
+stream frame.
 
 Цена этой архитектуры - постоянный macOS screen-capture indicator, пока
 QuickShot запущен. Это сознательный выбор в пользу скорости и предсказуемого
@@ -55,8 +55,8 @@ hot UX.
 диапазоне 0.6-3s. Stream probe показал другую картину: уже запущенный
 `SCStream` отдаёт новые frames или idle heartbeats в коротком бюджете, поэтому
 новый целевой путь - подтвердить post-hide freshness в пределах `150 ms`. Если
-idle callback запаздывает на статичном дисплее, latest-active-stream fallback
-сохраняет UX быстрым без возврата к 0.6-3s one-shot path.
+idle callback запаздывает на статичном дисплее, fresh one-shot fallback
+сохраняет корректность снимка ценой возможной задержки.
 
 Все окна QuickShot дополнительно выставляют `NSWindow.sharingType = .none`;
 selection overlay, hub, thumbnails, settings и helper windows не должны
@@ -106,7 +106,8 @@ QuickShot, без системного Liquid Glass.
 
 - хаб и action pills, включая live window dispatch;
 - кликабельность controls на отдельных карточках;
-- `ScreenFreezePipeline` persistent stream freshness и запрет one-shot fallback;
+- `ScreenFreezePipeline` persistent stream freshness, stale-frame rejection и
+  fresh one-shot fallback;
 - selection cursor/frame geometry;
 - static gates для Mio-style freeze-before-overlay порядка;
 - off-main crop и prepared clipboard payload path.

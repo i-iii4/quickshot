@@ -142,7 +142,7 @@ final class CaptureController {
 /// Stream-backed сессия захвата:
 /// 1. фиксирует раннее состояние мыши;
 /// 2. скрывает окна QuickShot, чтобы они не попали в freeze;
-/// 3. ждёт ScreenCaptureKit stream freshness без one-shot fallback;
+/// 3. ждёт ScreenCaptureKit stream freshness или fresh one-shot fallback;
 /// 4. показывает selection overlay уже поверх immutable frozen pixels;
 /// 5. кадрирует только этот immutable frozen image.
 @MainActor

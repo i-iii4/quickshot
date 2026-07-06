@@ -119,30 +119,27 @@ struct CaptureHotPathStaticTests {
                     "Pipeline must accept a post-hide idle heartbeat when the display has not changed")
         try require(source.contains("latestIdleHeartbeats"),
                     "Pipeline must keep idle freshness separate from complete pixel buffers")
-        try require(source.contains("latestActiveStreamFrame(display:")
-                    && source.contains("guard isWarm(display: display), let frame = latestFrames[display.id]")
-                    && source.contains("freshness: .latestActiveStream")
-                    && source.contains("reason=missing-post-hide-heartbeat"),
-                    "Pipeline must have an observable active-stream fallback for static displays that do not emit idle quickly")
+        try require(source.contains("captureOneShotScreens(displays:")
+                    && source.contains("SCScreenshotManager.captureImage")
+                    && source.contains("capture stream fallback to one-shot")
+                    && source.contains("source=one-shot-fallback"),
+                    "Pipeline must fall back to a fresh one-shot capture when stream freshness is missing")
+        try require(!source.contains("latestActiveStreamFrame")
+                    && !source.contains("freshness: .latestActiveStream")
+                    && !source.contains("latest-active-stream"),
+                    "Pipeline must not accept stale latest active stream frames")
         try require(source.contains("freshFrameDeadlineNanoseconds"),
                     "Stream path must have a short deadline")
         try require(source.contains("SCShareableContent.current"),
                     "Background stream refresh should use SCShareableContent.current")
-        let captureBody = try functionBody(named: "captureFrozenScreens", in: source, after: "actor ScreenFreezePipeline")
-        try require(!captureBody.contains("SCShareableContent.current"),
-                    "Hot capture path must not enumerate shareable content")
-        try require(!captureBody.contains("SCScreenshotManager.captureImage"),
-                    "Hot capture path must not call one-shot screenshots")
-        try require(!source.contains("SCScreenshotManager.captureImage"),
-                    "No-half-measures stream freezer must not keep one-shot fallback")
         try require(source.contains("config.showsCursor = false"),
                     "Frozen frames must not bake the system cursor")
         try require(source.contains("capture freeze screens ready"),
                     "Freeze timing must be observable")
         try require(source.contains("capture freeze screens ready source=stream"),
                     "Fast stream completion must be observable")
-        try require(!source.contains("capture freeze screens ready source=one-shot"),
-                    "One-shot fallback completion token must not remain")
+        try require(source.contains("capture freeze screens ready source=one-shot-fallback"),
+                    "Fresh fallback completion must be observable")
         try require(!source.contains("idleStopTask") && !source.contains("streamIdleStopNanoseconds"),
                     "Persistent stream mode must not keep the old idle-stop implementation")
         for forbidden in ["CachedFrame", "validatedAt", "preparedFrozenScreens", "CaptureImageRace"] {
