@@ -139,10 +139,10 @@ final class CaptureController {
     }
 }
 
-/// Mio-style сессия захвата:
+/// Stream-backed сессия захвата:
 /// 1. фиксирует раннее состояние мыши;
 /// 2. скрывает окна QuickShot, чтобы они не попали в freeze;
-/// 3. делает fresh full-display snapshots через ScreenCaptureKit;
+/// 3. ждёт ScreenCaptureKit stream freshness без one-shot fallback;
 /// 4. показывает selection overlay уже поверх immutable frozen pixels;
 /// 5. кадрирует только этот immutable frozen image.
 @MainActor
@@ -205,18 +205,21 @@ private final class CaptureSession {
         Self.log.info("capture freeze pending displays=\(displayList, privacy: .public)")
 
         hiddenWindows = HiddenAppWindows.hideVisibleApplicationWindows()
+        let hiddenAt = CFAbsoluteTimeGetCurrent()
         Self.log.info("capture hot path windows hidden ms=\(self.elapsedMs, privacy: .public)")
-        startFreezeTask(displays: displays)
+        startFreezeTask(displays: displays, readyAfter: hiddenAt)
     }
 
-    private func startFreezeTask(displays: [CaptureDisplay]) {
+    private func startFreezeTask(displays: [CaptureDisplay], readyAfter: CFAbsoluteTime) {
         let freezer = self.freezer
         let startedAt = self.startedAt
 
         freezeTask = Task.detached(priority: .userInitiated) { [weak self] in
             let elapsedMs = { (CFAbsoluteTimeGetCurrent() - startedAt) * 1000 }
             do {
-                let shots = try await freezer.captureFrozenScreens(displays: displays)
+                let shots = try await freezer.captureFrozenScreens(displays: displays,
+                                                                    requestedAt: startedAt,
+                                                                    readyAfter: readyAfter)
                 await MainActor.run { [weak self] in
                     guard let self, !Task.isCancelled else { return }
                     Self.log.info("capture freeze completed ms=\(elapsedMs(), privacy: .public)")

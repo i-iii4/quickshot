@@ -4,6 +4,121 @@
 
 ---
 
+## 06.07.2026 — третий capture после двух thumbnails не должен мигать tray
+
+Live-log показал, что при двух снимках в tray третий hotkey не терялся:
+`hotkey event received`, `capture trigger accepted`, `capture freeze pending`.
+Срыв происходил в freezer: `capture stream fresh frame missed displays=3:stale`
+примерно через `150 ms`. Tray мигал потому, что `CaptureSession.start` успевал
+скрыть окна QuickShot перед freeze, затем ошибка восстанавливала hidden windows
+без overlay.
+
+Причина не в кликабельности tray и не в GlobalHotKey. Display stream может не
+прислать post-hide `SCFrameStatus.idle` в коротком бюджете, особенно когда
+видимое изменение состоит только из окон QuickShot, уже исключённых из capture
+через `NSWindow.sharingType = .none`.
+
+`ScreenFreezePipeline` теперь сохраняет строгий первый путь: post-hide complete
+или post-hide idle heartbeat. Если heartbeat не пришёл вовремя, freezer
+допускает latest complete frame из активного matching `SCStream`. Это не
+возвращает detached stale-cache: кадры очищаются при остановке stream или
+изменении display, а fallback логируется отдельно как
+`capture stream latest active frame accepted reason=missing-post-hide-heartbeat`
+и `freshness=latest-active-stream`.
+
+Regression gates обновлены, чтобы требовать warm-stream guard, отдельный
+freshness label и observability для fallback. Первичная попытка с `2.5 s`
+age-limit была недостаточной: через минуту после первого thumbnail второй
+capture снова падал на `display=1:stale`.
+
+---
+
+## 06.07.2026 — hotkey не должен срываться на static display idle
+
+Live-log по жалобе "hotkey только мигает" показал, что Carbon hotkey приходит
+сразу: `hotkey event received`, затем `capture trigger accepted`. Срыв был ниже
+по стеку: `capture stream fresh frame missed displays=1:stale`, после чего
+`CaptureController` показывал `requestUserAttention`, визуально похожий на
+мигание приложения.
+
+Причина: stream freezer принимал только `SCFrameStatus.complete`. На статичном
+дисплее ScreenCaptureKit может прислать `SCFrameStatus.idle`: по SDK это значит,
+что новый frame не создан, потому что display не изменился. Игнорировать такой
+статус нельзя: complete pixel buffer может быть старше trigger, но post-hide
+idle heartbeat доказывает, что эти pixels всё ещё актуальны.
+
+`ScreenFreezePipeline` теперь хранит `latestIdleHeartbeats` отдельно от
+complete `CVPixelBuffer`. Freshness gate принимает complete frame с
+`receivedAt >= acceptedAfter` или старший complete buffer, подтверждённый
+`idleAt >= acceptedAfter`. Старый stale-cache путь не возвращался: без post-hide
+complete/idle подтверждения capture по-прежнему быстро падает и запускает
+background maintenance.
+
+Обновлены static gates в `CaptureHotPathStaticTests` и
+`ScreenFreezePipelineBehaviorTests`: они теперь требуют обработку
+`SCFrameStatus.idle`, раздельный idle heartbeat state и observability поля
+`freshness`/`pixelAgeMs`.
+
+Проверено: `./scripts/test.sh`, `./build.sh`, `git diff --check`. Актуальный
+`QuickShot.app` перезапущен; startup log подтвердил hotkey registration,
+persistent stream prewarm и first idle heartbeat для обоих displays.
+
+---
+
+## 05.07.2026 — stream freezer переделан без полумер
+
+Предыдущая stream-backed попытка была признана неудачной: hot path всё ещё мог
+вызвать `SCShareableContent.current`, затем упасть в one-shot fallback и дать
+`capture overlay ready` около 10 секунд. Это противоречило самой цели горячего
+stream UX.
+
+`ScreenFreezePipeline` переписан как persistent stream freezer. `SCStream`
+держится активным всё время работы QuickShot; idle stop удалён. Hot capture path
+теперь только проверяет, что stream уже warm, ждёт complete frame с
+`receivedAt >= acceptedAfter`, конвертирует его в frozen `CGImage` и возвращает
+backdrop. `SCShareableContent.current` остался только в startup/background
+stream refresh. `SCScreenshotManager.captureImage` полностью удалён из
+активного freezer.
+
+Если fresh frame не пришёл за `150 ms`, capture быстро завершается ошибкой и
+планирует background maintenance; foreground one-shot fallback больше не
+допускается. Цена решения - постоянный macOS screen-capture indicator, пока
+QuickShot запущен.
+
+Regression gates обновлены: hot path теперь явно запрещает
+`SCShareableContent.current`, `SCScreenshotManager.captureImage`, `source=one-shot`,
+idle-stop поля и старые stale-cache маркеры.
+
+---
+
+## 05.07.2026 — capture переведён на short-lived stream-backed freezer
+
+После исследования задержки one-shot `SCScreenshotManager.captureImage` стало
+понятно, что он сам даёт 0.6-3s на full-display capture и даже tiny capture
+может занимать больше секунды. При этом уже запущенный `SCStream` отдаёт frames
+примерно каждые 15-22 ms. Поэтому freeze path переведён с буквального
+Mio-style one-shot на stream-backed fresh-frame-first архитектуру.
+
+`ScreenFreezePipeline` теперь держит коротко прогретый `SCStream` per display,
+принимает только `SCFrameStatus.complete`, хранит последний `CVPixelBuffer` и
+на hotkey принимает только frame с `receivedAt >= acceptedAfter`, где
+`acceptedAfter` идёт после trigger и после скрытия окон QuickShot. Если свежий
+stream frame не пришёл за `120 ms`, pipeline не принимает старую картинку, а
+падает обратно на one-shot `SCScreenshotManager.captureImage` с batch cap `3`.
+
+Чтобы не получить вечный системный screen-capture indicator, warm streams
+останавливаются после `30 s` idle window. Это даёт быстрый UX для запуска и
+серии снимков, но не превращает приложение в постоянную запись экрана.
+
+Обновлены `CaptureHotPathStaticTests`, `ScreenFreezePipelineBehaviorTests` и
+`scripts/test.sh`: stream и `CVPixelBuffer` теперь разрешены только вместе с
+freshness gate, complete-frame проверкой, idle stop и one-shot fallback; старые
+unsafe stale-cache маркеры по-прежнему запрещены.
+
+Проверено: `./scripts/test.sh` и `./build.sh`.
+
+---
+
 ## 05.07.2026 — задокументирован latency baseline Mio-style freeze-first
 
 После перезапуска актуального билда и log-only проверки зафиксирован текущий

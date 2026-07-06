@@ -15,9 +15,9 @@ struct CaptureHotPathStaticTests {
             let thumbnailWindowSource = try String(contentsOfFile: "Sources/ThumbnailWindow.swift", encoding: .utf8)
             let pinnedWindowSource = try String(contentsOfFile: "Sources/PinnedWindow.swift", encoding: .utf8)
 
-            try testOldStreamCacheIsRemoved(captureSource: captureSource)
-            try testMioStyleFreezePrecedesOverlay(captureSource)
-            try testFreshSnapshotFreezer(freezeSource)
+            try testOldUnsafeCacheIsRemoved(captureSource: captureSource)
+            try testFreshStreamFreezePrecedesOverlay(captureSource)
+            try testStreamBackedFreezer(freezeSource)
             try testOverlayKeepsQuickShotSelectionContract(overlaySource: overlaySource,
                                                            protectionSource: protectionSource)
             try testCompletedCaptureIsObservable(captureSource: captureSource)
@@ -38,35 +38,44 @@ struct CaptureHotPathStaticTests {
         }
     }
 
-    private static func testOldStreamCacheIsRemoved(captureSource: String) throws {
+    private static func testOldUnsafeCacheIsRemoved(captureSource: String) throws {
         try require(!FileManager.default.fileExists(atPath: "Sources/ScreenFrameCache.swift"),
-                    "Old ScreenFrameCache.swift must not coexist with the Mio-style freezer")
+                    "Old ScreenFrameCache.swift must not coexist with the stream-backed freezer")
         try require(captureSource.contains("private let freezer = ScreenFreezePipeline()"),
-                    "CaptureController must own the fresh snapshot freezer")
+                    "CaptureController must own the fresh frame freezer")
         try require(!captureSource.contains("ScreenFrameCache"),
                     "CaptureController must not depend on stale stream-cache architecture")
         try require(!captureSource.contains("waitForFrozenScreen"),
                     "CaptureSession must not wait for cached frames")
         try require(!captureSource.contains("rectSnapshotFrozenScreen"),
-                    "Mio-style capture must not keep the cache-owned rect snapshot bridge")
-        try require(!captureSource.contains("source=post-request"),
-                    "Post-request source labels belonged to the old cache acceptance model")
+                    "Capture must not keep the old cache-owned rect snapshot bridge")
     }
 
-    private static func testMioStyleFreezePrecedesOverlay(_ source: String) throws {
+    private static func testFreshStreamFreezePrecedesOverlay(_ source: String) throws {
         let startBody = try functionBody(named: "start", in: source, after: "private final class CaptureSession")
         try require(startBody.contains("HiddenAppWindows.hideVisibleApplicationWindows()"),
-                    "QuickShot windows must be hidden before fresh ScreenCaptureKit freeze")
-        try require(startBody.contains("startFreezeTask(displays: displays)"),
+                    "QuickShot windows must be hidden before accepting a fresh frame")
+        try require(startBody.contains("let hiddenAt = CFAbsoluteTimeGetCurrent()"),
+                    "CaptureSession.start must mark the post-hide freshness boundary")
+        try require(startBody.contains("startFreezeTask(displays: displays, readyAfter: hiddenAt)"),
                     "CaptureSession.start must explicitly begin the freeze task")
         try require(!startBody.contains("beginOverlay("),
-                    "Mio-style capture must not show selection UI before frozen screenshots are ready")
+                    "Capture must not show selection UI before frozen screenshots are ready")
         guard let hideRange = startBody.range(of: "HiddenAppWindows.hideVisibleApplicationWindows()"),
-              let freezeRange = startBody.range(of: "startFreezeTask(displays: displays)") else {
-            throw Failure("CaptureSession.start is missing Mio freeze-first ordering anchors")
+              let hiddenAtRange = startBody.range(of: "let hiddenAt = CFAbsoluteTimeGetCurrent()"),
+              let freezeRange = startBody.range(of: "startFreezeTask(displays: displays, readyAfter: hiddenAt)") else {
+            throw Failure("CaptureSession.start is missing stream fresh-frame ordering anchors")
         }
         try require(hideRange.lowerBound < freezeRange.lowerBound,
-                    "CaptureSession.start must hide QuickShot windows before fresh freeze work")
+                    "CaptureSession.start must hide QuickShot windows before fresh frame work")
+        try require(hiddenAtRange.lowerBound < freezeRange.lowerBound,
+                    "CaptureSession.start must pass the post-hide boundary into the freezer")
+
+        let freezeTaskBody = try functionBody(named: "startFreezeTask", in: source, after: "private final class CaptureSession")
+        try require(freezeTaskBody.contains("requestedAt: startedAt"),
+                    "Freezer must receive the original trigger timestamp")
+        try require(freezeTaskBody.contains("readyAfter: readyAfter"),
+                    "Freezer must receive the post-hide freshness boundary")
 
         let freezeCompletedBody = try functionBody(named: "freezeCompleted", in: source, after: "private final class CaptureSession")
         try require(freezeCompletedBody.contains("capture frozen ready"),
@@ -85,27 +94,59 @@ struct CaptureHotPathStaticTests {
                     "Fast hotkey+drag should seed the selection from pre-overlay mouse state")
     }
 
-    private static func testFreshSnapshotFreezer(_ source: String) throws {
+    private static func testStreamBackedFreezer(_ source: String) throws {
         try require(source.contains("actor ScreenFreezePipeline"),
                     "Fresh freeze work should live in an isolated pipeline")
         try require(source.contains("func prewarm() async"),
-                    "Pipeline must keep Mio's ScreenCaptureKit prewarm")
-        try require(source.contains("func captureFrozenScreens(displays requestedDisplays: [CaptureDisplay]) async throws -> [FrozenScreen]"),
+                    "Pipeline must keep startup prewarm")
+        try require(source.contains("func captureFrozenScreens(displays requestedDisplays: [CaptureDisplay],"),
                     "Pipeline must expose full-display fresh freeze capture")
+        try require(source.contains("requestedAt: CFAbsoluteTime") && source.contains("readyAfter: CFAbsoluteTime"),
+                    "Freeze API must carry trigger and post-hide boundaries")
+        try require(source.contains("SCStream("),
+                    "Pipeline must keep short-lived warm streams for fast captures")
+        try require(source.contains("SCStreamOutput"),
+                    "Pipeline must receive stream frames through SCStreamOutput")
+        try require(source.contains("SCFrameStatus(rawValue: statusRawValue)") && source.contains("status == .complete"),
+                    "Pipeline must capture complete stream frames")
+        try require(source.contains("status == .idle") && source.contains("recordIdleFrame"),
+                    "Pipeline must treat ScreenCaptureKit idle frames as post-hide freshness heartbeats")
+        try require(source.contains("CMSampleBufferGetImageBuffer"),
+                    "Pipeline must store stream pixel buffers instead of old prepared screenshots")
+        try require(source.contains("frame.receivedAt >= acceptedAfter"),
+                    "Pipeline must prefer post-trigger/post-hide complete stream frames")
+        try require(source.contains("idleAt >= acceptedAfter"),
+                    "Pipeline must accept a post-hide idle heartbeat when the display has not changed")
+        try require(source.contains("latestIdleHeartbeats"),
+                    "Pipeline must keep idle freshness separate from complete pixel buffers")
+        try require(source.contains("latestActiveStreamFrame(display:")
+                    && source.contains("guard isWarm(display: display), let frame = latestFrames[display.id]")
+                    && source.contains("freshness: .latestActiveStream")
+                    && source.contains("reason=missing-post-hide-heartbeat"),
+                    "Pipeline must have an observable active-stream fallback for static displays that do not emit idle quickly")
+        try require(source.contains("freshFrameDeadlineNanoseconds"),
+                    "Stream path must have a short deadline")
         try require(source.contains("SCShareableContent.current"),
-                    "Mio-style full-display capture should use SCShareableContent.current")
-        try require(source.contains("SCScreenshotManager.captureImage"),
-                    "Mio-style fresh freeze must use ScreenCaptureKit screenshot capture")
+                    "Background stream refresh should use SCShareableContent.current")
+        let captureBody = try functionBody(named: "captureFrozenScreens", in: source, after: "actor ScreenFreezePipeline")
+        try require(!captureBody.contains("SCShareableContent.current"),
+                    "Hot capture path must not enumerate shareable content")
+        try require(!captureBody.contains("SCScreenshotManager.captureImage"),
+                    "Hot capture path must not call one-shot screenshots")
+        try require(!source.contains("SCScreenshotManager.captureImage"),
+                    "No-half-measures stream freezer must not keep one-shot fallback")
         try require(source.contains("config.showsCursor = false"),
-                    "Frozen screenshots must not bake the system cursor")
-        try require(source.contains("captureBatchSize = 3"),
-                    "Display capture concurrency must stay capped like Mio")
-        try require(source.contains("prewarmPixelSize = 2"),
-                    "Prewarm must remain a tiny dummy screenshot")
+                    "Frozen frames must not bake the system cursor")
         try require(source.contains("capture freeze screens ready"),
                     "Freeze timing must be observable")
-        for forbidden in ["SCStream(", "CVPixelBuffer", "CachedFrame", "validatedAt", "preparedFrozenScreens", "CaptureImageRace"] {
-            try require(!source.contains(forbidden), "Fresh freezer must not keep old stream-cache token \(forbidden)")
+        try require(source.contains("capture freeze screens ready source=stream"),
+                    "Fast stream completion must be observable")
+        try require(!source.contains("capture freeze screens ready source=one-shot"),
+                    "One-shot fallback completion token must not remain")
+        try require(!source.contains("idleStopTask") && !source.contains("streamIdleStopNanoseconds"),
+                    "Persistent stream mode must not keep the old idle-stop implementation")
+        for forbidden in ["CachedFrame", "validatedAt", "preparedFrozenScreens", "CaptureImageRace"] {
+            try require(!source.contains(forbidden), "Fresh freezer must not keep old unsafe cache token \(forbidden)")
         }
     }
 

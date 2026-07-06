@@ -7,41 +7,51 @@ implementation that violates these rules is a regression, even if it compiles.
 
 1. `Command-Shift-4` starts exactly one capture session. Repeated triggers during
    an active session are ignored.
-2. QuickShot uses a Mio-style freeze-first flow: hide QuickShot windows, capture
-   fresh full-display ScreenCaptureKit snapshots, then show the selection overlay
-   on top of those immutable pixels.
-3. No cached desktop pixels may become the frozen backdrop or final crop. Every
-   frozen image used for a session must be produced after that session's trigger.
+2. QuickShot uses a stream-backed fresh-frame-first flow: hide QuickShot
+   windows, accept a complete ScreenCaptureKit stream frame only after the
+   trigger and post-hide boundary, then show the selection overlay on top of
+   those immutable pixels.
+3. No pre-trigger desktop pixels may become the frozen backdrop or final crop.
+   Every frozen image used for a session must be accepted after that session's
+   trigger and after QuickShot windows have been hidden.
 4. Normal warm capture should feel near-instant. The target budget for
    hotkey-to-overlay-ready is 200 ms, with Mio's public target in the tens of
    milliseconds after prewarm. The capture path logs both `capture frozen ready`
    and `capture overlay ready`.
-5. Startup prewarm uses only a tiny ScreenCaptureKit screenshot to warm the
-   system path. It must not show UI and must not block app launch.
-6. Full-display captures are bounded and batched. The current batch cap is 3
-   displays, matching Mio's explicit concurrency discipline.
-7. If the user presses the hotkey and is already holding a drag when the overlay
+5. Startup prewarm starts persistent warm ScreenCaptureKit streams. It must not
+   show QuickShot UI and must not block app launch.
+6. Warm streams remain active while QuickShot runs. The macOS screen-capture
+   indicator is an accepted product tradeoff for deterministic hot capture.
+7. The stream path has a short fresh-frame deadline. It first prefers a
+   post-hide complete frame or idle heartbeat; if ScreenCaptureKit withholds that
+   heartbeat on a static display, it may use the latest complete frame from the
+   active matching stream. It must not call one-shot screenshot capture on the
+   hot path.
+8. `SCScreenshotManager.captureImage` and `SCShareableContent.current` are
+   forbidden in the hot capture path. `SCShareableContent.current` is allowed
+   only in startup/background stream refresh.
+9. If the user presses the hotkey and is already holding a drag when the overlay
    appears, QuickShot seeds the selection from the pre-overlay mouse state so the
    user does not have to release and start again.
-8. QuickShot UI must never appear in the frozen frame or final screenshot:
+10. QuickShot UI must never appear in the frozen frame or final screenshot:
    selection overlay, custom cursor, selection frame, hub, thumbnails, settings,
    and helper windows are hidden before freeze or excluded from capture with
    window sharing protection.
-9. Releasing a valid selection dismisses the overlay before PNG/TIFF encoding,
+11. Releasing a valid selection dismisses the overlay before PNG/TIFF encoding,
    temporary file payload work, thumbnail layout, or clipboard publication. The
    session logs `capture end outcome=completed`, then schedules background crop
    and delivery.
-10. Cropping the frozen `CGImage` must not happen synchronously inside the
+12. Cropping the frozen `CGImage` must not happen synchronously inside the
     mouse-up handler. Crop runs off the main path and returns to the main thread
     only for logging and thumbnail/clipboard handoff.
-11. Delivery emits `capture delivery outcome=completed|crop-failed|handoff-failed`
+13. Delivery emits `capture delivery outcome=completed|crop-failed|handoff-failed`
     so session completion is not confused with image publication.
-12. Clipboard payload preparation must run off the UI path and publish only the
+14. Clipboard payload preparation must run off the UI path and publish only the
     prepared payload back to `NSPasteboard`. The same prepared payload model
     applies to thumbnail copy, copy-all, pinned-window copy, and drag-out.
-13. Permission checks are not repeated on the normal hotkey path once screen
+15. Permission checks are not repeated on the normal hotkey path once screen
     recording access is known. A background prewarm refreshes the actual state.
-14. Application shutdown is explicit: active overlay windows are dismissed,
+16. Application shutdown is explicit: active overlay windows are dismissed,
     hidden windows and cursor state are restored, owned prewarm/freeze work is
     cancelled, and late async work cannot resurrect capture state.
 
@@ -105,15 +115,18 @@ implementation that violates these rules is a regression, even if it compiles.
 2. Timing logs must not contain screenshot content or user text from the screen.
 3. Tests must cover cursor/frame geometry, crop math, hub clickability, action
    clickability, thumbnail close clicks, and hub reveal states.
-4. Static gates must verify that the old cached-frame capture architecture is
+4. Static gates must verify that the old unsafe stale-cache architecture is
    absent from active code and docs, and that `ScreenFreezePipeline` owns
-   ScreenCaptureKit screenshot work.
+   persistent ScreenCaptureKit stream work.
 5. Static gates must verify ordering: `CaptureSession.start` hides QuickShot
-   windows and starts freeze work, while overlay construction happens only after
-   `capture frozen ready`.
-6. Static gates must verify that the freezer uses `SCScreenshotManager.captureImage`,
-   `SCShareableContent.current`, `showsCursor = false`, tiny prewarm, and capped
-   display batches.
+   windows, records the post-hide freshness boundary, and starts freeze work,
+   while overlay construction happens only after `capture frozen ready`.
+6. Static gates must verify that the freezer uses `SCStream`, `SCStreamOutput`,
+   `SCFrameStatus.complete`, `SCFrameStatus.idle`, a post-hide freshness gate, no
+   idle stop, and no `SCScreenshotManager.captureImage` fallback. A pre-hide
+   complete pixel buffer is valid when a post-hide idle heartbeat proves the
+   display did not change, or when it is the latest complete frame from an active
+   matching stream.
 7. Runtime verification after capture-flow changes should prefer log-only checks
    unless the user explicitly opts into synthetic input. Synthetic scripts must
    keep `QUICKSHOT_ALLOW_SYNTHETIC_INPUT=1`.
@@ -122,9 +135,10 @@ implementation that violates these rules is a regression, even if it compiles.
    clipboard output, cursor restoration, and absence of overlay/cursor pixels in
    the final image.
 9. Performance baselines must be documented separately from the product budget.
-   The 2026-07-05 Mio-style baseline is approximately 590-660 ms to
-   `capture overlay ready` on the warm path, with the dominant cost in
-   `SCScreenshotManager.captureImage`. This does not relax the 200 ms contract.
-10. The next performance gate should split freeze logs into
-    `SCShareableContent.current` time and `SCScreenshotManager.captureImage`
-    time before changing UX again.
+   The 2026-07-05 one-shot baseline was approximately 590-660 ms to
+   `capture overlay ready` on the warm path, with 0.6-3s one-shot probes. This
+   does not relax the 200 ms contract.
+10. Stream-backed performance gates should track `capture stream frame accepted`
+    with its `freshness` source, `capture stream fresh frame missed`, `capture
+    stream latest active frame accepted`, `capture freeze screens ready
+    source=stream`, and `capture overlay ready`.

@@ -7,8 +7,9 @@
 
 1. Нажимаешь `Command-Shift-4`.
 2. QuickShot скрывает свои окна.
-3. `ScreenFreezePipeline` делает свежие full-display snapshots через
-   ScreenCaptureKit, в стиле Mio.
+3. `ScreenFreezePipeline` ждёт свежий сигнал из постоянно прогретого
+   ScreenCaptureKit stream: новый complete frame или idle heartbeat строго после
+   скрытия окон QuickShot.
 4. Overlay появляется уже поверх готовых frozen backdrops.
 5. Ты выделяешь область; итоговый crop берётся только из свежего frozen кадра.
 6. У угла экрана появляется миниатюра, снимок копируется в буфер обмена.
@@ -17,44 +18,45 @@
 
 ## Capture Architecture
 
-Текущий capture-flow - **Mio-style freeze first**. Мы больше не держим
-последний кадр рабочего стола как источник истины для следующего снимка. Каждый
-capture request получает свежий full-display screenshot после trigger, поэтому
-старая картинка из предыдущего снимка не может попасть в backdrop или final
-crop.
+Текущий capture-flow - **persistent stream fresh-frame first**. Мы больше не
+ждём `SCScreenshotManager.captureImage` на обычном hotkey path: он слишком
+часто даёт 0.6-3s задержки на этой машине. Вместо этого
+`ScreenFreezePipeline` постоянно держит тёплый `SCStream` per display. Frozen
+backdrop строится из последнего complete `CVPixelBuffer`, но freshness
+подтверждается строго после trigger и после скрытия окон QuickShot: либо новым
+`SCFrameStatus.complete`, либо `SCFrameStatus.idle`, который по ScreenCaptureKit
+значит, что новый кадр не был создан, потому что дисплей не изменился.
+Если ScreenCaptureKit не присылает post-hide idle heartbeat для статичного
+дисплея в коротком бюджете, допускается latest complete frame из активного
+matching stream с отдельным логом `freshness=latest-active-stream`.
 
-На старте приложение делает tiny prewarm: 2x2 `SCScreenshotManager.captureImage`.
-Это прогревает ScreenCaptureKit путь, но не показывает UI и не блокирует работу.
-На hotkey сессия скрывает видимые окна QuickShot, снимает дисплеи батчами с
-cap `3`, затем показывает overlay с готовыми frozen backdrops.
+Старый stale-frame класс багов закрывается freshness gate: pre-hide pixels не
+могут стать frozen backdrop сами по себе. Если complete frame старше
+`acceptedAfter`, он допускается только при наличии post-hide idle heartbeat или
+как latest frame из живого matching stream. Frames очищаются при остановке
+stream или изменении display, поэтому detached stale buffers не принимаются.
+`acceptedAfter` считается от момента, когда QuickShot уже спрятал свои окна,
+плюс маленький settle-интервал на следующий display frame.
 
-Overlay появляется после `capture frozen ready`, как в Mio. Целевой warm-path
-budget для `capture overlay ready` - до 200 ms, с ориентиром Mio на десятки
-миллисекунд после prewarm. Задержка 2-3 секунды до overlay считается
-performance-регрессом, который нужно устранять в freeze pipeline, а не обходить
-пустым live overlay.
+Stream path ждёт свежий frame только короткий direct-manipulation budget
+(`150 ms`). Если stream не успел, capture быстро завершается ошибкой и
+запускает background maintenance; hot path не уходит в one-shot fallback, потому
+что такой fallback и создавал 3-10 секундные провалы.
+
+Цена этой архитектуры - постоянный macOS screen-capture indicator, пока
+QuickShot запущен. Это сознательный выбор в пользу скорости и предсказуемого
+hot UX.
 
 ### Current Timing Baseline
 
-Последний log-only замер текущей freeze-first версии после перезапуска:
-
-- `capture overlay ready`: стабильный диапазон около 590-660 ms, последний
-  замер 630 ms, стабильное среднее после первых трёх попыток около 644 ms;
-- `capture display ready`: стабильное среднее после первых трёх попыток около
-  551 ms;
-- `capture frozen ready`: стабильное среднее после первых трёх попыток около
-  599 ms;
-- `capture overlay constructed`: стабильное среднее около 45 ms;
-- холодные/ранние выбросы были около 1.24s и 1.75s.
-
-Это лучше прежнего 2-3s поведения, но всё ещё выше продуктового бюджета.
-Основная стоимость сейчас находится в `SCScreenshotManager.captureImage`, а не
-в создании overlay. Следующий speed work должен сначала доказать эффективность
-prewarm и разложить freeze timing на `SCShareableContent.current` отдельно от
-самого `SCScreenshotManager.captureImage`. Если после корректного prewarm
-one-shot ScreenCaptureKit всё равно остаётся около 500-600 ms, путь к
-sub-200 ms UX потребует отдельного архитектурного решения с persistent
-stream/cache, а не только полировки overlay.
+До stream-backed изменения one-shot freeze-first baseline был около
+590-660 ms до `capture overlay ready` на тёплом пути, с выбросами 1.24s и
+1.75s; отдельные probes показывали `SCScreenshotManager.captureImage` в
+диапазоне 0.6-3s. Stream probe показал другую картину: уже запущенный
+`SCStream` отдаёт новые frames или idle heartbeats в коротком бюджете, поэтому
+новый целевой путь - подтвердить post-hide freshness в пределах `150 ms`. Если
+idle callback запаздывает на статичном дисплее, latest-active-stream fallback
+сохраняет UX быстрым без возврата к 0.6-3s one-shot path.
 
 Все окна QuickShot дополнительно выставляют `NSWindow.sharingType = .none`;
 selection overlay, hub, thumbnails, settings и helper windows не должны
@@ -104,7 +106,7 @@ QuickShot, без системного Liquid Glass.
 
 - хаб и action pills, включая live window dispatch;
 - кликабельность controls на отдельных карточках;
-- `ScreenFreezePipeline` prewarm/batch параметры;
+- `ScreenFreezePipeline` persistent stream freshness и запрет one-shot fallback;
 - selection cursor/frame geometry;
 - static gates для Mio-style freeze-before-overlay порядка;
 - off-main crop и prepared clipboard payload path.
@@ -170,7 +172,7 @@ QuickShot забирает эту комбинацию себе. Системн�
 Sources/
   AppDelegate.swift          строка меню + регистрация хоткея
   CaptureController.swift    оркестрация одного цикла захвата
-  ScreenFreezePipeline.swift Mio-style ScreenCaptureKit freezer
+  ScreenFreezePipeline.swift stream-backed ScreenCaptureKit freezer
   Overlay.swift              frozen overlay + selection tool
   CaptureTypes.swift         CaptureError + FrozenScreen crop model
   CoordinateMath.swift       AppKit points -> source pixels

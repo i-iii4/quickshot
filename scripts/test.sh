@@ -138,11 +138,27 @@ fi
 
 rg -q "ScreenFreezePipeline" Sources/CaptureController.swift
 rg -q "captureFrozenScreens" Sources/ScreenFreezePipeline.swift
-rg -q "SCScreenshotManager.captureImage" Sources/ScreenFreezePipeline.swift
+rg -F -q "SCStream(" Sources/ScreenFreezePipeline.swift
+rg -q "SCStreamOutput" Sources/ScreenFreezePipeline.swift
+rg -F -q "SCFrameStatus(rawValue: statusRawValue)" Sources/ScreenFreezePipeline.swift
+rg -q "status == .complete" Sources/ScreenFreezePipeline.swift
+rg -q "CMSampleBufferGetImageBuffer" Sources/ScreenFreezePipeline.swift
+rg -q "frame.receivedAt >= acceptedAfter" Sources/ScreenFreezePipeline.swift
+rg -q "freshFrameDeadlineNanoseconds" Sources/ScreenFreezePipeline.swift
 rg -q "SCShareableContent.current" Sources/ScreenFreezePipeline.swift
+if output="$(awk 'index($0, "func captureFrozenScreens(") { in_body = 1 } in_body { print } index($0, "func shutdown()") { exit }' Sources/ScreenFreezePipeline.swift | rg -n "SCShareableContent\\.current|SCScreenshotManager\\.captureImage")"; then
+  echo "$output"
+  echo "Capture architecture regression: hot stream path must not enumerate shareable content or call one-shot screenshots." >&2
+  exit 1
+fi
 if output="$(rg -n "CaptureImageRace|captureTimeoutNanoseconds|prewarmTimeoutNanoseconds|excludingDesktopWindows\\(false, onScreenWindowsOnly: true\\)" Sources/ScreenFreezePipeline.swift)"; then
   echo "$output"
-  echo "Capture architecture regression: Mio-style full-display freeze must use direct SCScreenshotManager over SCShareableContent.current without hybrid timeout/window-list wrappers." >&2
+  echo "Capture architecture regression: stream-backed freeze must not keep old timeout/window-list wrappers." >&2
+  exit 1
+fi
+if output="$(rg -n "SCScreenshotManager\\.captureImage|source=one-shot|idleStopTask|streamIdleStopNanoseconds" Sources/ScreenFreezePipeline.swift)"; then
+  echo "$output"
+  echo "Capture architecture regression: persistent stream freezer must not keep one-shot fallback or idle stop." >&2
   exit 1
 fi
 if output="$(rg -n "beginLiveSelection|beginOverlay\\(backdrops: \\[:\\]\\)|installFrozenBackdrops|PendingSelection|freezeFailure|finishFailedSelection|capture selection awaiting frozen frame" Sources/CaptureController.swift Sources/Overlay.swift)"; then
@@ -151,6 +167,9 @@ if output="$(rg -n "beginLiveSelection|beginOverlay\\(backdrops: \\[:\\]\\)|inst
   exit 1
 fi
 rg -q "beginFrozenSelection" Sources/CaptureController.swift
+rg -q "let hiddenAt = CFAbsoluteTimeGetCurrent()" Sources/CaptureController.swift
+rg -q "readyAfter: hiddenAt" Sources/CaptureController.swift
+rg -q "requestedAt: startedAt" Sources/CaptureController.swift
 rg -q "capture frozen ready" Sources/CaptureController.swift
 rg -q "capture overlay ready" Sources/CaptureController.swift
 rg -F -q "w.isReleasedWhenClosed = false" Sources/Overlay.swift
@@ -213,16 +232,20 @@ rg -F -q "prewarmTask = nil" Sources/CaptureController.swift
 rg -F -q "session?.shutdown()" Sources/CaptureController.swift
 rg -F -q "freezer.shutdown()" Sources/CaptureController.swift
 rg -F -q "isShuttingDown = true" Sources/ScreenFreezePipeline.swift
-rg -q "capture freeze prewarm ready" Sources/ScreenFreezePipeline.swift
+rg -q "capture stream refresh ready" Sources/ScreenFreezePipeline.swift
+rg -F -q 'refreshWarmStreams(reason: "prewarm")' Sources/ScreenFreezePipeline.swift
+rg -q "capture stream frame accepted" Sources/ScreenFreezePipeline.swift
+rg -q "capture stream fresh frame missed" Sources/ScreenFreezePipeline.swift
+rg -q "capture stream stopped" Sources/ScreenFreezePipeline.swift
 rg -q "capture freeze screens ready" Sources/ScreenFreezePipeline.swift
 rg -q "window.sharingType = .none" Sources/WindowCaptureProtection.swift
 rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/Overlay.swift
 rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/ThumbnailManager.swift
 rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/PinnedWindow.swift
 rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/SettingsWindow.swift
-if output="$(rg -n "ScreenFrameCache|CachedFrame|CVPixelBuffer|SCStream\\(" Sources README.md PRODUCT_CONTRACT.md)"; then
+if output="$(rg -n "ScreenFrameCache|CachedFrame|validatedAt|preparedFrozenScreens" Sources README.md PRODUCT_CONTRACT.md)"; then
   echo "$output"
-  echo "Capture architecture regression: old stream-cache vocabulary must not remain in active contracts or code." >&2
+  echo "Capture architecture regression: old stale-cache vocabulary must not remain in active contracts or code." >&2
   exit 1
 fi
 rg -F -q "config.showsCursor = false" Sources/ScreenFreezePipeline.swift
