@@ -30,11 +30,6 @@ if [ "$REQUIRE_HOTKEY_EVENT" = "1" ] && ! echo "$logs" | rg -q "hotkey event rec
   exit 1
 fi
 
-if ! echo "$logs" | rg -q "capture frozen ready"; then
-  echo "Observed capture verification: frozen screenshot readiness was not observed." >&2
-  exit 1
-fi
-
 if ! echo "$logs" | rg -q "capture overlay ready"; then
   echo "Observed capture verification: overlay readiness was not observed." >&2
   exit 1
@@ -55,8 +50,8 @@ if [ "$ALLOW_PERMISSION_PREFLIGHT" != "1" ] && echo "$logs" | rg -q "capture per
   exit 1
 fi
 
-if echo "$logs" | rg -q "old frame accepted|cache frame accepted|source=responsive|source=validated"; then
-  echo "Observed capture verification: stale cached-frame vocabulary appeared in the fresh-freeze path." >&2
+if echo "$logs" | rg -q "old frame accepted|cache frame accepted|source=responsive|source=validated|latest-active-stream|capture frozen ready"; then
+  echo "Observed capture verification: stale or frozen-frame vocabulary appeared in the live-selection path." >&2
   exit 1
 fi
 
@@ -66,8 +61,8 @@ if echo "$logs" | rg -q "overlay cursor hide failed"; then
 fi
 
 if [ "$REQUIRE_COMPLETED_SELECTION" = "1" ]; then
-  if ! echo "$logs" | rg -q "capture crop complete width=[0-9]+ height=[0-9]+"; then
-    echo "Observed capture verification: completed crop was not observed." >&2
+  if ! echo "$logs" | rg -q "capture fresh region ready width=[0-9]+ height=[0-9]+"; then
+    echo "Observed capture verification: completed fresh region capture was not observed." >&2
     exit 1
   fi
   if ! echo "$logs" | rg -q "capture clipboard copied width=[0-9]+ height=[0-9]+"; then
@@ -93,7 +88,7 @@ if [ "$REQUIRE_COMPLETED_SELECTION" = "1" ]; then
 fi
 
 overlay_ms="$(echo "$logs" | sed -n 's/.*capture overlay ready ms=\([0-9.]*\).*/\1/p' | awk 'max < $1 { max = $1 } END { if (NR) print max }')"
-freeze_ms="$(echo "$logs" | sed -n 's/.*capture frozen ready displays=[0-9]* ms=\([0-9.]*\).*/\1/p' | awk 'max < $1 { max = $1 } END { if (NR) print max }')"
+fresh_ms="$(echo "$logs" | sed -n 's/.*capture fresh region ready width=[0-9]* height=[0-9]* ms=\([0-9.]*\).*/\1/p' | awk 'max < $1 { max = $1 } END { if (NR) print max }')"
 overlay_construct_ms="$(echo "$logs" | sed -n 's/.*capture hot path overlay constructed ms=\([0-9.]*\).*/\1/p' | awk 'max < $1 { max = $1 } END { if (NR) print max }')"
 
 if [ -z "$overlay_ms" ]; then
@@ -112,17 +107,17 @@ if echo "$logs" | rg -q "hotkey event received"; then
 fi
 
 completed_selection="no"
-if echo "$logs" | rg -q "capture crop complete width=[0-9]+ height=[0-9]+"; then
+if echo "$logs" | rg -q "capture fresh region ready width=[0-9]+ height=[0-9]+"; then
   completed_selection="yes"
 fi
 
 delivery_outcome="none"
 if echo "$logs" | rg -q "capture delivery outcome=completed"; then
   delivery_outcome="completed"
-elif echo "$logs" | rg -q "capture delivery outcome=crop-failed"; then
-  delivery_outcome="crop-failed"
+elif echo "$logs" | rg -q "capture delivery outcome=fresh-capture-failed"; then
+  delivery_outcome="fresh-capture-failed"
 elif echo "$logs" | rg -q "capture delivery outcome=handoff-failed"; then
   delivery_outcome="handoff-failed"
 fi
 
-echo "Observed capture verification passed: source=${source} freeze=${freeze_ms:-n/a}ms overlay=${overlay_ms}ms overlayConstruct=${overlay_construct_ms:-n/a}ms completedSelection=${completed_selection} deliveryOutcome=${delivery_outcome} pid=$pid"
+echo "Observed capture verification passed: source=${source} fresh=${fresh_ms:-n/a}ms overlay=${overlay_ms}ms overlayConstruct=${overlay_construct_ms:-n/a}ms completedSelection=${completed_selection} deliveryOutcome=${delivery_outcome} pid=$pid"

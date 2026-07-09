@@ -4,6 +4,82 @@
 
 ---
 
+## 09.07.2026 — Native SDK как кандидат для interface model
+
+Зафиксировано следующее направление: QuickShot нужны не просто новые стили
+кнопок, а более сильная interface model для shell, hub, cards, command pills,
+hover/focus/click behavior и автоматизации.
+
+Добавлен `INTERFACE_MODEL_RESEARCH.md`: Native SDK (`vercel-labs/native`)
+рассматривается как кандидат для отдельного spike. Он не считается заменой
+screenshot engine: global hotkey, ScreenCaptureKit capture, overlay windows,
+cursor ownership, capture exclusion и clipboard остаются macOS-specific
+обязанностями, пока bridge не доказан.
+
+Контракт в `README.md` и `PRODUCT_CONTRACT.md` обновлён: любой новый framework
+должен сохранять immediate selection, fresh final pixels, no stale screenshots,
+no tray blink, no duplicate cursor и кликабельные controls.
+
+Production code в этой записи не менялся.
+
+---
+
+## 07.07.2026 — tray больше не скрывается перед fresh capture
+
+Убран визуальный `orderOut`/restore для tray/hub перед созданием финального
+снимка. Панель больше не должна мигать в момент capture completion.
+
+`FreshRegionCapture` теперь строит `SCContentFilter` с исключением текущего
+QuickShot application через `excludingApplications:exceptingWindows:`. Если
+ScreenCaptureKit не отдаст current application, остаётся fallback по окнам
+того же process ID; `window.sharingType = .none` остаётся дополнительной
+защитой.
+
+Regression gates обновлены: возврат `HiddenAppWindows`/`orderOut` в fresh
+capture path считается регрессом, а app-exclusion filter стал обязательным.
+
+Проверено: `./scripts/test.sh`, `git diff --check`, `./build.sh`.
+
+---
+
+## 07.07.2026 — live selection и fresh region capture после mouse-up
+
+Capture hot path переписан под UX-контракт: hotkey теперь сразу создаёт live
+selection overlay, без ожидания frozen кадра и без внешнего затемнения. До
+начала drag визуально остаётся только кастомный курсор; лёгкий overlay рисуется
+внутри выбранной области.
+
+`ScreenFreezePipeline` удалён из product source set. Финальные пиксели теперь
+получает `FreshRegionCapture`: после mouse-up overlay закрывается, затем
+ScreenCaptureKit делает fresh capture выбранного прямоугольника. Старые
+cached/stream frames больше не являются fallback-источником результата.
+
+Regression gates инвертированы под новый контракт: тесты требуют
+`beginLiveSelection`, `FreshRegionCapture.capture`, внутренний overlay без
+full-screen dim, отсутствие frozen/stream path в активном коде, кликабельность
+hub/thumbnail controls и fresh-region observability.
+
+Проверено: `./scripts/test.sh`, `git diff --check`, `./build.sh`. Runtime
+overlay/hotkey проверка не запускалась, чтобы не перехватывать активный экран.
+
+---
+
+## 06.07.2026 — документация сведена к UX-контракту capture
+
+Документация очищена от описания внутренней capture-архитектуры как продукта.
+Актуальный контракт теперь описывает только пользовательский опыт: hotkey
+мгновенно вводит в selection mode, до drag экран визуально не меняется, а
+overlay появляется только после начала выделения.
+
+Зафиксирована новая инверсия overlay: больше нет внешнего затемнения вокруг
+выделения как целевой модели. Лёгкий overlay должен жить внутри выбранного
+прямоугольника, оставляя внешний экран визуально нетронутым.
+
+Добавлен короткий UX-first план `CAPTURE_REDESIGN_PLAN.md`. Production code в
+этой записи не менялся.
+
+---
+
 ## 06.07.2026 — третий capture после двух thumbnails не должен мигать tray
 
 Live-log показал, что при двух снимках в tray третий hotkey не терялся:

@@ -10,7 +10,6 @@ final class CaptureController {
     nonisolated private static let log = Logger(subsystem: "com.iiii.quickshot", category: "capture")
     private static let permissionGrantedKey = "screenCaptureAccessGranted"
 
-    private let freezer = ScreenFreezePipeline()
     private let thumbnails = ThumbnailManager()
     private var session: CaptureSession?
     private var prewarmTask: Task<Void, Never>?
@@ -22,7 +21,6 @@ final class CaptureController {
         prewarmTask?.cancel()
         let prewarmID = UUID()
         self.prewarmID = prewarmID
-        let freezer = self.freezer
         prewarmTask = Task.detached(priority: .utility) { [weak self] in
             let preflightStartedAt = CFAbsoluteTimeGetCurrent()
             let accessGranted = CGPreflightScreenCaptureAccess()
@@ -34,8 +32,6 @@ final class CaptureController {
                 UserDefaults.standard.set(accessGranted, forKey: Self.permissionGrantedKey)
                 Self.log.info("capture permission preflight granted=\(accessGranted, privacy: .public) ms=\(preflightMs, privacy: .public) phase=prewarm")
             }
-            guard accessGranted, !Task.isCancelled else { return }
-            await freezer.prewarm()
         }
     }
 
@@ -64,7 +60,6 @@ final class CaptureController {
         }
 
         let s = CaptureSession(
-            freezer: freezer,
             onImage: { [weak self] image, screen in
                 self?.deliverCapturedImage(image, on: screen)
             },
@@ -98,7 +93,6 @@ final class CaptureController {
         prewarmID = UUID()
         session?.shutdown()
         session = nil
-        Task { await freezer.shutdown() }
     }
 
     private func handleCaptureError(_ error: Error) {
@@ -139,48 +133,39 @@ final class CaptureController {
     }
 }
 
-/// Stream-backed сессия захвата:
-/// 1. фиксирует раннее состояние мыши;
-/// 2. скрывает окна QuickShot, чтобы они не попали в freeze;
-/// 3. ждёт ScreenCaptureKit stream freshness или fresh one-shot fallback;
-/// 4. показывает selection overlay уже поверх immutable frozen pixels;
-/// 5. кадрирует только этот immutable frozen image.
+/// Live-selection сессия:
+/// 1. сразу показывает прозрачный selection overlay;
+/// 2. пользователь выбирает область на живом экране;
+/// 3. overlay закрывается на mouse-up;
+/// 4. fresh region capture делается после завершения выделения.
 @MainActor
 private final class CaptureSession {
 
     nonisolated private static let log = Logger(subsystem: "com.iiii.quickshot", category: "capture")
 
     private enum Phase {
-        case freezing
         case selecting
         case finishing
         case cancelled
     }
 
-    private let freezer: ScreenFreezePipeline
     private let onImage: (CGImage, NSScreen) -> Void
     private let onError: (Error) -> Void
     private let onEnd: () -> Void
 
-    private var phase: Phase = .freezing
+    private var phase: Phase = .selecting
     private var overlay: OverlayController?
-    private var frozen: [CGDirectDisplayID: FrozenScreen] = [:]
     private var screens: [NSScreen] = []
-    private var displays: [CaptureDisplay] = []
-    private var freezeTask: Task<Void, Never>?
-    private var hiddenWindows: HiddenAppWindows?
+    private var freshCaptureTask: Task<Void, Never>?
     private var gestureSnapshot: CaptureGestureSnapshot?
-    private var preOverlayMouseTracker: PreOverlayMouseTracker?
     private var endOutcome = "unknown"
     private var didEnd = false
     private let startedAt: CFAbsoluteTime
 
-    init(freezer: ScreenFreezePipeline,
-         onImage: @escaping (CGImage, NSScreen) -> Void,
+    init(onImage: @escaping (CGImage, NSScreen) -> Void,
          onError: @escaping (Error) -> Void,
          onEnd: @escaping () -> Void,
          startedAt: CFAbsoluteTime) {
-        self.freezer = freezer
         self.onImage = onImage
         self.onError = onError
         self.onEnd = onEnd
@@ -190,74 +175,25 @@ private final class CaptureSession {
     func start() {
         let snapshot = CaptureGestureSnapshot()
         gestureSnapshot = snapshot
-        preOverlayMouseTracker = PreOverlayMouseTracker(initialMouseDownAt: snapshot.initialMouseDownAt)
         Self.log.info("capture hot path gesture snapshot ready ms=\(self.elapsedMs, privacy: .public)")
 
         let orderedScreens = Self.captureScreens(pointer: snapshot.preferredStartPoint)
         guard !orderedScreens.isEmpty else {
-            freezeFailed(CaptureError.noDisplay)
+            fail(CaptureError.noDisplay)
             return
         }
 
         screens = orderedScreens
-        displays = orderedScreens.map(Self.captureDisplay)
-        let displayList = displays.map { String($0.id) }.joined(separator: ",")
-        Self.log.info("capture freeze pending displays=\(displayList, privacy: .public)")
-
-        hiddenWindows = HiddenAppWindows.hideVisibleApplicationWindows()
-        let hiddenAt = CFAbsoluteTimeGetCurrent()
-        Self.log.info("capture hot path windows hidden ms=\(self.elapsedMs, privacy: .public)")
-        startFreezeTask(displays: displays, readyAfter: hiddenAt)
+        Self.log.info("capture live overlay pending screens=\(orderedScreens.count, privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
+        beginOverlay(initialMouseDownAt: snapshot.initialMouseDownAt)
     }
 
-    private func startFreezeTask(displays: [CaptureDisplay], readyAfter: CFAbsoluteTime) {
-        let freezer = self.freezer
-        let startedAt = self.startedAt
-
-        freezeTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let elapsedMs = { (CFAbsoluteTimeGetCurrent() - startedAt) * 1000 }
-            do {
-                let shots = try await freezer.captureFrozenScreens(displays: displays,
-                                                                    requestedAt: startedAt,
-                                                                    readyAfter: readyAfter)
-                await MainActor.run { [weak self] in
-                    guard let self, !Task.isCancelled else { return }
-                    Self.log.info("capture freeze completed ms=\(elapsedMs(), privacy: .public)")
-                    self.freezeCompleted(shots)
-                }
-            } catch {
-                await MainActor.run { [weak self] in
-                    guard let self, !Task.isCancelled else { return }
-                    Self.log.error("capture freeze failed ms=\(elapsedMs(), privacy: .public) error=\(String(describing: error), privacy: .public)")
-                    self.freezeFailed(error)
-                }
-            }
-        }
-    }
-
-    private func freezeCompleted(_ shots: [FrozenScreen]) {
-        guard isRunning else { return }
-        guard !shots.isEmpty else {
-            freezeFailed(CaptureError.noDisplay)
-            return
-        }
-
-        frozen = Dictionary(uniqueKeysWithValues: shots.map { ($0.displayID, $0) })
-        phase = .selecting
-        Self.log.info("capture frozen ready displays=\(shots.count, privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
-        beginOverlay(backdrops: Dictionary(uniqueKeysWithValues: shots.map { ($0.displayID, $0.image) }))
-    }
-
-    private func beginOverlay(backdrops: [CGDirectDisplayID: CGImage]) {
+    private func beginOverlay(initialMouseDownAt: NSPoint?) {
         let overlayStartedAt = CFAbsoluteTimeGetCurrent()
         let overlay = OverlayController()
         self.overlay = overlay
-        let initialMouseDownAt = preOverlayMouseTracker?.mouseDownSeedPoint()
-        preOverlayMouseTracker?.stop()
-        preOverlayMouseTracker = nil
-        overlay.beginFrozenSelection(
+        overlay.beginLiveSelection(
             screens: screens,
-            backdrops: backdrops,
             initialMouseDownAt: initialMouseDownAt,
             onComplete: { [weak self] rect, screen in
                 self?.selectionCompleted(rect, screen)
@@ -268,19 +204,6 @@ private final class CaptureSession {
         let overlayDurationMs = (CFAbsoluteTimeGetCurrent() - overlayStartedAt) * 1000
         Self.log.info("capture hot path overlay constructed ms=\(overlayDurationMs, privacy: .public)")
         Self.log.info("capture overlay ready ms=\(self.elapsedMs, privacy: .public)")
-    }
-
-    private func freezeFailed(_ error: Error) {
-        guard isRunning else { return }
-        preOverlayMouseTracker?.stop()
-        preOverlayMouseTracker = nil
-        overlay?.dismiss()
-        overlay = nil
-        frozen = [:]
-        phase = .cancelled
-        endOutcome = "failed"
-        onError(error)
-        end()
     }
 
     private func selectionCompleted(_ globalRect: NSRect, _ screen: NSScreen) {
@@ -296,17 +219,6 @@ private final class CaptureSession {
             endOutcome = "ignored-small-selection"
             overlay?.dismiss()
             overlay = nil
-            frozen = [:]
-            end()
-            return
-        }
-
-        let did = Self.displayID(of: screen)
-        guard let shot = frozen[did] else {
-            overlay?.dismiss()
-            overlay = nil
-            frozen = [:]
-            endOutcome = "missing-frozen-frame"
             end()
             return
         }
@@ -314,39 +226,62 @@ private final class CaptureSession {
         phase = .finishing
         overlay?.dismiss()
         overlay = nil
-        frozen = [:]
-        endOutcome = "completed"
-        end()
-        scheduleCropAndDelivery(shot: shot, selection: clamped, screen: screen)
+        Self.log.info("capture selection completed width=\(Int(clamped.width), privacy: .public) height=\(Int(clamped.height), privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
+        startFreshCaptureAndDelivery(selection: clamped, screen: screen)
     }
 
-    private func scheduleCropAndDelivery(shot: FrozenScreen, selection: NSRect, screen: NSScreen) {
+    private func startFreshCaptureAndDelivery(selection: NSRect, screen: NSScreen) {
         let deliver = onImage
+        let reportError = onError
         let startedAt = self.startedAt
-        let deliveryDisplayID = Self.displayID(of: screen)
+        let display = Self.captureDisplay(for: screen)
+        let deliveryDisplayID = display.id
         let requestedWidth = Int(selection.width)
         let requestedHeight = Int(selection.height)
 
-        DispatchQueue.global(qos: .userInitiated).async {
-            let cropped = shot.crop(globalSelection: selection)
-            let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+        Self.log.info("capture fresh region pending display=\(display.id, privacy: .public) width=\(requestedWidth, privacy: .public) height=\(requestedHeight, privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
 
-            DispatchQueue.main.async {
-                guard let cropped else {
-                    Self.log.error("capture crop failed width=\(requestedWidth, privacy: .public) height=\(requestedHeight, privacy: .public) ms=\(elapsedMs, privacy: .public)")
-                    Self.log.error("capture delivery outcome=crop-failed width=\(requestedWidth, privacy: .public) height=\(requestedHeight, privacy: .public) ms=\(elapsedMs, privacy: .public)")
-                    return
+        freshCaptureTask = Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                let image = try await FreshRegionCapture.capture(selection: selection,
+                                                                  display: display,
+                                                                  startedAt: startedAt)
+                let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+                await MainActor.run { [weak self] in
+                    guard let self, self.isRunning else { return }
+                    Self.log.info("capture fresh region ready width=\(image.width, privacy: .public) height=\(image.height, privacy: .public) ms=\(elapsedMs, privacy: .public)")
+                    guard let deliveryScreen = Self.screen(forDisplayID: deliveryDisplayID) ?? NSScreen.main ?? NSScreen.screens.first else {
+                        Self.log.error("capture image handoff failed missing screen display=\(deliveryDisplayID, privacy: .public)")
+                        Self.log.error("capture delivery outcome=handoff-failed display=\(deliveryDisplayID, privacy: .public)")
+                        self.endOutcome = "handoff-failed"
+                        self.end()
+                        return
+                    }
+                    self.endOutcome = "completed"
+                    self.end()
+                    Self.log.info("capture image handoff started width=\(image.width, privacy: .public) height=\(image.height, privacy: .public)")
+                    deliver(image, deliveryScreen)
                 }
-                Self.log.info("capture crop complete width=\(requestedWidth, privacy: .public) height=\(requestedHeight, privacy: .public) ms=\(elapsedMs, privacy: .public)")
-                Self.log.info("capture image handoff started width=\(cropped.width, privacy: .public) height=\(cropped.height, privacy: .public)")
-                guard let deliveryScreen = Self.screen(forDisplayID: deliveryDisplayID) ?? NSScreen.main ?? NSScreen.screens.first else {
-                    Self.log.error("capture image handoff failed missing screen display=\(deliveryDisplayID, privacy: .public)")
-                    Self.log.error("capture delivery outcome=handoff-failed display=\(deliveryDisplayID, privacy: .public)")
-                    return
+            } catch {
+                let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+                await MainActor.run { [weak self] in
+                    guard let self, self.isRunning else { return }
+                    Self.log.error("capture fresh region failed width=\(requestedWidth, privacy: .public) height=\(requestedHeight, privacy: .public) ms=\(elapsedMs, privacy: .public) error=\(String(describing: error), privacy: .public)")
+                    Self.log.error("capture delivery outcome=fresh-capture-failed width=\(requestedWidth, privacy: .public) height=\(requestedHeight, privacy: .public) ms=\(elapsedMs, privacy: .public)")
+                    self.endOutcome = "fresh-capture-failed"
+                    self.end()
+                    reportError(error)
                 }
-                deliver(cropped, deliveryScreen)
             }
         }
+    }
+
+    private func fail(_ error: Error) {
+        guard isRunning else { return }
+        phase = .cancelled
+        endOutcome = "failed"
+        end()
+        onError(error)
     }
 
     private func cancel() {
@@ -355,7 +290,6 @@ private final class CaptureSession {
         endOutcome = "cancelled"
         overlay?.dismiss()
         overlay = nil
-        frozen = [:]
         end()
     }
 
@@ -365,13 +299,12 @@ private final class CaptureSession {
         endOutcome = "shutdown"
         overlay?.dismiss()
         overlay = nil
-        frozen = [:]
         end()
     }
 
     private var isRunning: Bool {
         switch phase {
-        case .freezing, .selecting, .finishing:
+        case .selecting, .finishing:
             return !didEnd
         case .cancelled:
             return false
@@ -381,13 +314,11 @@ private final class CaptureSession {
     private func end() {
         guard !didEnd else { return }
         didEnd = true
-        freezeTask?.cancel()
-        freezeTask = nil
-        preOverlayMouseTracker?.stop()
-        preOverlayMouseTracker = nil
+        freshCaptureTask?.cancel()
+        freshCaptureTask = nil
+        overlay?.dismiss()
+        overlay = nil
         gestureSnapshot = nil
-        hiddenWindows?.restore()
-        hiddenWindows = nil
         Self.log.info("capture end outcome=\(self.endOutcome, privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
         onEnd()
     }
@@ -421,77 +352,6 @@ private final class CaptureSession {
 
     private static func screen(forDisplayID displayID: CGDirectDisplayID) -> NSScreen? {
         NSScreen.screens.first { Self.displayID(of: $0) == displayID }
-    }
-}
-
-@MainActor
-private final class HiddenAppWindows {
-    private let windows: [NSWindow]
-
-    private init(windows: [NSWindow]) {
-        self.windows = windows
-    }
-
-    static func hideVisibleApplicationWindows() -> HiddenAppWindows {
-        let visible = NSApp.windows.filter { window in
-            window.isVisible && !(window is OverlayWindow)
-        }
-        for window in visible {
-            window.orderOut(nil)
-        }
-        if !visible.isEmpty {
-            NSLog("QuickShot capture: hid \(visible.count) app window(s) before freeze")
-        }
-        return HiddenAppWindows(windows: visible)
-    }
-
-    func restore() {
-        for window in windows where !window.isVisible {
-            window.orderFrontRegardless()
-        }
-    }
-}
-
-@MainActor
-private final class PreOverlayMouseTracker {
-    private var monitor: Any?
-    private var firstMouseDownAt: NSPoint?
-    private var latestPoint: NSPoint
-
-    init(initialMouseDownAt: NSPoint?) {
-        self.firstMouseDownAt = initialMouseDownAt
-        self.latestPoint = NSEvent.mouseLocation
-        monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
-            let type = event.type
-            let point = NSEvent.mouseLocation
-            Task { @MainActor [weak self] in
-                self?.record(type: type, point: point)
-            }
-        }
-    }
-
-    func mouseDownSeedPoint() -> NSPoint? {
-        guard CGEventSource.buttonState(.combinedSessionState, button: .left) else { return nil }
-        return firstMouseDownAt ?? latestPoint
-    }
-
-    func stop() {
-        if let monitor {
-            NSEvent.removeMonitor(monitor)
-            self.monitor = nil
-        }
-    }
-
-    private func record(type: NSEvent.EventType, point: NSPoint) {
-        latestPoint = point
-        switch type {
-        case .leftMouseDown:
-            if firstMouseDownAt == nil { firstMouseDownAt = point }
-        case .leftMouseUp:
-            break
-        default:
-            break
-        }
     }
 }
 

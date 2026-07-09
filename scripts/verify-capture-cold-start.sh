@@ -109,13 +109,8 @@ if ! echo "$logs" | rg -q "capture trigger accepted"; then
   exit 1
 fi
 
-if echo "$logs" | rg -q "old frame accepted|cache frame accepted|source=responsive|source=validated"; then
-  echo "Cold-start regression: stale cached-frame vocabulary appeared in the fresh-freeze path." >&2
-  exit 1
-fi
-
-if ! echo "$logs" | rg -q "capture frozen ready"; then
-  echo "Cold-start regression: frozen screenshot readiness was not observed." >&2
+if echo "$logs" | rg -q "old frame accepted|cache frame accepted|source=responsive|source=validated|latest-active-stream|capture frozen ready"; then
+  echo "Cold-start regression: stale or frozen-frame vocabulary appeared in the live-selection path." >&2
   exit 1
 fi
 
@@ -140,6 +135,4 @@ if ! awk -v ms="$overlay_ms" -v max="$MAX_COLD_OVERLAY_MS" 'BEGIN { exit !(ms <=
   exit 1
 fi
 
-freeze_ms="$(echo "$logs" | sed -n 's/.*capture frozen ready displays=[0-9]* ms=\([0-9.]*\).*/\1/p' | tail -1)"
-
-echo "Capture cold-start verification passed: freeze=${freeze_ms:-n/a}ms overlay=${overlay_ms}ms pid=$pid"
+echo "Capture cold-start verification passed: overlay=${overlay_ms}ms pid=$pid"

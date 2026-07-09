@@ -15,31 +15,9 @@ final class OverlayWindow: NSPanel {
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
-/// Статический бэкдроп — замороженный кадр в слое. Выставляется ОДИН раз, не перерисовывается:
-/// GPU композитит его пиксель-в-пиксель, поэтому он не «доезжает» и не дрожит. Мышь пропускаем
-/// хрому, лежащему сверху.
-private final class BackdropView: NSView {
-    init(image: CGImage? = nil) {
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.contentsGravity = .resize
-        layer?.contents = image
-    }
-    required init?(coder: NSCoder) { fatalError() }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    func setImage(_ image: CGImage) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        layer?.contents = image
-        CATransaction.commit()
-    }
-}
-
-/// Хром выделения поверх бэкдропа: затемнение + рамка. Лёгкая перерисовка (без изображения),
-/// поэтому перетаскивание рамки не гоняет полноэкранную картинку. Слоёвый и непрозрачный частично:
-/// `.copy`-clear пробивает прозрачную «дыру» в затемнении — сквозь неё бэкдроп виден на полном
-/// контрасте.
+/// Прозрачный live-хром выделения. До drag он рисует только кастомный курсор.
+/// После начала выделения появляется лёгкая внутренняя заливка выбранной области
+/// и рамка; внешний экран не затемняется.
 final class SelectionView: NSView {
 
     var onComplete: ((NSRect, NSScreen) -> Void)?
@@ -67,6 +45,7 @@ final class SelectionView: NSView {
         let frameStartOffset: CGFloat
         let haloWidth: CGFloat
         let coreWidth: CGFloat
+        let innerOverlayAlpha: CGFloat
     }
 
     struct DebugCrosshairLayer {
@@ -96,6 +75,8 @@ final class SelectionView: NSView {
         static let coreWidth: CGFloat = 1.5
         static let haloColor = NSColor.black.withAlphaComponent(0.6)
         static let coreColor = NSColor.white
+        static let innerOverlayAlpha: CGFloat = 0.10
+        static let innerOverlayColor = NSColor.white.withAlphaComponent(innerOverlayAlpha)
 
         static var frameStartOffset: CGFloat {
             crosshairGap + crosshairArm + frameSeparator
@@ -111,12 +92,15 @@ final class SelectionView: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        wantsLayer = true                 // своя прозрачная backing-store для .copy-дыры над бэкдропом
+        wantsLayer = true
+        layer?.isOpaque = false
+        layer?.backgroundColor = NSColor.clear.cgColor
         layer?.addSublayer(crosshair)
         crosshair.isHidden = true
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    override var isOpaque: Bool { false }
     override var acceptsFirstResponder: Bool { true }
 
     // Без этого первый клик по оверлею экрана, который не key (на втором мониторе оверлеи кроме
@@ -299,8 +283,6 @@ final class SelectionView: NSView {
         crosshair.isHidden = true
         guard let win = window, let screen = screenRef else { onCancel?(); return }
         let rect = currentRect
-        // Слишком маленькое выделение (или простой клик) трактуем как отмену.
-        guard rect.width >= 3, rect.height >= 3 else { onCancel?(); return }
         let winRect = convert(rect, to: nil)
         let globalRect = win.convertToScreen(winRect)          // -> глобальные точки AppKit
         onComplete?(globalRect, screen)
@@ -318,7 +300,8 @@ final class SelectionView: NSView {
                      frameSeparator: Metrics.frameSeparator,
                      frameStartOffset: Metrics.frameStartOffset,
                      haloWidth: Metrics.haloWidth,
-                     coreWidth: Metrics.coreWidth)
+                     coreWidth: Metrics.coreWidth,
+                     innerOverlayAlpha: Metrics.innerOverlayAlpha)
     }
 
     func debugBeginAndDrag(from start: NSPoint, to current: NSPoint) {
@@ -379,14 +362,13 @@ final class SelectionView: NSView {
     override func cancelOperation(_ sender: Any?) { onCancel?() }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.black.withAlphaComponent(0.30).setFill()
-        bounds.fill()
+        NSColor.clear.setFill()
+        dirtyRect.fill(using: .copy)
 
         guard hasDrawableSelection else { return }
 
-        // Прозрачная «дыра» на месте выделения: сквозь неё бэкдроп виден без затемнения.
-        NSColor.clear.set()
-        currentRect.fill(using: .copy)
+        Metrics.innerOverlayColor.setFill()
+        currentRect.fill()
 
         let activeCorner = self.activeCorner(in: currentRect)
         strokeSelectionOutline(currentRect, activeCorner: activeCorner)
@@ -486,8 +468,8 @@ final class SelectionView: NSView {
     }
 }
 
-/// Создаёт и удерживает по одному оверлею на КАЖДЫЙ экран (origin и backingScaleFactor у дисплеев
-/// разные — одно окно на всё нельзя). Каждый оверлей = бэкдроп-слой (заморозка) + хром выделения.
+/// Создаёт и удерживает по одному live-оверлею на КАЖДЫЙ экран (origin и
+/// backingScaleFactor у дисплеев разные — одно окно на всё нельзя).
 final class OverlayController {
 
     private static let log = Logger(subsystem: "com.iiii.quickshot", category: "capture")
@@ -502,7 +484,6 @@ final class OverlayController {
     private var onComplete: ((NSRect, NSScreen) -> Void)?
     private var onCancel: (() -> Void)?
     private var selectionViews: [SelectionView] = []
-    private var backdropViews: [CGDirectDisplayID: BackdropView] = [:]
     private weak var activeGlobalSelection: SelectionView?
     private var completedSelection = false
     private var isDismissed = false
@@ -511,22 +492,20 @@ final class OverlayController {
         dismiss()
     }
 
-    /// Показать selection overlay уже поверх готовых frozen snapshots. Это Mio-style
-    /// путь: сначала свежая заморозка, затем интерактивная рамка и кастомный курсор.
-    func beginFrozenSelection(screens: [NSScreen],
-                              backdrops: [CGDirectDisplayID: CGImage],
-                              initialMouseDownAt: NSPoint?,
-                              onComplete: @escaping (NSRect, NSScreen) -> Void,
-                              onCancel: @escaping () -> Void) {
+    /// Показать прозрачный live selection overlay. До начала drag визуально
+    /// остаётся только кастомный курсор; внутренняя заливка появляется уже на
+    /// активном selection rect.
+    func beginLiveSelection(screens: [NSScreen],
+                            initialMouseDownAt: NSPoint?,
+                            onComplete: @escaping (NSRect, NSScreen) -> Void,
+                            onCancel: @escaping () -> Void) {
         begin(screens: screens,
-              backdrops: backdrops,
               onComplete: onComplete,
               onCancel: onCancel,
               pendingMouseDownAt: initialMouseDownAt)
     }
 
     private func begin(screens: [NSScreen],
-                       backdrops: [CGDirectDisplayID: CGImage],
                        onComplete: @escaping (NSRect, NSScreen) -> Void,
                        onCancel: @escaping () -> Void,
                        pendingMouseDownAt: NSPoint?) {
@@ -534,9 +513,6 @@ final class OverlayController {
         self.onCancel = onCancel
 
         for screen in screens {
-            let did = CGDirectDisplayID(
-                (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
-
             // БЕЗ параметра screen: — иначе contentRect трактуется относительно origin экрана, и на
             // дисплее с отрицательным origin смещение применяется дважды. contentRect глобальный.
             let w = OverlayWindow(contentRect: screen.frame, styleMask: [.borderless],
@@ -557,13 +533,9 @@ final class OverlayController {
             w.collectionBehavior = [.fullScreenAuxiliary, .stationary]
             w.ignoresMouseEvents = false
             w.acceptsMouseMovedEvents = true
-            w.animationBehavior = .none                  // без влёта/fade — заморозка появляется разом
+            w.animationBehavior = .none
 
             let bounds = NSRect(origin: .zero, size: screen.frame.size)
-            let backdropView = BackdropView(image: backdrops[did])
-            backdropView.frame = bounds
-            backdropView.autoresizingMask = [.width, .height]
-            backdropViews[did] = backdropView
 
             let chrome = SelectionView(frame: bounds)
             chrome.autoresizingMask = [.width, .height]
@@ -572,15 +544,12 @@ final class OverlayController {
             chrome.onCancel = { [weak self] in self?.onCancel?() }
             selectionViews.append(chrome)
 
-            let container = NSView(frame: bounds)
-            container.addSubview(backdropView)           // статичный фон снизу
-            container.addSubview(chrome)                 // лёгкий хром сверху
-            w.contentView = container
+            w.contentView = chrome
             windows.append(w)
         }
 
         for w in windows { w.orderFrontRegardless() }
-        Self.log.info("overlay begin windows=\(self.windows.count, privacy: .public) frozenBackdrops=\(backdrops.count, privacy: .public)")
+        Self.log.info("overlay begin windows=\(self.windows.count, privacy: .public) mode=live")
         hideSystemCursor()
         selectionView(containing: NSEvent.mouseLocation)?.moveCrosshair(atGlobalPoint: NSEvent.mouseLocation)
 
@@ -710,7 +679,6 @@ final class OverlayController {
         }
         windows.removeAll()
         selectionViews.removeAll()
-        backdropViews.removeAll()
         activeGlobalSelection = nil
         completedSelection = false
         onComplete = nil

@@ -5,7 +5,7 @@ struct CaptureHotPathStaticTests {
     static func main() {
         do {
             let captureSource = try String(contentsOfFile: "Sources/CaptureController.swift", encoding: .utf8)
-            let freezeSource = try String(contentsOfFile: "Sources/ScreenFreezePipeline.swift", encoding: .utf8)
+            let freshRegionSource = try String(contentsOfFile: "Sources/FreshRegionCapture.swift", encoding: .utf8)
             let overlaySource = try String(contentsOfFile: "Sources/Overlay.swift", encoding: .utf8)
             let appDelegateSource = try String(contentsOfFile: "Sources/AppDelegate.swift", encoding: .utf8)
             let hotKeySource = try String(contentsOfFile: "Sources/GlobalHotKey.swift", encoding: .utf8)
@@ -15,11 +15,12 @@ struct CaptureHotPathStaticTests {
             let thumbnailWindowSource = try String(contentsOfFile: "Sources/ThumbnailWindow.swift", encoding: .utf8)
             let pinnedWindowSource = try String(contentsOfFile: "Sources/PinnedWindow.swift", encoding: .utf8)
 
-            try testOldUnsafeCacheIsRemoved(captureSource: captureSource)
-            try testFreshStreamFreezePrecedesOverlay(captureSource)
-            try testStreamBackedFreezer(freezeSource)
-            try testOverlayKeepsQuickShotSelectionContract(overlaySource: overlaySource,
-                                                           protectionSource: protectionSource)
+            try testFrozenPipelineIsOutOfHotPath(captureSource: captureSource)
+            try testLiveSelectionStartsImmediately(captureSource)
+            try testFreshRegionCaptureAfterSelection(captureSource: captureSource,
+                                                     freshRegionSource: freshRegionSource)
+            try testOverlayKeepsLiveSelectionContract(overlaySource: overlaySource,
+                                                      protectionSource: protectionSource)
             try testCompletedCaptureIsObservable(captureSource: captureSource)
             try testClipboardPayloadPreparationIsCentralized(clipboardSource: clipboardSource,
                                                              thumbnailManagerSource: thumbnailManagerSource,
@@ -29,8 +30,7 @@ struct CaptureHotPathStaticTests {
                                                   hotKeySource: hotKeySource,
                                                   captureSource: captureSource)
             try testCaptureShutdownIsExplicit(appDelegateSource: appDelegateSource,
-                                               captureSource: captureSource,
-                                               freezeSource: freezeSource)
+                                               captureSource: captureSource)
             print("CaptureHotPathStaticTests: passed")
         } catch {
             fputs("CaptureHotPathStaticTests failed: \(error)\n", stderr)
@@ -38,123 +38,93 @@ struct CaptureHotPathStaticTests {
         }
     }
 
-    private static func testOldUnsafeCacheIsRemoved(captureSource: String) throws {
-        try require(!FileManager.default.fileExists(atPath: "Sources/ScreenFrameCache.swift"),
-                    "Old ScreenFrameCache.swift must not coexist with the stream-backed freezer")
-        try require(captureSource.contains("private let freezer = ScreenFreezePipeline()"),
-                    "CaptureController must own the fresh frame freezer")
+    private static func testFrozenPipelineIsOutOfHotPath(captureSource: String) throws {
+        try require(!FileManager.default.fileExists(atPath: "Sources/ScreenFreezePipeline.swift"),
+                    "ScreenFreezePipeline must not remain in the product source set")
+        try require(!FileManager.default.fileExists(atPath: "Tests/ScreenFreezePipelineBehaviorTests.swift"),
+                    "ScreenFreezePipeline tests must not remain product gates after the UX reset")
+        for forbidden in ["ScreenFreezePipeline",
+                          "captureFrozenScreens",
+                          "beginFrozenSelection",
+                          "FrozenScreen",
+                          "startFreezeTask",
+                          "capture frozen ready",
+                          "latest-active-stream"] {
+            try require(!captureSource.contains(forbidden),
+                        "CaptureController must not keep old frozen/stream token \(forbidden)")
+        }
         try require(!captureSource.contains("ScreenFrameCache"),
                     "CaptureController must not depend on stale stream-cache architecture")
-        try require(!captureSource.contains("waitForFrozenScreen"),
-                    "CaptureSession must not wait for cached frames")
-        try require(!captureSource.contains("rectSnapshotFrozenScreen"),
-                    "Capture must not keep the old cache-owned rect snapshot bridge")
     }
 
-    private static func testFreshStreamFreezePrecedesOverlay(_ source: String) throws {
+    private static func testLiveSelectionStartsImmediately(_ source: String) throws {
         let startBody = try functionBody(named: "start", in: source, after: "private final class CaptureSession")
-        try require(startBody.contains("HiddenAppWindows.hideVisibleApplicationWindows()"),
-                    "QuickShot windows must be hidden before accepting a fresh frame")
-        try require(startBody.contains("let hiddenAt = CFAbsoluteTimeGetCurrent()"),
-                    "CaptureSession.start must mark the post-hide freshness boundary")
-        try require(startBody.contains("startFreezeTask(displays: displays, readyAfter: hiddenAt)"),
-                    "CaptureSession.start must explicitly begin the freeze task")
-        try require(!startBody.contains("beginOverlay("),
-                    "Capture must not show selection UI before frozen screenshots are ready")
-        guard let hideRange = startBody.range(of: "HiddenAppWindows.hideVisibleApplicationWindows()"),
-              let hiddenAtRange = startBody.range(of: "let hiddenAt = CFAbsoluteTimeGetCurrent()"),
-              let freezeRange = startBody.range(of: "startFreezeTask(displays: displays, readyAfter: hiddenAt)") else {
-            throw Failure("CaptureSession.start is missing stream fresh-frame ordering anchors")
-        }
-        try require(hideRange.lowerBound < freezeRange.lowerBound,
-                    "CaptureSession.start must hide QuickShot windows before fresh frame work")
-        try require(hiddenAtRange.lowerBound < freezeRange.lowerBound,
-                    "CaptureSession.start must pass the post-hide boundary into the freezer")
-
-        let freezeTaskBody = try functionBody(named: "startFreezeTask", in: source, after: "private final class CaptureSession")
-        try require(freezeTaskBody.contains("requestedAt: startedAt"),
-                    "Freezer must receive the original trigger timestamp")
-        try require(freezeTaskBody.contains("readyAfter: readyAfter"),
-                    "Freezer must receive the post-hide freshness boundary")
-
-        let freezeCompletedBody = try functionBody(named: "freezeCompleted", in: source, after: "private final class CaptureSession")
-        try require(freezeCompletedBody.contains("capture frozen ready"),
-                    "Frozen readiness must stay observable")
-        try require(freezeCompletedBody.contains("beginOverlay(backdrops:"),
-                    "Selection UI must be constructed only after frozen screenshots are available")
+        try require(startBody.contains("CaptureGestureSnapshot()"),
+                    "CaptureSession.start must seed selection timing from the trigger gesture")
+        try require(startBody.contains("beginOverlay(initialMouseDownAt: snapshot.initialMouseDownAt)"),
+                    "CaptureSession.start must enter live selection immediately")
+        try require(!startBody.contains("FreshRegionCapture.capture"),
+                    "CaptureSession.start must not do screenshot work before selection")
+        try require(!startBody.contains("HiddenAppWindows.hideVisibleApplicationWindows()"),
+                    "CaptureSession.start must not visually change the screen by hiding app windows before drag")
 
         let beginOverlayBody = try functionBody(named: "beginOverlay", in: source, after: "private final class CaptureSession")
-        try require(beginOverlayBody.contains("beginFrozenSelection"),
-                    "Overlay must receive ready frozen backdrops at construction")
-        try require(!beginOverlayBody.contains("beginLiveSelection"),
-                    "CaptureController must not use the hybrid live overlay path")
+        try require(beginOverlayBody.contains("beginLiveSelection"),
+                    "Overlay must use the live selection entry point")
         try require(beginOverlayBody.contains("capture overlay ready"),
-                    "Overlay readiness must stay logged")
-        try require(beginOverlayBody.contains("preOverlayMouseTracker?.mouseDownSeedPoint()"),
-                    "Fast hotkey+drag should seed the selection from pre-overlay mouse state")
+                    "Overlay readiness must stay observable")
+        try require(!beginOverlayBody.contains("beginFrozenSelection"),
+                    "Overlay construction must not wait for frozen screenshots")
     }
 
-    private static func testStreamBackedFreezer(_ source: String) throws {
-        try require(source.contains("actor ScreenFreezePipeline"),
-                    "Fresh freeze work should live in an isolated pipeline")
-        try require(source.contains("func prewarm() async"),
-                    "Pipeline must keep startup prewarm")
-        try require(source.contains("func captureFrozenScreens(displays requestedDisplays: [CaptureDisplay],"),
-                    "Pipeline must expose full-display fresh freeze capture")
-        try require(source.contains("requestedAt: CFAbsoluteTime") && source.contains("readyAfter: CFAbsoluteTime"),
-                    "Freeze API must carry trigger and post-hide boundaries")
-        try require(source.contains("SCStream("),
-                    "Pipeline must keep short-lived warm streams for fast captures")
-        try require(source.contains("SCStreamOutput"),
-                    "Pipeline must receive stream frames through SCStreamOutput")
-        try require(source.contains("SCFrameStatus(rawValue: statusRawValue)") && source.contains("status == .complete"),
-                    "Pipeline must capture complete stream frames")
-        try require(source.contains("status == .idle") && source.contains("recordIdleFrame"),
-                    "Pipeline must treat ScreenCaptureKit idle frames as post-hide freshness heartbeats")
-        try require(source.contains("CMSampleBufferGetImageBuffer"),
-                    "Pipeline must store stream pixel buffers instead of old prepared screenshots")
-        try require(source.contains("frame.receivedAt >= acceptedAfter"),
-                    "Pipeline must prefer post-trigger/post-hide complete stream frames")
-        try require(source.contains("idleAt >= acceptedAfter"),
-                    "Pipeline must accept a post-hide idle heartbeat when the display has not changed")
-        try require(source.contains("latestIdleHeartbeats"),
-                    "Pipeline must keep idle freshness separate from complete pixel buffers")
-        try require(source.contains("captureOneShotScreens(displays:")
-                    && source.contains("SCScreenshotManager.captureImage")
-                    && source.contains("capture stream fallback to one-shot")
-                    && source.contains("source=one-shot-fallback"),
-                    "Pipeline must fall back to a fresh one-shot capture when stream freshness is missing")
-        try require(!source.contains("latestActiveStreamFrame")
-                    && !source.contains("freshness: .latestActiveStream")
-                    && !source.contains("latest-active-stream"),
-                    "Pipeline must not accept stale latest active stream frames")
-        try require(source.contains("freshFrameDeadlineNanoseconds"),
-                    "Stream path must have a short deadline")
-        try require(source.contains("SCShareableContent.current"),
-                    "Background stream refresh should use SCShareableContent.current")
-        try require(source.contains("config.showsCursor = false"),
-                    "Frozen frames must not bake the system cursor")
-        try require(source.contains("capture freeze screens ready"),
-                    "Freeze timing must be observable")
-        try require(source.contains("capture freeze screens ready source=stream"),
-                    "Fast stream completion must be observable")
-        try require(source.contains("capture freeze screens ready source=one-shot-fallback"),
-                    "Fresh fallback completion must be observable")
-        try require(!source.contains("idleStopTask") && !source.contains("streamIdleStopNanoseconds"),
-                    "Persistent stream mode must not keep the old idle-stop implementation")
-        for forbidden in ["CachedFrame", "validatedAt", "preparedFrozenScreens", "CaptureImageRace"] {
-            try require(!source.contains(forbidden), "Fresh freezer must not keep old unsafe cache token \(forbidden)")
+    private static func testFreshRegionCaptureAfterSelection(captureSource: String,
+                                                             freshRegionSource: String) throws {
+        let completeBody = try functionBody(named: "completeSelection", in: captureSource, after: "private final class CaptureSession")
+        try require(completeBody.contains("startFreshCaptureAndDelivery(selection: clamped, screen: screen)"),
+                    "Mouse-up must hand off to fresh region capture")
+        try require(!completeBody.contains("FreshRegionCapture.capture"),
+                    "Mouse-up handler must not synchronously capture pixels")
+
+        let freshBody = try functionBody(named: "startFreshCaptureAndDelivery", in: captureSource, after: "private final class CaptureSession")
+        try require(!freshBody.contains("HiddenAppWindows") && !freshBody.contains("orderOut"),
+                    "Fresh capture must exclude QuickShot through ScreenCaptureKit, not hide visible UI")
+        try require(freshBody.contains("Task.detached(priority: .userInitiated)"),
+                    "Fresh capture must leave the main actor")
+        try require(freshBody.contains("FreshRegionCapture.capture(selection: selection"),
+                    "Completed selection must use FreshRegionCapture")
+        for token in ["capture fresh region pending",
+                      "capture fresh region ready",
+                      "capture fresh region failed",
+                      "capture delivery outcome=fresh-capture-failed"] {
+            try require(freshBody.contains(token), "Fresh capture must keep log token \(token)")
         }
+
+        try require(freshRegionSource.contains("SCScreenshotManager.captureImage"),
+                    "FreshRegionCapture must own the ScreenCaptureKit screenshot call")
+        try require(freshRegionSource.contains("config.sourceRect = spec.sourceRect"),
+                    "FreshRegionCapture must request the selected region, not a full frozen desktop")
+        try require(freshRegionSource.contains("config.showsCursor = false"),
+                    "Fresh region capture must not bake the system cursor")
+        try require(freshRegionSource.contains("SCShareableContent.current"),
+                    "FreshRegionCapture must resolve the current display at completion time")
+        try require(freshRegionSource.contains("excludingApplications: [currentApplication]"),
+                    "FreshRegionCapture must exclude the QuickShot application from the filter")
+        try require(freshRegionSource.contains("exceptingWindows: []"),
+                    "FreshRegionCapture must not except QuickShot windows back into the app exclusion")
+        try require(freshRegionSource.contains("owningApplication?.processID == processID"),
+                    "FreshRegionCapture must keep a same-process window fallback")
+        try require(freshRegionSource.contains("image.cropping(to: px)"),
+                    "FreshRegionCapture must guard against APIs returning a full-display image")
     }
 
-    private static func testOverlayKeepsQuickShotSelectionContract(overlaySource: String,
-                                                                   protectionSource: String) throws {
-        try require(overlaySource.contains("func beginFrozenSelection"),
-                    "Overlay must expose a frozen-start path")
-        try require(!overlaySource.contains("func beginLiveSelection"),
-                    "Overlay must not keep the hybrid live-start entry point")
-        try require(!overlaySource.contains("func installFrozenBackdrops"),
-                    "Frozen backdrops must be present when the overlay is constructed")
+    private static func testOverlayKeepsLiveSelectionContract(overlaySource: String,
+                                                              protectionSource: String) throws {
+        try require(overlaySource.contains("func beginLiveSelection"),
+                    "Overlay must expose a live-start path")
+        try require(!overlaySource.contains("func beginFrozenSelection"),
+                    "Overlay must not expose the old frozen-start path")
+        try require(!overlaySource.contains("BackdropView"),
+                    "Live overlay must not keep frozen backdrop views")
         try require(overlaySource.contains("WindowCaptureProtection.excludeFromScreenCapture(w)"),
                     "Overlay windows must opt out of screen capture")
         try require(protectionSource.contains("window.sharingType = .none"),
@@ -165,27 +135,26 @@ struct CaptureHotPathStaticTests {
                     "Selection mode must keep QuickShot's custom vector crosshair")
         try require(overlaySource.contains("frameStartOffset"),
                     "Selection frame must keep the cursor/frame separator geometry")
+        try require(overlaySource.contains("innerOverlayColor"),
+                    "Selection view must draw the lightweight inner overlay")
+        try require(overlaySource.contains("currentRect.fill()"),
+                    "Selection view must fill only the selected rect")
+        try require(!overlaySource.contains("bounds.fill()"),
+                    "Selection view must not draw a full-screen outside dim")
         try require(overlaySource.contains("w.collectionBehavior = [.fullScreenAuxiliary, .stationary]"),
                     "Selection overlay must stay scoped to the current Space")
         try require(!overlaySource.contains(".canJoinAllSpaces"),
-                    "Selection overlay must not follow the user across Spaces with stale pixels")
+                    "Selection overlay must not follow the user across Spaces")
     }
 
     private static func testCompletedCaptureIsObservable(captureSource: String) throws {
-        let cropBody = try functionBody(named: "scheduleCropAndDelivery", in: captureSource, after: "private final class CaptureSession")
-        try require(cropBody.contains("DispatchQueue.global(qos: .userInitiated).async"),
-                    "Completed capture crop must leave the main actor before doing CGImage cropping")
-        try require(cropBody.contains("shot.crop(globalSelection: selection)"),
-                    "Completed capture must crop the immutable frozen frame")
-        try require(cropBody.contains("DispatchQueue.main.async"),
-                    "Completed capture must return to the main thread only for logging and delivery")
-        for token in ["capture crop complete",
-                      "capture crop failed",
-                      "capture delivery outcome=crop-failed",
-                      "capture image handoff failed missing screen",
-                      "capture delivery outcome=handoff-failed"] {
-            try require(cropBody.contains(token), "Completed capture must keep log token \(token)")
-        }
+        let freshBody = try functionBody(named: "startFreshCaptureAndDelivery", in: captureSource, after: "private final class CaptureSession")
+        try require(freshBody.contains("DispatchQueue.main") == false,
+                    "Fresh capture should use Swift tasks, not nested dispatch crop code")
+        try require(freshBody.contains("capture image handoff failed missing screen"),
+                    "Completed capture must keep missing-screen handoff logging")
+        try require(freshBody.contains("capture delivery outcome=handoff-failed"),
+                    "Completed capture must have handoff failure outcome")
 
         let deliveryBody = try functionBody(named: "deliverCapturedImage", in: captureSource, after: "final class CaptureController")
         try require(deliveryBody.contains("capture thumbnail added"),
@@ -249,19 +218,16 @@ struct CaptureHotPathStaticTests {
     }
 
     private static func testCaptureShutdownIsExplicit(appDelegateSource: String,
-                                                      captureSource: String,
-                                                      freezeSource: String) throws {
+                                                      captureSource: String) throws {
         let terminationBody = try functionBody(named: "applicationWillTerminate", in: appDelegateSource, after: "final class AppDelegate")
         try require(terminationBody.contains("capture.shutdown()"),
-                    "App termination must explicitly shut down active capture UI and freeze work")
+                    "App termination must explicitly shut down active capture UI")
 
         let controllerShutdown = try functionBody(named: "shutdown", in: captureSource, after: "final class CaptureController")
         try require(controllerShutdown.contains("session?.shutdown()"),
                     "CaptureController.shutdown must dismiss any active capture session")
         try require(controllerShutdown.contains("prewarmTask?.cancel()") && controllerShutdown.contains("prewarmTask = nil"),
                     "CaptureController.shutdown must cancel owned startup prewarm work")
-        try require(controllerShutdown.contains("freezer.shutdown()"),
-                    "CaptureController.shutdown must stop ScreenFreezePipeline work")
 
         let sessionShutdown = try functionBody(named: "shutdown", in: captureSource, after: "private final class CaptureSession")
         try require(sessionShutdown.contains("endOutcome = \"shutdown\""),
@@ -269,9 +235,11 @@ struct CaptureHotPathStaticTests {
         try require(sessionShutdown.contains("overlay?.dismiss()"),
                     "CaptureSession.shutdown must dismiss active fullscreen overlay windows")
 
-        let freezerShutdown = try functionBody(named: "shutdown", in: freezeSource, after: "actor ScreenFreezePipeline")
-        try require(freezerShutdown.contains("isShuttingDown = true"),
-                    "ScreenFreezePipeline must reject late async work after shutdown")
+        let endBody = try functionBody(named: "end", in: captureSource, after: "private final class CaptureSession")
+        try require(endBody.contains("freshCaptureTask?.cancel()"),
+                    "CaptureSession.end must cancel late fresh capture work")
+        try require(!captureSource.contains("HiddenAppWindows"),
+                    "CaptureSession must not hide and restore QuickShot windows during capture")
     }
 
     private static func functionBody(named name: String, in source: String, after marker: String) throws -> String {

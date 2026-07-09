@@ -218,18 +218,13 @@ sleep 0.5
 logs="$(/usr/bin/log show --last 20s --info --debug --style compact --predicate "$predicate" 2>/dev/null || true)"
 echo "$logs" | tail -100
 
-if echo "$logs" | rg -q "old frame accepted|cache frame accepted|source=responsive|source=validated"; then
-  echo "Selection output regression: stale cached-frame vocabulary appeared in the fresh-freeze path." >&2
+if echo "$logs" | rg -q "old frame accepted|cache frame accepted|source=responsive|source=validated|latest-active-stream|capture frozen ready"; then
+  echo "Selection output regression: stale or frozen-frame vocabulary appeared in the live-selection path." >&2
   exit 1
 fi
 
-if ! echo "$logs" | rg -q "capture frozen ready"; then
-  echo "Selection output regression: frozen screenshot readiness was not observed." >&2
-  exit 1
-fi
-
-if ! echo "$logs" | rg -q "capture crop complete width=[0-9]+ height=[0-9]+"; then
-  echo "Selection output regression: crop completion was not observed." >&2
+if ! echo "$logs" | rg -q "capture fresh region ready width=[0-9]+ height=[0-9]+"; then
+  echo "Selection output regression: fresh region capture was not observed." >&2
   exit 1
 fi
 
@@ -254,10 +249,9 @@ if ! echo "$logs" | rg -q "overlay cursor restored"; then
 fi
 
 overlay_ms="$(echo "$logs" | sed -n 's/.*capture overlay ready ms=\([0-9.]*\).*/\1/p' | tail -1)"
-freeze_ms="$(echo "$logs" | sed -n 's/.*capture frozen ready displays=[0-9]* ms=\([0-9.]*\).*/\1/p' | tail -1)"
 if ! awk -v ms="$overlay_ms" -v max="$MAX_OVERLAY_MS" 'BEGIN { exit !(ms <= max) }'; then
   echo "Selection output regression: overlay ready took ${overlay_ms}ms, max ${MAX_OVERLAY_MS}ms." >&2
   exit 1
 fi
 
-echo "Capture selection output verification passed: freeze=${freeze_ms:-n/a}ms overlay=${overlay_ms}ms pid=$pid"
+echo "Capture selection output verification passed: overlay=${overlay_ms}ms pid=$pid"

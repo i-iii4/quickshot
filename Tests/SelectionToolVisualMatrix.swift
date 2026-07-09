@@ -100,11 +100,8 @@ private final class SelectionPreviewCell: NSView {
         let offset = canvas.origin
         let selected = snapshot.currentRect.offsetBy(dx: offset.x, dy: offset.y)
 
-        let dim = NSBezierPath(rect: canvas)
-        dim.append(NSBezierPath(rect: selected))
-        dim.windingRule = .evenOdd
-        NSColor.black.withAlphaComponent(0.30).setFill()
-        dim.fill()
+        NSColor.white.withAlphaComponent(metrics.innerOverlayAlpha).setFill()
+        selected.fill()
 
         strokeOutline(points: snapshot.outlinePoints.map { NSPoint(x: $0.x + offset.x, y: $0.y + offset.y) },
                       width: metrics.haloWidth,

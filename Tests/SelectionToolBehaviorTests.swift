@@ -34,8 +34,11 @@ struct SelectionToolBehaviorTests {
         try require(metrics.frameStartOffset == 18, "Frame start offset must be gap + arm + separator")
         try require(metrics.haloWidth == 3.5, "Halo width changed unexpectedly")
         try require(metrics.coreWidth == 1.5, "Core width changed unexpectedly")
+        try require(metrics.innerOverlayAlpha == 0.10, "Inner overlay alpha changed unexpectedly")
         try require(metrics.frameSeparator > metrics.haloWidth,
                     "Frame separator must visually separate the cursor caps from the frame")
+        try require(metrics.innerOverlayAlpha < 0.16,
+                    "Inner overlay must stay lightweight and content-preserving")
     }
 
     private static func testCrosshairStaysStable() throws {

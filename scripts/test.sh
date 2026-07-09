@@ -8,10 +8,9 @@ SDK="$(xcrun --show-sdk-path)"
 OUT="$(mktemp -t quickshot-hub-tests)"
 HUB_LIVE_OUT="$(mktemp -t quickshot-hub-live-tests)"
 THUMBNAIL_LIVE_OUT="$(mktemp -t quickshot-thumbnail-live-tests)"
-FREEZE_OUT="$(mktemp -t quickshot-freeze-tests)"
 SELECTION_OUT="$(mktemp -t quickshot-selection-tests)"
 CAPTURE_HOT_PATH_OUT="$(mktemp -t quickshot-capture-hot-path-tests)"
-trap 'rm -f "$OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$FREEZE_OUT" "$SELECTION_OUT" "$CAPTURE_HOT_PATH_OUT"' EXIT
+trap 'rm -f "$OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CAPTURE_HOT_PATH_OUT"' EXIT
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -71,25 +70,6 @@ xcrun swiftc \
   -D TESTING \
   -framework AppKit \
   -framework CoreGraphics \
-  -framework CoreImage \
-  -framework CoreMedia \
-  -framework CoreVideo \
-  -framework ScreenCaptureKit \
-  Sources/CaptureTypes.swift \
-  Sources/CoordinateMath.swift \
-  Sources/ScreenFreezePipeline.swift \
-  Tests/ScreenFreezePipelineBehaviorTests.swift \
-  -o "$FREEZE_OUT"
-
-"$FREEZE_OUT"
-
-xcrun swiftc \
-  -sdk "$SDK" \
-  -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
-  -D TESTING \
-  -framework AppKit \
-  -framework CoreGraphics \
   Sources/WindowCaptureProtection.swift \
   Sources/Overlay.swift \
   Tests/SelectionToolBehaviorTests.swift \
@@ -114,7 +94,12 @@ if output="$(rg -n "if !CGPreflightScreenCaptureAccess\\(\\)" Sources/CaptureCon
 fi
 
 if test -f Sources/ScreenFrameCache.swift; then
-  echo "Capture architecture regression: old ScreenFrameCache.swift must not coexist with ScreenFreezePipeline." >&2
+  echo "Capture architecture regression: old ScreenFrameCache.swift must not return." >&2
+  exit 1
+fi
+
+if test -f Sources/ScreenFreezePipeline.swift || test -f Tests/ScreenFreezePipelineBehaviorTests.swift; then
+  echo "Capture architecture regression: ScreenFreezePipeline must not remain in the product source set." >&2
   exit 1
 fi
 
@@ -136,45 +121,41 @@ if output="$(rg -n "exclusionUnavailable|case failed\\(|cacheUnavailable" Source
   exit 1
 fi
 
-rg -q "ScreenFreezePipeline" Sources/CaptureController.swift
-rg -q "captureFrozenScreens" Sources/ScreenFreezePipeline.swift
-rg -F -q "SCStream(" Sources/ScreenFreezePipeline.swift
-rg -q "SCStreamOutput" Sources/ScreenFreezePipeline.swift
-rg -F -q "SCFrameStatus(rawValue: statusRawValue)" Sources/ScreenFreezePipeline.swift
-rg -q "status == .complete" Sources/ScreenFreezePipeline.swift
-rg -q "CMSampleBufferGetImageBuffer" Sources/ScreenFreezePipeline.swift
-rg -q "frame.receivedAt >= acceptedAfter" Sources/ScreenFreezePipeline.swift
-rg -q "freshFrameDeadlineNanoseconds" Sources/ScreenFreezePipeline.swift
-rg -q "SCShareableContent.current" Sources/ScreenFreezePipeline.swift
-rg -q "SCScreenshotManager\\.captureImage" Sources/ScreenFreezePipeline.swift
-rg -q "capture stream fallback to one-shot" Sources/ScreenFreezePipeline.swift
-rg -q "source=one-shot-fallback" Sources/ScreenFreezePipeline.swift
-if output="$(awk 'index($0, "func captureFrozenScreens(") { in_body = 1 } in_body { print } index($0, "func shutdown()") { exit }' Sources/ScreenFreezePipeline.swift | rg -n "SCShareableContent\\.current|SCScreenshotManager\\.captureImage")"; then
+if output="$(rg -n "ScreenFreezePipeline|captureFrozenScreens|beginFrozenSelection|FrozenScreen|startFreezeTask|capture frozen ready|latest-active-stream|SCStream\\(" Sources README.md PRODUCT_CONTRACT.md CAPTURE_REDESIGN_PLAN.md)"; then
   echo "$output"
-  echo "Capture architecture regression: preferred stream path must not directly enumerate shareable content or call one-shot screenshots." >&2
+  echo "Capture architecture regression: active code/contracts must not keep the old frozen/stream path." >&2
   exit 1
 fi
-if output="$(rg -n "CaptureImageRace|captureTimeoutNanoseconds|prewarmTimeoutNanoseconds|excludingDesktopWindows\\(false, onScreenWindowsOnly: true\\)" Sources/ScreenFreezePipeline.swift)"; then
+rg -q "beginLiveSelection" Sources/CaptureController.swift
+rg -q "beginLiveSelection" Sources/Overlay.swift
+rg -q "FreshRegionCapture.capture" Sources/CaptureController.swift
+rg -q "capture fresh region pending" Sources/CaptureController.swift
+rg -q "capture fresh region ready" Sources/CaptureController.swift
+rg -q "SCScreenshotManager\\.captureImage" Sources/FreshRegionCapture.swift
+rg -q "config.sourceRect = spec.sourceRect" Sources/FreshRegionCapture.swift
+rg -F -q "config.showsCursor = false" Sources/FreshRegionCapture.swift
+rg -q "SCShareableContent.current" Sources/FreshRegionCapture.swift
+rg -F -q "excludingApplications: [currentApplication]" Sources/FreshRegionCapture.swift
+rg -F -q "exceptingWindows: []" Sources/FreshRegionCapture.swift
+rg -F -q "owningApplication?.processID == processID" Sources/FreshRegionCapture.swift
+if output="$(rg -n "HiddenAppWindows|hideVisibleApplicationWindows|hiddenWindows|orderOut\\(" Sources/CaptureController.swift Sources/FreshRegionCapture.swift)"; then
   echo "$output"
-  echo "Capture architecture regression: stream-backed freeze must not keep old timeout/window-list wrappers." >&2
+  echo "Capture UI regression: fresh capture must exclude QuickShot via ScreenCaptureKit, not hide visible UI." >&2
   exit 1
 fi
-if output="$(rg -n "latestActiveStreamFrame|latest-active-stream|freshness: \\.latestActiveStream|idleStopTask|streamIdleStopNanoseconds" Sources/ScreenFreezePipeline.swift)"; then
+if output="$(rg -n "beginOverlay\\(backdrops: \\[:\\]\\)|installFrozenBackdrops|PendingSelection|freezeFailure|finishFailedSelection|capture selection awaiting frozen frame" Sources/CaptureController.swift Sources/Overlay.swift)"; then
   echo "$output"
-  echo "Capture architecture regression: persistent stream freezer must not accept stale latest stream frames or keep idle stop." >&2
+  echo "Capture architecture regression: old hybrid frozen-backdrop path must not return." >&2
   exit 1
 fi
-if output="$(rg -n "beginLiveSelection|beginOverlay\\(backdrops: \\[:\\]\\)|installFrozenBackdrops|PendingSelection|freezeFailure|finishFailedSelection|capture selection awaiting frozen frame" Sources/CaptureController.swift Sources/Overlay.swift)"; then
-  echo "$output"
-  echo "Capture architecture regression: CaptureController must not use the hybrid live-overlay-before-freeze path." >&2
-  exit 1
-fi
-rg -q "beginFrozenSelection" Sources/CaptureController.swift
-rg -q "let hiddenAt = CFAbsoluteTimeGetCurrent()" Sources/CaptureController.swift
-rg -q "readyAfter: hiddenAt" Sources/CaptureController.swift
-rg -q "requestedAt: startedAt" Sources/CaptureController.swift
-rg -q "capture frozen ready" Sources/CaptureController.swift
 rg -q "capture overlay ready" Sources/CaptureController.swift
+rg -q "innerOverlayColor" Sources/Overlay.swift
+rg -q "currentRect.fill()" Sources/Overlay.swift
+if output="$(rg -n "bounds\\.fill\\(\\)|black\\.withAlphaComponent\\(0\\.30\\)" Sources/Overlay.swift)"; then
+  echo "$output"
+  echo "Overlay regression: live selection must not draw a full-screen outside dim." >&2
+  exit 1
+fi
 rg -F -q "w.isReleasedWhenClosed = false" Sources/Overlay.swift
 rg -F -q "guard !isDismissed else { return }" Sources/Overlay.swift
 rg -F -q "w.close()" Sources/Overlay.swift
@@ -188,6 +169,7 @@ rg -F -q "captureStackUnavailable(String)" Sources/CaptureTypes.swift
 rg -q "capture clipboard copied" Sources/CaptureController.swift
 rg -q "capture image handoff started" Sources/CaptureController.swift
 rg -q "capture delivery outcome=completed" Sources/CaptureController.swift
+rg -q "capture delivery outcome=fresh-capture-failed" Sources/CaptureController.swift
 rg -F -q "Clipboard.prepareImage(cgImage: image)" Sources/CaptureController.swift
 rg -q "struct PreparedImage" Sources/Clipboard.swift
 rg -q "import ImageIO" Sources/Clipboard.swift
@@ -207,17 +189,16 @@ if output="$(rg -n "NSBitmapImageRep\\(cgImage:|tiffRepresentation|Clipboard\\.c
   exit 1
 fi
 rg -q "capture end outcome=" Sources/CaptureController.swift
-rg -q "scheduleCropAndDelivery" Sources/CaptureController.swift
-rg -F -q "DispatchQueue.global(qos: .userInitiated).async" Sources/CaptureController.swift
-rg -F -q "shot.crop(globalSelection: selection)" Sources/CaptureController.swift
-rg -q "capture crop failed" Sources/CaptureController.swift
-rg -q "capture delivery outcome=crop-failed" Sources/CaptureController.swift
+rg -q "startFreshCaptureAndDelivery" Sources/CaptureController.swift
+rg -F -q "Task.detached(priority: .userInitiated)" Sources/CaptureController.swift
+rg -F -q "FreshRegionCapture.capture(selection: selection" Sources/CaptureController.swift
+rg -q "capture fresh region failed" Sources/CaptureController.swift
 rg -q "deliveryDisplayID" Sources/CaptureController.swift
 rg -q "capture image handoff failed missing screen" Sources/CaptureController.swift
 rg -q "capture delivery outcome=handoff-failed" Sources/CaptureController.swift
-if output="$(awk 'index($0, "private func completeSelection(") { in_body = 1 } in_body { print } index($0, "private func scheduleCropAndDelivery") { exit }' Sources/CaptureController.swift | rg -n "\\.crop\\(globalSelection")"; then
+if output="$(awk 'index($0, "private func completeSelection(") { in_body = 1 } in_body { print } index($0, "private func startFreshCaptureAndDelivery") { exit }' Sources/CaptureController.swift | rg -n "FreshRegionCapture\\.capture|SCScreenshotManager|captureImage|\\.cropping\\(")"; then
   echo "$output"
-  echo "Capture completion regression: mouse-up handler must not crop the frozen image synchronously on the main actor." >&2
+  echo "Capture completion regression: mouse-up handler must not synchronously capture pixels." >&2
   exit 1
 fi
 rg -q "endOutcome = \"completed\"" Sources/CaptureController.swift
@@ -233,25 +214,18 @@ rg -F -q "prewarmTask = Task.detached" Sources/CaptureController.swift
 rg -F -q "self.prewarmID == prewarmID" Sources/CaptureController.swift
 rg -F -q "prewarmTask = nil" Sources/CaptureController.swift
 rg -F -q "session?.shutdown()" Sources/CaptureController.swift
-rg -F -q "freezer.shutdown()" Sources/CaptureController.swift
-rg -F -q "isShuttingDown = true" Sources/ScreenFreezePipeline.swift
-rg -q "capture stream refresh ready" Sources/ScreenFreezePipeline.swift
-rg -F -q 'refreshWarmStreams(reason: "prewarm")' Sources/ScreenFreezePipeline.swift
-rg -q "capture stream frame accepted" Sources/ScreenFreezePipeline.swift
-rg -q "capture stream fresh frame missed" Sources/ScreenFreezePipeline.swift
-rg -q "capture stream stopped" Sources/ScreenFreezePipeline.swift
-rg -q "capture freeze screens ready" Sources/ScreenFreezePipeline.swift
+rg -F -q "freshCaptureTask?.cancel()" Sources/CaptureController.swift
 rg -q "window.sharingType = .none" Sources/WindowCaptureProtection.swift
 rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/Overlay.swift
 rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/ThumbnailManager.swift
 rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/PinnedWindow.swift
 rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/SettingsWindow.swift
-if output="$(rg -n "ScreenFrameCache|CachedFrame|validatedAt|preparedFrozenScreens" Sources README.md PRODUCT_CONTRACT.md)"; then
+if output="$(rg -n "ScreenFrameCache|CachedFrame|validatedAt|preparedFrozenScreens|capture frozen ready|capture cache old frame accepted" Sources README.md PRODUCT_CONTRACT.md CAPTURE_REDESIGN_PLAN.md)"; then
   echo "$output"
   echo "Capture architecture regression: old stale-cache vocabulary must not remain in active contracts or code." >&2
   exit 1
 fi
-rg -F -q "config.showsCursor = false" Sources/ScreenFreezePipeline.swift
+rg -F -q "config.showsCursor = false" Sources/FreshRegionCapture.swift
 if output="$(rg -n "GlassButton" Sources/ThumbnailWindow.swift)"; then
   echo "$output"
   echo "Thumbnail controls regression: thumbnail cards must use DesignSystemButton, not native Liquid Glass." >&2
@@ -272,7 +246,7 @@ if output="$(rg -n "CGEvent|cghidEventTap|postMouse|postKey|send_hotkey" scripts
 fi
 rg -q "capture trigger accepted" scripts/verify-capture-observed.sh
 rg -q "capture overlay ready" scripts/verify-capture-observed.sh
-rg -q "capture frozen ready" scripts/verify-capture-observed.sh
+rg -q "capture fresh region ready" scripts/verify-capture-observed.sh
 rg -q "overlay activation completed" scripts/verify-capture-observed.sh
 rg -q "phase=trigger" scripts/verify-capture-observed.sh
 rg -q "REQUIRE_HOTKEY_EVENT" scripts/verify-capture-observed.sh
