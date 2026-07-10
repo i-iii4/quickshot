@@ -4,21 +4,104 @@
 
 ---
 
-## 09.07.2026 — Native SDK как кандидат для interface model
+## 10.07.2026 — новые скриншоты занимают свободные слоты без reflow
 
-Зафиксировано следующее направление: QuickShot нужны не просто новые стили
-кнопок, а более сильная interface model для shell, hub, cards, command pills,
-hover/focus/click behavior и автоматизации.
+Раскладка карточек больше не проходит `items.reversed()`. Порядок массива и
+геометрии теперь совпадает: существующие карточки сохраняют свои координаты, а
+новый снимок занимает следующий свободный слот по направлению от хаба. Для
+текущего вертикального трея с нижним якорем это верхний слот; при зеркальном
+якоре направление естественно станет нижним. Если места нет, новый индекс
+попадает в overflow и скрывается, не вытесняя уже видимые карточки.
 
-Добавлен `INTERFACE_MODEL_RESEARCH.md`: Native SDK (`vercel-labs/native`)
-рассматривается как кандидат для отдельного spike. Он не считается заменой
-screenshot engine: global hotkey, ScreenCaptureKit capture, overlay windows,
-cursor ownership, capture exclusion и clipboard остаются macOS-specific
-обязанностями, пока bridge не доказан.
+Расчет вынесен в чистый `ThumbnailLayout.swift`; headless-тесты проверяют все
+четыре положения, неизменность прежних координат, направление роста и overflow.
+Анимация добавления теперь применяется к `items.last`, а не к первому элементу
+перевернутой раскладки.
 
-Контракт в `README.md` и `PRODUCT_CONTRACT.md` обновлён: любой новый framework
-должен сохранять immediate selection, fresh final pixels, no stale screenshots,
-no tray blink, no duplicate cursor и кликабельные controls.
+---
+
+## 10.07.2026 — переход интерфейса на House Dark
+
+Все Native SDK surfaces переведены с Geist на фиксированный House Dark token
+pack. Метрики хаба и карточек теперь читаются из House: small controls `28pt`,
+радиус `8pt`, fast motion `120ms`; независимые команды сохраняют token spacing
+`8pt`. Системные High Contrast и Reduce Motion продолжают проецироваться в
+model-derived tokens, а системный Light/Dark больше не меняет выбранную темную
+схему. Прозрачный canvas для плавающих surfaces сохранен.
+
+Нейтральные команды используют темный House `secondary`, а не светлый
+dark-theme `primary`. Hover bubble вынесен в отдельный Native SDK `panel` и
+плавно проявляется под прозрачным bitmap кнопок; в покое его нет. House `xl`
+radius `14pt` и inset `6pt` концентричны внутреннему control radius `8pt`.
+Порядок действий зафиксирован слева направо (`Delete`, `Save As`, `Copy All`).
+
+Устранена фундаментальная причина вялого reveal: каждый `mouseMoved` раньше
+отменял текущий `CADisplayLink` и запускал полный цикл заново. Теперь один
+целевой expansion state создает ровно один animation run; повторные события
+игнорируются, а смена направления продолжает движение с длительностью,
+пропорциональной оставшемуся пути.
+
+Устранено залипание bubble после ухода курсора. Причиной была проверка
+`mouseExited` по будущему expanded footprint: событие могло быть проигнорировано,
+после чего изменившийся NSView уже не получал следующего движения. На время
+hover-сессии устанавливаются local/global mouse monitors, которые проверяют
+курсор относительно стабильного полного footprint независимо от текущей ширины
+анимации. При выходе target всегда переключается на `0`; monitors снимаются при
+закрытии, скрытии хаба и deinit.
+
+---
+
+## 09.07.2026 - production UI переведен на полный Native SDK interaction path
+
+Проведен полный аудит hub, thumbnail, pinned, settings и status-menu surface-ов.
+Все видимые command controls подтверждены как реальные Native SDK primitives;
+AppKit оставлен только хостом окон, системного status item, изображений и
+resize/drag интеграций.
+
+Отдельно исправлена ошибка композиции: Geist `button-group` является
+exclusive-choice register и намеренно заменяет child variants своим chrome.
+Поэтому независимые hub/thumbnail commands переведены в обычные `row`, а
+`button-group` оставлен только для model-owned выбора позиции в settings.
+Правило добавлено в общий внешний contract, чтобы ошибка не повторялась в
+других проектах.
+
+Swift больше не маршрутизирует действия по тексту кнопки. `pointer_move`,
+`pointer_down` и `pointer_up` передаются в Native SDK runtime, который владеет
+hover, pressed, hit testing и typed dispatch. Метрики контролов и motion
+читаются из pinned Geist tokens, а размеры thumbnail/pinned/settings/menu - из
+фактических runtime semantics. Убраны лишние `+20pt`, исправлены 40pt icon
+buttons внутри 32pt ряда и overflow settings/status menu.
+
+Hover reveal сохраняет Geist fast motion `150ms`, не заканчивает изменение
+ширины на 88% и раскрывает действия в одном порядке от core: `Delete`, `Save
+As`, `Copy All`. Полный Native bitmap теперь строится один раз при переходе в
+expanded state; display-link кадры двигают только frame/clip. Production build
+линкует `ReleaseFast`, а Reduce Motion переключает длительность на ноль.
+
+Добавлена проекция системных Light/Dark, High Contrast и Reduce Motion в
+embedded runtime с pixel-тестом полного light -> dark -> light repaint.
+`NativeSurfaceBehaviorTests` проверяет bounds, overlap, semantics, hover и клики
+всех surface-ов без вывода окон. Live-window тесты стали явным opt-in через
+`QUICKSHOT_RUN_LIVE_UI_TESTS=1`.
+
+Проверено: внешний Native UI contract, `./scripts/test.sh`, first expanded
+render <= 16.7ms, end-to-end first reveal frame <= 33.3ms, `./build.sh`
+(`ReleaseFast`), production restart и системный лог без layout recursion,
+Native UI errors или overflow.
+
+---
+
+## 09.07.2026 — документация сведена к рабочему контракту
+
+Удалены два временных документа из активной документации. Отдельный файл про
+interface model был лишним артефактом без статуса продукта, а capture redesign
+plan дублировал уже реализованный UX-контракт.
+
+`README.md` оставлен как короткая рабочая инструкция, `PRODUCT_CONTRACT.md` —
+как источник требований и regression gates, `DEVLOG.md` — как журнал решений.
+Требования к будущей UI-архитектуре оставлены только в контракте: новый shell
+или framework не может ослабить capture UX, кликабельность controls, cursor
+ownership, capture exclusion и свежесть финальных пикселей.
 
 Production code в этой записи не менялся.
 
@@ -75,8 +158,8 @@ overlay появляется только после начала выделен
 выделения как целевой модели. Лёгкий overlay должен жить внутри выбранного
 прямоугольника, оставляя внешний экран визуально нетронутым.
 
-Добавлен короткий UX-first план `CAPTURE_REDESIGN_PLAN.md`. Production code в
-этой записи не менялся.
+UX-first план был временным рабочим артефактом; позже он свёрнут обратно в
+основной контракт. Production code в этой записи не менялся.
 
 ---
 
@@ -853,13 +936,17 @@ activation/key assignment догоняют следующим main-loop turn д�
 ## 04.07.2026 — карточные controls переведены с Liquid Glass на command-buttons
 
 Убрали нативные `.glass` кнопки с самих thumbnail-карточек. `ThumbnailView` теперь использует
-`DesignSystemButton`: тёмная Vercel/Geist-подобная pill/circle surface, template SF Symbol, тонкая
-обводка, hover/pressed-состояния и собственный hit-testing без зависимости от системного стекла.
+`DesignSystemButtonGroup`: Vercel/Native Geist detached button-group — без общего контейнера,
+без 1px seam, с 8pt gap между chips. Сегменты `DesignSystemButton` используют Geist small-control
+метрики: 32pt height, 6pt control radius, 14pt label, 16pt icon и один hit target для icon+label.
+Для QuickShot поверх произвольного экрана normal controls используют Geist primary fill (black under
+white text), destructive — Geist filled red block, а не translucent wash, который теряется на светлом
+рабочем столе.
 
-`Copy` остаётся pill с иконкой и подписью, close остаётся круглой icon-button с destructive hover.
-Feedback копирования (`Скопировано`) теперь пересчитывает layout карточки, чтобы текст не
-обрезался старой шириной. `GlassButton` оставлен для отдельных нативных surface вроде full-size
-окна, но продуктовый контракт запрещает возвращать его в per-thumbnail controls.
+`Copy` — icon+label segment, close — destructive icon segment. Feedback копирования (`Copied`)
+пересчитывает layout карточки, чтобы текст не обрезался старой шириной. `GlassButton` оставлен для
+отдельных нативных surface вроде full-size окна, но продуктовый контракт запрещает возвращать его в
+per-thumbnail controls.
 
 ---
 
@@ -958,21 +1045,23 @@ events через window dispatch. Теперь сценарий «изолир�
 
 ## 04.07.2026 — Vercel/Geist-подобный hover hub без кликовых регрессов
 
-Хаб закреплён как тёмная Vercel/Geist-подобная command-pill, а не инженерный набор из вложенных
-контуров: compact-state теперь рисуется одним shell layer с одной внешней обводкой, без stacked
-`CAShapeLayer` rings и без дополнительной обводки на core. В раскрытом состоянии visible labels
-сокращены до `Delete`, `Save`, `Copy`; полный смысл остаётся в accessibility labels, чтобы UI не
-раздувался строкой `Copy All Screenshots`.
+Хаб закреплён как набор Vercel/Native Geist detached command buttons, а не инженерная stretched-pill
+оболочка: compact core — 32pt icon+label button (`N screenshots` + stack icon + trailing chevron) с
+6pt radius; раскрытые actions — отдельные chips с 8pt gap, без shell border, shared seam и stacked
+`CAShapeLayer` rings. В раскрытом состоянии visible labels используют явные command names:
+`Delete`, `Save As`, `Copy All`; accessibility labels добавляют полное описание действия без
+превращения chip в длинную строку.
 
-Hover reveal ускорен до `105ms` и остаётся на `easeOutQuad`, чтобы последние миллиметры раскрытия не
-растягивались. Текст action pill появляется только когда label уже полностью в clip, но действие
-становится доступным до финального кадра раскрытия. При нажатой action pill shell больше не
-схлопывается от `mouseExited` до `mouseUp`, поэтому клики по `Delete`/`Save`/`Copy` не теряются.
+Hover reveal следует Geist fast motion (`150ms`) и остаётся на `easeOutQuad`, чтобы последние
+миллиметры раскрытия не растягивались. Текст action chip появляется только когда label уже полностью
+в clip, но действие становится доступным до финального кадра раскрытия. При нажатой action chip shell больше не
+схлопывается от `mouseExited` до `mouseUp`, поэтому клики по `Delete`/`Save As`/`Copy All` не теряются.
 
-Тестовый контракт расширен: проверяется один shell stroke без decorative sublayers, короткий
-нейминг action labels, клики по pills в промежуточных reveal frames, полный набор action-кликов для
-обоих направлений раскрытия и сценарий `press -> shell mouse exit -> release`. Visual QA обновляется
-через `./scripts/render-hub-qa.sh /tmp/quickshot-hub-matrix-preview.png`.
+Тестовый контракт расширен: проверяется отсутствие shell stroke/decorative sublayers, 32pt height,
+6pt radius, icon+label core, явный нейминг action labels, клики по chips в промежуточных reveal
+frames, полный набор action-кликов для обоих направлений раскрытия и сценарий
+`press -> shell mouse exit -> release`.
+Visual QA обновляется через `./scripts/render-hub-qa.sh /tmp/quickshot-hub-matrix-preview.png`.
 
 ---
 

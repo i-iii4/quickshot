@@ -13,8 +13,29 @@ BUNDLE="${APP}.app"
 ARCH="$(uname -m)"
 DEPLOY="26.0"
 SDK="$(xcrun --show-sdk-path)"
+ZIG_BIN="${QUICKSHOT_ZIG:-$(command -v zig || true)}"
+if [ -z "$ZIG_BIN" ] && [ -x "$HOME/.native/toolchains/zig-0.16.0/zig" ]; then
+  ZIG_BIN="$HOME/.native/toolchains/zig-0.16.0/zig"
+fi
+if [ -z "$ZIG_BIN" ]; then
+  echo "error: zig is required to build NativeQuickShotUI; set QUICKSHOT_ZIG or install Zig 0.16" >&2
+  exit 1
+fi
+
+echo "==> Проверка Native UI contract"
+NATIVE_DESIGN_SYSTEM_DIR="${NATIVE_DESIGN_SYSTEM_DIR:-$PWD/../native-ui-design-system}"
+if [ ! -x "$NATIVE_DESIGN_SYSTEM_DIR/scripts/check.sh" ]; then
+  echo "error: Native UI Design System not found at $NATIVE_DESIGN_SYSTEM_DIR" >&2
+  exit 1
+fi
+NATIVE_DESIGN_SYSTEM_ZIG="$ZIG_BIN" \
+  "$NATIVE_DESIGN_SYSTEM_DIR/scripts/check.sh" "$PWD/NativeQuickShotUI/src/hub.native"
+
+NATIVE_UI_LIB="$PWD/NativeQuickShotUI/zig-out/lib/libquickshot-native-ui.a"
 
 echo "==> Сборка ${BUNDLE} (${ARCH}, deployment macOS ${DEPLOY})"
+echo "==> Сборка NativeQuickShotUI ($(basename "$ZIG_BIN"))"
+(cd NativeQuickShotUI && PATH="$(dirname "$ZIG_BIN"):$PATH" "$ZIG_BIN" build lib -Doptimize=ReleaseFast)
 
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS"
@@ -35,6 +56,7 @@ xcrun swiftc \
   -framework CoreMedia \
   -framework CoreVideo \
   -o "$BUNDLE/Contents/MacOS/$APP" \
+  "$NATIVE_UI_LIB" \
   Sources/*.swift
 
 cp Info.plist "$BUNDLE/Contents/Info.plist"

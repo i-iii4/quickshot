@@ -94,8 +94,8 @@ private final class EdgeHandle: NSView {
     override func mouseUp(with event: NSEvent) { endResize?() }
 }
 
-/// Тело карточки: сам скриншот (скруглённый) и контролы дизайн-системы QuickShot
-/// [Копировать] [закрыть] в верхнем ряду, появляются/исчезают плавным fade. Ресайз — НЕ здесь
+/// Тело карточки: сам скриншот (скруглённый) и Native SDK-контролы
+/// [Copy] [Dismiss] в верхнем ряду, появляются/исчезают плавным fade. Ресайз — НЕ здесь
 /// (краевая ручка `EdgeHandle`); тело отвечает за drag-out и даблклик. Курсор не трогаем.
 private final class ThumbnailView: NSView, NSDraggingSource {
 
@@ -110,8 +110,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     private let nsImage: NSImage
     private var displayNSImage: NSImage
     private let displayView = PassthroughImageView()
-    private let copyButton = DesignSystemButton(symbol: "doc.on.doc", title: "Копировать", a11y: "Скопировать в буфер обмена")
-    private let closeButton = DesignSystemButton(symbol: "xmark", a11y: "Отбросить снимок", role: .destructive)
+    private let controls = NativeThumbnailControlsView(frame: .zero)
     private var preparedClipboardImage: Clipboard.PreparedImage?
     private var trackingArea: NSTrackingArea?
 
@@ -133,15 +132,16 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         displayView.wantsLayer = true
         addSubview(displayView)
 
-        copyButton.onClick = { [weak self] in self?.doCopy() }
-        copyButton.toolTip = "Скопировать в буфер обмена"
-        closeButton.onClick = { [weak self] in
+        controls.onCopy = { [weak self] in self?.doCopy() }
+        controls.toolTip = "Copy"
+        controls.onDismiss = { [weak self] in
             guard let s = self, let o = s.owner else { return }
             let mgr = s.manager
             DispatchQueue.main.async { mgr?.remove(o) }
         }
-        closeButton.toolTip = "Отбросить снимок"
-        for b in [copyButton, closeButton] { b.alphaValue = 0; b.isHidden = true; addSubview(b) }
+        controls.alphaValue = 0
+        controls.isHidden = true
+        addSubview(controls)
         prepareClipboardPayload()
     }
 
@@ -151,9 +151,9 @@ private final class ThumbnailView: NSView, NSDraggingSource {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard !isHidden, alphaValue > 0.01, bounds.contains(point) else { return nil }
-        for control in [closeButton, copyButton] where !control.isHidden && control.alphaValue > 0.01 {
-            let converted = convert(point, to: control)
-            if let hit = control.hitTest(converted) { return hit }
+        if !controls.isHidden, controls.alphaValue > 0.01 {
+            let converted = convert(point, to: controls)
+            if let hit = controls.hitTest(converted) { return hit }
         }
         return self
     }
@@ -176,17 +176,17 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     /// Раскладка внутренних элементов по текущему `bounds` (frame вью ставит обёртка).
     func layoutContents() {
         displayView.frame = bounds
-        let inset = QS.s2, gap = QS.s2
-        let rowH = ceil(max(copyButton.fittingSize.height, closeButton.fittingSize.height))
+        let inset = QS.s2
+        let rowH = ceil(controls.fittingSize.height)
         let rowY = bounds.height - inset - rowH
-        let closeX = bounds.width - inset - rowH
-        closeButton.frame = NSRect(x: closeX, y: rowY, width: rowH, height: rowH)
+        let availableWidth = max(rowH, bounds.width - inset * 2)
 
-        copyButton.setCompact(false)
-        let availForCopy = closeX - gap - inset
-        copyButton.setCompact(copyButton.fittingSize.width > availForCopy)
-        let cw = copyButton.isCompact ? rowH : ceil(copyButton.fittingSize.width)
-        copyButton.frame = NSRect(x: inset, y: rowY, width: cw, height: rowH)
+        controls.setCompact(false)
+        let fullGroupWidth = ceil(controls.fittingSize.width)
+        controls.setCompact(fullGroupWidth > availableWidth)
+
+        let groupWidth = min(availableWidth, ceil(controls.fittingSize.width))
+        controls.frame = NSRect(x: inset, y: rowY, width: groupWidth, height: rowH)
     }
 
     // MARK: ховер кнопок (плавный fade)
@@ -199,21 +199,24 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     override func mouseExited(with event: NSEvent) { setControlsVisible(false) }
 
     private func setControlsVisible(_ visible: Bool, animated: Bool = true) {
-        let buttons = [copyButton, closeButton]
         if visible {
-            for b in buttons { b.isHidden = false }
-            guard animated else { for b in buttons { b.alphaValue = 1 }; return }
+            controls.isHidden = false
+            guard animated else { controls.alphaValue = 1; return }
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = Self.fade
-                for b in buttons { b.animator().alphaValue = 1 }
+                controls.animator().alphaValue = 1
             }
         } else {
-            guard animated else { for b in buttons { b.alphaValue = 0; b.isHidden = true }; return }
+            guard animated else {
+                controls.alphaValue = 0
+                controls.isHidden = true
+                return
+            }
             NSAnimationContext.runAnimationGroup({ ctx in
                 ctx.duration = Self.fade
-                for b in buttons { b.animator().alphaValue = 0 }
+                controls.animator().alphaValue = 0
             }, completionHandler: {
-                for b in buttons where b.alphaValue == 0 { b.isHidden = true }
+                if self.controls.alphaValue == 0 { self.controls.isHidden = true }
             })
         }
     }
@@ -249,14 +252,14 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     }
 
     func flashCopied() {
-        copyButton.isHidden = false
-        copyButton.alphaValue = 1
-        copyButton.showCheck(true)
+        controls.isHidden = false
+        controls.alphaValue = 1
+        controls.showCheck(true)
         layoutContents()
         titleResetWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            self.copyButton.showCheck(false)
+            self.controls.showCheck(false)
             self.layoutContents()
             if !self.isMouseInside() { self.setControlsVisible(false) }
         }
@@ -276,14 +279,21 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     }
 
     func debugCloseButtonCenterInSelf() -> NSPoint {
-        NSPoint(x: closeButton.frame.midX, y: closeButton.frame.midY)
+        convert(controls.buttonCenterInSelf { $0 == "Dismiss screenshot" }, from: controls)
+    }
+
+    func debugCopyButtonCenterInSelf() -> NSPoint {
+        convert(controls.buttonCenterInSelf { $0 == "Copy screenshot" || $0 == "Copied screenshot" }, from: controls)
     }
 
     func debugCloseButtonState() -> String {
-        let center = NSPoint(x: closeButton.bounds.midX, y: closeButton.bounds.midY)
-        let directHit = closeButton.hitTest(center).map { String(describing: type(of: $0)) } ?? "nil"
         let superHit = hitTest(debugCloseButtonCenterInSelf()).map { String(describing: type(of: $0)) } ?? "nil"
-        return "closeFrame=\(closeButton.frame) hidden=\(closeButton.isHidden) alpha=\(closeButton.alphaValue) enabled=\(closeButton.isEnabled) directHit=\(directHit) thumbHit=\(superHit)"
+        return "\(controls.debugState(label: "Dismiss screenshot")) thumbHit=\(superHit)"
+    }
+
+    func debugCopyButtonState() -> String {
+        let superHit = hitTest(debugCopyButtonCenterInSelf()).map { String(describing: type(of: $0)) } ?? "nil"
+        return "\(controls.debugState(label: "Copy")) thumbHit=\(superHit)"
     }
 #endif
 
@@ -435,7 +445,14 @@ final class ThumbnailWindow {
         return container.convert(pointInContainer, to: container.superview)
     }
 
+    func debugCopyButtonCenterInHost() -> NSPoint {
+        let pointInView = view.debugCopyButtonCenterInSelf()
+        let pointInContainer = view.convert(pointInView, to: container)
+        return container.convert(pointInContainer, to: container.superview)
+    }
+
     func debugCloseButtonState() -> String { view.debugCloseButtonState() }
+    func debugCopyButtonState() -> String { view.debugCopyButtonState() }
 #endif
 
     // MARK: анимация (CADisplayLink, ease-out без overshoot) — двигаем контейнер

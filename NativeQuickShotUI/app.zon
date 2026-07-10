@@ -1,0 +1,22 @@
+.{
+    .id = "com.iiii.quickshot.native_ui",
+    .name = "quickshot-native-ui",
+    .display_name = "QuickShot Native UI",
+    .version = "0.1.0",
+    .theme = "house",
+    .platforms = .{ "macos" },
+    .permissions = .{},
+    .capabilities = .{ "native_views", "gpu_surfaces" },
+    .shell = .{
+        .windows = .{
+            .{
+                .label = "main",
+                .title = "QuickShot Native UI",
+                .views = .{
+                    .{ .label = "mobile-surface", .kind = "gpu_surface", .fill = true, .role = "QuickShot controls", .accessibility_label = "QuickShot controls", .gpu_backend = "metal" },
+                },
+            },
+        },
+    },
+    .web_engine = "system",
+}

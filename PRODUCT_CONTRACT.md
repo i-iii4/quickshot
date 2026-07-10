@@ -63,28 +63,67 @@ but any behavior that breaks this contract is a regression.
 2. A new screenshot expands the tray.
 3. Hub action buttons are clickable and do not accidentally toggle collapse.
 4. Per-thumbnail `Copy`, close, resize, and card interactions remain clickable.
-5. The tray/hub position is based on full screen frames and may overlap Dock or
+5. Thumbnail geometry is append-only: adding a screenshot never changes any
+   existing card origin. The new screenshot takes the next free slot away from
+   the hub (above the stack for the current bottom-anchored vertical layout;
+   below it when that anchor direction is mirrored).
+6. The tray/hub position is based on full screen frames and may overlap Dock or
    menu bar.
-6. The hub is a compact Vercel/Geist-inspired command surface.
-7. Hover reveal exposes three visible actions: `Delete`, `Save`, and `Copy`.
-8. Per-thumbnail controls use QuickShot's custom command-button chrome, not
+7. The hub is a compact Vercel/Native-inspired icon+label command surface
+   aligned to the House small-control register: 28pt height, 8pt radius, 14pt
+   labels, 16pt icons, and 8pt gaps between independent command buttons.
+8. Hover reveal exposes three visible actions: `Delete`, `Save As`, and `Copy All`.
+9. Per-thumbnail controls use independent House command buttons in a
+   token-spaced row, not exclusive-choice `button-group` chrome or
    native Liquid Glass buttons.
-9. Empty transparent tray space does not steal pointer events from controls.
-10. The tray must not blink during capture completion.
+10. Empty transparent tray space does not steal pointer events from controls.
+11. The tray must not blink during capture completion.
+12. The left-to-right action order is always `Delete`, `Save As`, `Copy All`,
+    regardless of the screen edge.
+13. Hover reveal uses the House fast-motion token (`120ms`, or `0ms` under
+    Reduce Motion), scales interrupted transitions by the remaining distance,
+    changes width through the final frame, and does not rerender Native SDK
+    pixels on every display-link tick.
+14. At rest only the compact command button is visible. Hover fades in one
+    token-owned House Dark bubble behind the complete command row; gaps inside
+    the hub belong to that surface and pixels outside it remain transparent.
+15. Bubble and button corners are concentric: House `xl` outer radius `14pt`,
+    House control radius `8pt`, and their difference is the `6pt` inset.
+16. Repeated `mouseMoved` events for an unchanged hover target never restart
+    the active reveal animation.
+17. While hover is active, cursor exit is evaluated against the stable fully
+    expanded footprint independently of the resizing view. Leaving it always
+    drives the bubble opacity back to zero, even if AppKit already stopped
+    delivering events to the current view bounds.
 
-## Interface Model
+## UI Architecture
 
 1. UI architecture changes must improve interaction consistency, state
    ownership, and testability, not only visual styling.
-2. QuickShot may evaluate Native SDK (`vercel-labs/native`) as an interface
-   model candidate for the shell, hub, cards, command pills, focus, hover, and
-   automation story.
-3. A framework spike must not weaken the capture contract: immediate selection
-   entry, fresh final pixels, capture exclusion, no tray blink, no stale
-   screenshots, and no duplicate cursor remain mandatory.
-4. Native SDK must be treated as a candidate shell/component architecture, not
-   as a replacement for macOS-specific capture responsibilities until the bridge
-   is proven.
+2. A new UI framework or shell model must not weaken the capture contract:
+   immediate selection entry, fresh final pixels, capture exclusion, no tray
+   blink, no stale screenshots, and no duplicate cursor remain mandatory.
+3. Screenshot capture, global hotkeys, overlay windows, cursor ownership,
+   capture exclusion, and clipboard writes are product-critical system
+   integrations. They cannot be treated as replaceable styling details.
+4. Every visible command control on hub, thumbnail, pinned, settings, and
+   status-menu surfaces uses an official Native SDK primitive. Local AppKit
+   control replicas and SDK-owned color/radius/state overrides are prohibited.
+5. AppKit owns window hosting, the system status item, traffic-light controls,
+   image presentation, and resize/drag integration. Native SDK owns command
+   geometry, tokens, hover, pressed state, hit testing, and typed dispatch.
+6. Swift reads control and motion metrics from the pinned House Dark token pack and
+   fitting geometry from runtime semantics. It must not maintain approximate
+   duplicate widths or unexplained padding reserves.
+7. The visual scheme is fixed to House Dark. High Contrast and Reduce Motion
+   changes are forwarded from macOS into the embedded Native SDK runtime and
+   must repaint the complete surface in one transition.
+8. Production and the default headless regression suite link a `ReleaseFast`
+   Native UI library so timing gates exercise the shipped renderer path. Debug
+   is reserved for explicit diagnostics.
+9. Native SDK `button-group` is reserved for model-owned exclusive choices.
+   Independent commands use a `row`; House `button-group` provides the attached
+   segmented treatment only for exclusive selection.
 
 ## Regression Gates
 
@@ -95,3 +134,9 @@ but any behavior that breaks this contract is a regression.
    tray.
 3. Runtime verification on the user's active machine should prefer log-only
    checks unless synthetic input is explicitly enabled.
+4. Headless component tests must cover actual runtime semantics, bounds,
+   non-overlap, hover ownership, click dispatch, complete theme repaint, reveal
+   ordering, reveal duration, render count, and first-frame budget.
+5. Live-window click tests remain opt-in through
+   `QUICKSHOT_RUN_LIVE_UI_TESTS=1`; the default suite must not take over the
+   user's screen.

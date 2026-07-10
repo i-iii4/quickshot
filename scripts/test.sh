@@ -5,12 +5,37 @@ cd "$(dirname "$0")/.."
 ARCH="$(uname -m)"
 DEPLOY="26.0"
 SDK="$(xcrun --show-sdk-path)"
+ZIG_BIN="${QUICKSHOT_ZIG:-$(command -v zig || true)}"
+if [ -z "$ZIG_BIN" ] && [ -x "$HOME/.native/toolchains/zig-0.16.0/zig" ]; then
+  ZIG_BIN="$HOME/.native/toolchains/zig-0.16.0/zig"
+fi
+if [ -z "$ZIG_BIN" ]; then
+  echo "error: zig is required to build NativeQuickShotUI tests; set QUICKSHOT_ZIG or install Zig 0.16" >&2
+  exit 1
+fi
+
+NATIVE_DESIGN_SYSTEM_DIR="${NATIVE_DESIGN_SYSTEM_DIR:-$PWD/../native-ui-design-system}"
+if [ ! -x "$NATIVE_DESIGN_SYSTEM_DIR/scripts/check.sh" ]; then
+  echo "error: Native UI Design System not found at $NATIVE_DESIGN_SYSTEM_DIR" >&2
+  exit 1
+fi
+NATIVE_DESIGN_SYSTEM_ZIG="$ZIG_BIN" \
+  "$NATIVE_DESIGN_SYSTEM_DIR/scripts/check.sh" "$PWD/NativeQuickShotUI/src/hub.native"
+
+NATIVE_UI_LIB="$PWD/NativeQuickShotUI/zig-out/lib/libquickshot-native-ui.a"
 OUT="$(mktemp -t quickshot-hub-tests)"
+SURFACE_OUT="$(mktemp -t quickshot-native-surface-tests)"
+STATUS_LAYOUT_OUT="$(mktemp -t quickshot-status-menu-layout-tests)"
+THUMBNAIL_LAYOUT_OUT="$(mktemp -t quickshot-thumbnail-layout-tests)"
 HUB_LIVE_OUT="$(mktemp -t quickshot-hub-live-tests)"
 THUMBNAIL_LIVE_OUT="$(mktemp -t quickshot-thumbnail-live-tests)"
 SELECTION_OUT="$(mktemp -t quickshot-selection-tests)"
 CAPTURE_HOT_PATH_OUT="$(mktemp -t quickshot-capture-hot-path-tests)"
-trap 'rm -f "$OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CAPTURE_HOT_PATH_OUT"' EXIT
+trap 'rm -f "$OUT" "$SURFACE_OUT" "$STATUS_LAYOUT_OUT" "$THUMBNAIL_LAYOUT_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CAPTURE_HOT_PATH_OUT"' EXIT
+
+# Pixel timing is a product contract, so exercise the same optimized Native SDK
+# renderer that ships in QuickShot instead of measuring the debug reference path.
+(cd NativeQuickShotUI && PATH="$(dirname "$ZIG_BIN"):$PATH" "$ZIG_BIN" build lib -Doptimize=ReleaseFast)
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -18,9 +43,13 @@ xcrun swiftc \
   -swift-version 5 \
   -D TESTING \
   -framework AppKit \
+  -framework CoreGraphics \
   Tests/HubWindowTestSupport.swift \
+  Sources/NativeSDKBridge.swift \
+  Sources/NativeHubView.swift \
   Sources/HubWindow.swift \
   Tests/HubWindowBehaviorTests.swift \
+  "$NATIVE_UI_LIB" \
   -o "$OUT"
 
 "$OUT"
@@ -32,15 +61,58 @@ xcrun swiftc \
   -D TESTING \
   -framework AppKit \
   -framework CoreGraphics \
-  -framework QuartzCore \
-  Sources/TrayHostContentView.swift \
-  Tests/HubWindowLiveClickTests.swift \
+  Tests/HubWindowTestSupport.swift \
+  Sources/NativeSDKBridge.swift \
+  Sources/NativeHubView.swift \
   Sources/HubWindow.swift \
-  -o "$HUB_LIVE_OUT"
+  Tests/NativeSurfaceBehaviorTests.swift \
+  "$NATIVE_UI_LIB" \
+  -o "$SURFACE_OUT"
 
-"$HUB_LIVE_OUT"
+"$SURFACE_OUT"
 
 xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 5 \
+  -framework AppKit \
+  Sources/StatusMenuLayout.swift \
+  Tests/StatusMenuLayoutTests.swift \
+  -o "$STATUS_LAYOUT_OUT"
+
+"$STATUS_LAYOUT_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 5 \
+  -framework AppKit \
+  Sources/ThumbnailLayout.swift \
+  Tests/ThumbnailLayoutTests.swift \
+  -o "$THUMBNAIL_LAYOUT_OUT"
+
+"$THUMBNAIL_LAYOUT_OUT"
+
+if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
+  xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 5 \
+  -D TESTING \
+  -framework AppKit \
+  -framework CoreGraphics \
+  -framework QuartzCore \
+  Sources/TrayHostContentView.swift \
+  Sources/NativeSDKBridge.swift \
+  Sources/NativeHubView.swift \
+  Tests/HubWindowLiveClickTests.swift \
+  Sources/HubWindow.swift \
+  "$NATIVE_UI_LIB" \
+    -o "$HUB_LIVE_OUT"
+
+  "$HUB_LIVE_OUT"
+
+  xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
   -swift-version 5 \
@@ -50,18 +122,24 @@ xcrun swiftc \
   -framework QuartzCore \
   Sources/WindowCaptureProtection.swift \
   Sources/Theme.swift \
-  Sources/DSControls.swift \
+  Sources/NativeSDKBridge.swift \
+  Sources/NativeHubView.swift \
   Sources/Clipboard.swift \
   Sources/CardSizing.swift \
   Sources/TrayHostContentView.swift \
   Sources/HubWindow.swift \
   Sources/PinnedWindow.swift \
   Sources/ThumbnailWindow.swift \
+  Sources/ThumbnailLayout.swift \
   Sources/ThumbnailManager.swift \
   Tests/ThumbnailWindowLiveClickTests.swift \
-  -o "$THUMBNAIL_LIVE_OUT"
+  "$NATIVE_UI_LIB" \
+    -o "$THUMBNAIL_LIVE_OUT"
 
-"$THUMBNAIL_LIVE_OUT"
+  "$THUMBNAIL_LIVE_OUT"
+else
+  echo "Live UI tests skipped (set QUICKSHOT_RUN_LIVE_UI_TESTS=1 to run them)."
+fi
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -121,7 +199,7 @@ if output="$(rg -n "exclusionUnavailable|case failed\\(|cacheUnavailable" Source
   exit 1
 fi
 
-if output="$(rg -n "ScreenFreezePipeline|captureFrozenScreens|beginFrozenSelection|FrozenScreen|startFreezeTask|capture frozen ready|latest-active-stream|SCStream\\(" Sources README.md PRODUCT_CONTRACT.md CAPTURE_REDESIGN_PLAN.md)"; then
+if output="$(rg -n "ScreenFreezePipeline|captureFrozenScreens|beginFrozenSelection|FrozenScreen|startFreezeTask|capture frozen ready|latest-active-stream|SCStream\\(" Sources README.md PRODUCT_CONTRACT.md)"; then
   echo "$output"
   echo "Capture architecture regression: active code/contracts must not keep the old frozen/stream path." >&2
   exit 1
@@ -181,6 +259,12 @@ if output="$(rg -n "copy\\(cgImage:|copyAll\\(cgImages:" Sources/Clipboard.swift
   exit 1
 fi
 rg -q "cachedClipboardPayload" Sources/ThumbnailManager.swift
+rg -F -q "thumbnailLayout(screenFrame:" Sources/ThumbnailManager.swift
+if output="$(rg -n "items\.reversed\(\)" Sources/ThumbnailManager.swift)"; then
+  echo "$output"
+  echo "Thumbnail layout regression: newest screenshots must append into free slots without reflowing existing cards." >&2
+  exit 1
+fi
 rg -q "prepareClipboardPayload" Sources/ThumbnailWindow.swift
 rg -q "prepareClipboardPayload" Sources/PinnedWindow.swift
 if output="$(rg -n "NSBitmapImageRep\\(cgImage:|tiffRepresentation|Clipboard\\.copy\\(cgImage:" Sources/ThumbnailManager.swift Sources/ThumbnailWindow.swift Sources/PinnedWindow.swift)"; then
@@ -220,18 +304,68 @@ rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/Overlay.swift
 rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/ThumbnailManager.swift
 rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/PinnedWindow.swift
 rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/SettingsWindow.swift
-if output="$(rg -n "ScreenFrameCache|CachedFrame|validatedAt|preparedFrozenScreens|capture frozen ready|capture cache old frame accepted" Sources README.md PRODUCT_CONTRACT.md CAPTURE_REDESIGN_PLAN.md)"; then
+if output="$(rg -n "ScreenFrameCache|CachedFrame|validatedAt|preparedFrozenScreens|capture frozen ready|capture cache old frame accepted" Sources README.md PRODUCT_CONTRACT.md)"; then
   echo "$output"
   echo "Capture architecture regression: old stale-cache vocabulary must not remain in active contracts or code." >&2
   exit 1
 fi
 rg -F -q "config.showsCursor = false" Sources/FreshRegionCapture.swift
-if output="$(rg -n "GlassButton" Sources/ThumbnailWindow.swift)"; then
+if output="$(rg -n "GlassButton|DesignSystemButton|DesignSystemButtonGroup" Sources/ThumbnailWindow.swift Sources/PinnedWindow.swift Sources/HubWindow.swift)"; then
   echo "$output"
-  echo "Thumbnail controls regression: thumbnail cards must use DesignSystemButton, not native Liquid Glass." >&2
+  echo "Native controls regression: floating controls must use Native SDK controls, not AppKit button replicas." >&2
   exit 1
 fi
-rg -q "DesignSystemButton" Sources/ThumbnailWindow.swift
+if output="$(rg -n "NSImage\\(systemSymbolName|GlassButton|bezelStyle = \\.glass" Sources/HubWindow.swift Sources/ThumbnailWindow.swift Sources/PinnedWindow.swift)"; then
+  echo "$output"
+  echo "Design-system regression: floating controls must use Native SDK-rendered icons and buttons." >&2
+  exit 1
+fi
+if output="$(rg -n "NSSegmentedControl|NSButton|DesignSystemButton|DesignSystemButtonGroup" Sources/SettingsWindow.swift)"; then
+  echo "$output"
+  echo "Settings UI regression: settings controls must use Native SDK-rendered button-group, not AppKit controls." >&2
+  exit 1
+fi
+if output="$(rg -n "NSMenu\\b|NSMenuItem\\b|NSSegmentedControl|NSButton|DesignSystemButton|DesignSystemButtonGroup" Sources/StatusItemController.swift)"; then
+  echo "$output"
+  echo "Status menu regression: visible menu controls must use Native SDK-rendered buttons, not AppKit menu controls." >&2
+  exit 1
+fi
+rg -F -q "NativeHubShellView(frame: .zero)" Sources/HubWindow.swift
+rg -F -q "NativeThumbnailControlsView(frame: .zero)" Sources/ThumbnailWindow.swift
+rg -F -q "NativePinnedCopyButtonView(frame: .zero)" Sources/PinnedWindow.swift
+rg -F -q "NativeSettingsContentView(frame:" Sources/SettingsWindow.swift
+rg -F -q "NativeStatusMenuContentView(frame:" Sources/StatusItemController.swift
+rg -F -q "native_sdk_app_create" Sources/NativeSDKBridge.swift
+rg -F -q "native_sdk_app_touch" Sources/NativeSDKBridge.swift
+rg -F -q "quickshot_native_ui_pointer_move" Sources/NativeSDKBridge.swift
+rg -F -q "quickshot_native_ui_take_action" Sources/NativeSDKBridge.swift
+rg -F -q "quickshot_native_ui_set_appearance" Sources/NativeSDKBridge.swift
+rg -F -q -- "-Doptimize=ReleaseFast" build.sh
+if output="$(rg -n 'size="icon"' NativeQuickShotUI/src/hub.native)"; then
+  echo "$output"
+  echo "Design-system regression: icon-only controls must remain on the shared House sm register." >&2
+  exit 1
+fi
+rg -F -q "<button-group" NativeQuickShotUI/src/hub.native
+rg -F -q "<button size=\"sm\"" NativeQuickShotUI/src/hub.native
+rg -F -q '<panel width="800" height="40" background="surface" radius="xl" label="QuickShot hub bubble"></panel>' NativeQuickShotUI/src/hub.native
+rg -F -q '<row gap="8" cross="center" padding="6" label="QuickShot hub commands">' NativeQuickShotUI/src/hub.native
+rg -F -q 'variant="secondary"' NativeQuickShotUI/src/hub.native
+if output="$(rg -n 'variant="primary"' NativeQuickShotUI/src/hub.native)"; then
+  echo "$output"
+  echo "House Dark regression: floating neutral commands must not return to the light primary variant." >&2
+  exit 1
+fi
+rg -F -q ".pack = .house" NativeQuickShotUI/src/main.zig
+rg -F -q ".color_scheme = .dark" NativeQuickShotUI/src/main.zig
+rg -F -q '.theme = "house"' NativeQuickShotUI/app.zon
+rg -F -q "command_surface_prefix = \"surface:\"" NativeQuickShotUI/src/main.zig
+rg -F -q "setSurface(.thumbnail)" Sources/NativeHubView.swift
+rg -F -q "setSurface(.pinned)" Sources/NativeHubView.swift
+rg -F -q "setSurface(.settings)" Sources/NativeHubView.swift
+rg -F -q "targetProgress" Sources/NativeHubView.swift
+rg -F -q "addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged])" Sources/NativeHubView.swift
+rg -F -q "stopHoverMonitoring()" Sources/NativeHubView.swift
 test -f PRODUCT_CONTRACT.md
 test -x scripts/verify-capture-observed.sh
 test -x scripts/probe-screen-capture-stack.sh

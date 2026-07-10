@@ -3,6 +3,8 @@ QuickShot.app/
 *.app/
 build/
 DerivedData/
+.zig-cache/
+zig-out/
 
 # macOS
 .DS_Store

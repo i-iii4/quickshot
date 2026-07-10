@@ -1,12 +1,14 @@
 import AppKit
 
-/// Пункт в строке меню. Держит NSStatusItem и его меню; удерживается AppDelegate,
-/// чтобы значок не освободился.
+/// Пункт в строке меню. NSStatusItem остается системной точкой входа, а раскрываемое
+/// меню отрисовано Native SDK surface-ом вместо системного AppKit-меню.
 final class StatusItemController {
 
     private let statusItem: NSStatusItem
     private let onCapture: () -> Void
     private let onSettings: () -> Void
+    private var menuPanel: NSPanel?
+    private var outsideMonitor: Any?
 
     init(onCapture: @escaping () -> Void, onSettings: @escaping () -> Void) {
         self.onCapture = onCapture
@@ -17,44 +19,74 @@ final class StatusItemController {
             // Простой значок камеры.
             button.image = NSImage(systemSymbolName: "camera", accessibilityDescription: "QuickShot")
             button.image?.isTemplate = true
+            button.target = self
+            button.action = #selector(toggleMenu)
         }
-
-        let menu = NSMenu()
-
-        // ⌘⇧4 ловит глобальный Carbon-хоткей; не показываем его как акселератор пункта меню —
-        // в agent-приложении без главного меню он бы не срабатывал и ломал бы типографику строки.
-        let capture = NSMenuItem(title: "Сделать снимок",
-                                 action: #selector(captureAction), keyEquivalent: "")
-        capture.target = self
-        menu.addItem(capture)
-
-        let settings = NSMenuItem(title: "Настройки…",
-                                  action: #selector(settingsAction), keyEquivalent: "")
-        settings.target = self
-        menu.addItem(settings)
-
-        menu.addItem(.separator())
-
-        let access = NSMenuItem(title: "Открыть доступ к записи экрана",
-                                action: #selector(openAccessAction), keyEquivalent: "")
-        access.target = self
-        menu.addItem(access)
-
-        menu.addItem(.separator())
-
-        let quit = NSMenuItem(title: "Выйти из QuickShot",
-                              action: #selector(quitAction), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
-
-        statusItem.menu = menu
     }
 
-    @objc private func captureAction() { onCapture() }
-    @objc private func settingsAction() { onSettings() }
-    @objc private func quitAction() { NSApp.terminate(nil) }
+    @objc private func toggleMenu() {
+        if menuPanel?.isVisible == true {
+            hideMenu()
+        } else {
+            showMenu()
+        }
+    }
 
-    @objc private func openAccessAction() {
+    private func showMenu() {
+        let content = NativeStatusMenuContentView(frame: NSRect(origin: .zero,
+                                                                size: NSSize(width: 260, height: 184)))
+        content.onAction = { [weak self] action in
+            guard let self else { return }
+            self.hideMenu()
+            switch action {
+            case .capture:
+                self.onCapture()
+            case .settings:
+                self.onSettings()
+            case .access:
+                self.openAccessAction()
+            case .quit:
+                NSApp.terminate(nil)
+            }
+        }
+
+        let panel = NSPanel(contentRect: NSRect(origin: .zero, size: content.fittingSize),
+                            styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered,
+                            defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .statusBar
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.contentView = content
+        WindowCaptureProtection.excludeFromScreenCapture(panel)
+
+        if let button = statusItem.button, let window = button.window {
+            let buttonFrame = window.convertToScreen(button.frame)
+            let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? buttonFrame
+            panel.setFrameOrigin(StatusMenuLayout.origin(buttonFrame: buttonFrame,
+                                                         menuSize: content.fittingSize,
+                                                         visibleFrame: visibleFrame))
+        }
+
+        menuPanel = panel
+        panel.orderFrontRegardless()
+        outsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            self?.hideMenu()
+        }
+    }
+
+    private func hideMenu() {
+        menuPanel?.orderOut(nil)
+        menuPanel = nil
+        if let outsideMonitor {
+            NSEvent.removeMonitor(outsideMonitor)
+            self.outsideMonitor = nil
+        }
+    }
+
+    private func openAccessAction() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
             NSWorkspace.shared.open(url)
         }

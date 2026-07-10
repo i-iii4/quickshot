@@ -20,4 +20,6 @@ final class FrameAnimator {
         onFrame(easing(1))
         onDone?()
     }
+
+    func cancel() {}
 }

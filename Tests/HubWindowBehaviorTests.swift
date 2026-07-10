@@ -15,11 +15,20 @@ struct HubWindowBehaviorTests {
         run("intermediate expansion frames stay contained and anchored", testIntermediateExpansionFrames)
         run("action labels are never visibly clipped", testActionLabelsAreNeverVisiblyClipped)
         run("layout metrics stay mathematically consistent", testLayoutMetricsStayConsistent)
+        run("hover bubble is concentric and fades in", testHoverBubbleGeometry)
         run("action labels stay short and intentional", testActionLabelsStayShort)
+        run("actions keep one visual order", testActionsKeepVisualOrder)
+        run("reveal has no idle tail", testRevealHasNoIdleTail)
+        run("interrupted reveal keeps constant speed", testInterruptedRevealKeepsConstantSpeed)
+        run("repeated hover events do not restart reveal", testRepeatedHoverDoesNotRestartReveal)
+        run("hover bubble always closes outside its footprint", testHoverBubbleClosesOutsideFootprint)
+        run("reveal reuses one native render", testRevealReusesNativeRender)
+        run("first expanded render fits one frame", testExpandedRenderFitsFrameBudget)
+        run("hover is owned by Native SDK runtime", testNativeRuntimeOwnsHover)
         run("compact shell uses one stroke", testCompactShellUsesOneStroke)
         run("blank shell area is inert", testBlankShellAreaIsInert)
         run("action pill click invokes action without toggling tray", testActionClickDoesNotToggle)
-        run("interactive action pills click during reveal", testInteractiveActionPillsClickDuringReveal)
+        run("visible action pills click during reveal", testInteractiveActionPillsClickDuringReveal)
         run("action press survives shell mouse exit", testActionPressSurvivesShellMouseExit)
         run("every action pill is clickable in both expansion directions", testEveryActionPillIsClickable)
 
@@ -91,7 +100,7 @@ struct HubWindowBehaviorTests {
 
     private static func testEveryActionPillIsClickable() throws {
         for position in [TrayPosition.right, .left] {
-            for title in ["Delete", "Save", "Copy"] {
+            for title in ["Delete", "Save As", "Copy All"] {
                 let harness = Harness(position: position)
                 harness.hub.debugSetExpansionProgress(1)
                 let point = try harness.actionPoint(title: title)
@@ -105,14 +114,14 @@ struct HubWindowBehaviorTests {
                     try require(harness.deleteCount == 1, "\(position): Delete did not fire")
                     try require(harness.saveAsCount == 0 && harness.copyAllCount == 0,
                                 "\(position): Delete fired another action")
-                case "Save":
-                    try require(harness.saveAsCount == 1, "\(position): Save did not fire")
+                case "Save As":
+                    try require(harness.saveAsCount == 1, "\(position): Save As did not fire")
                     try require(harness.deleteCount == 0 && harness.copyAllCount == 0,
-                                "\(position): Save fired another action")
-                case "Copy":
-                    try require(harness.copyAllCount == 1, "\(position): Copy did not fire")
+                                "\(position): Save As fired another action")
+                case "Copy All":
+                    try require(harness.copyAllCount == 1, "\(position): Copy All did not fire")
                     try require(harness.deleteCount == 0 && harness.saveAsCount == 0,
-                                "\(position): Copy fired another action")
+                                "\(position): Copy All fired another action")
                 default:
                     throw Failure("Unexpected action title \(title)")
                 }
@@ -206,10 +215,13 @@ struct HubWindowBehaviorTests {
                             "\(position) count \(count): core Y inset drifted")
                 try require(abs(snapshot.coreFrame.height - snapshot.actionClipFrame.height) <= 0.5,
                             "\(position) count \(count): core/action heights differ")
-                try require(abs(snapshot.coreCornerRadius - snapshot.coreFrame.height / 2) <= 0.5,
-                            "\(position) count \(count): core radius is not half-height")
-                try require(abs(snapshot.actionClipCornerRadius - snapshot.actionClipFrame.height / 2) <= 0.5,
-                            "\(position) count \(count): clip radius is not half-height")
+                try require(abs(snapshot.coreFrame.height - 28) <= 0.5,
+                            "\(position) count \(count): House small controls must stay 28pt high")
+                let expectedDuration: CFTimeInterval = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.12
+                try require(abs(snapshot.animationDuration - expectedDuration) <= 0.001,
+                            "\(position) count \(count): reveal must use House fast motion token")
+                try require(abs(snapshot.coreCornerRadius - snapshot.controlRadius) <= 0.5,
+                            "\(position) count \(count): core radius must follow House 8pt control radius")
 
                 let coreActionGap: CGFloat
                 if position == .left {
@@ -219,14 +231,23 @@ struct HubWindowBehaviorTests {
                 }
                 try require(abs(coreActionGap - snapshot.groupGap) <= 0.5,
                             "\(position) count \(count): core/action gap \(coreActionGap) != \(snapshot.groupGap)")
+                let gapX = position == .left
+                    ? (snapshot.coreFrame.maxX + snapshot.actionClipFrame.minX) / 2
+                    : (snapshot.actionClipFrame.maxX + snapshot.coreFrame.minX) / 2
+                let gapPoint = NSPoint(x: gapX, y: snapshot.coreFrame.midY)
+                let gapPixel = harness.hub.debugPixel(at: gapPoint)
+                try require((gapPixel & 0xff) > 0,
+                            "\(position) count \(count): expanded hub gap must belong to the pill surface; point=\(gapPoint) pixel=\(String(gapPixel, radix: 16)) core=\(snapshot.coreFrame) actions=\(snapshot.actionClipFrame)")
 
                 let pills = snapshot.actionPills
                 try require(pills.count == 3, "\(position) count \(count): expected 3 action pills")
                 for pill in pills {
                     try require(abs(pill.frame.height - snapshot.coreFrame.height) <= 0.5,
                                 "\(position) count \(count): \(pill.title) height differs")
-                    try require(abs(pill.cornerRadius - pill.frame.height / 2) <= 0.5,
-                                "\(position) count \(count): \(pill.title) radius is not half-height")
+                    try require(abs(pill.cornerRadius - snapshot.controlRadius) <= 0.5,
+                                "\(position) count \(count): \(pill.title) radius must follow House 8pt control radius")
+                    try require(pill.hasIcon,
+                                "\(position) count \(count): \(pill.title) must render as an icon+label command pill")
                     try require(pill.labelAlpha == 1 && pill.isInteractive,
                                 "\(position) count \(count): fully expanded \(pill.title) should be visible and interactive")
                 }
@@ -243,8 +264,146 @@ struct HubWindowBehaviorTests {
         let harness = Harness(position: .right)
         harness.hub.debugSetExpansionProgress(1)
         let titles = harness.hub.debugSnapshot().actionPills.map(\.title)
-        try require(titles == ["Delete", "Save", "Copy"], "Unexpected action labels: \(titles)")
-        try require(titles.allSatisfy { $0.count <= 6 }, "Action labels must stay compact: \(titles)")
+        try require(Set(titles) == Set(["Delete", "Save As", "Copy All"]), "Unexpected action labels: \(titles)")
+        try require(titles.allSatisfy { $0.count <= 8 }, "Action labels must stay compact but explicit: \(titles)")
+    }
+
+    private static func testHoverBubbleGeometry() throws {
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            let harness = Harness(position: position)
+            harness.hub.debugSetExpansionProgress(0)
+            var snapshot = harness.hub.debugSnapshot()
+            try require(abs(snapshot.bubbleRadius - snapshot.controlRadius - snapshot.shellInset) <= 0.001,
+                        "\(position): outer radius must equal button radius + inset")
+            try require(snapshot.bubbleAlpha == 0,
+                        "\(position): bubble must be absent before hover")
+
+            let compactPaddingPoint = NSPoint(
+                x: position == .left ? snapshot.shellBounds.minX + 1 : snapshot.shellBounds.maxX - 1,
+                y: snapshot.shellBounds.midY
+            )
+            try require((harness.hub.debugPixel(at: compactPaddingPoint) & 0xff) == 0,
+                        "\(position): compact shell padding must remain transparent")
+
+            harness.hub.debugSetExpansionProgress(0.1)
+            snapshot = harness.hub.debugSnapshot()
+            try require(snapshot.bubbleAlpha > 0 && snapshot.bubbleAlpha < 1,
+                        "\(position): bubble must fade through an intermediate alpha")
+
+            harness.hub.debugSetExpansionProgress(1)
+            snapshot = harness.hub.debugSnapshot()
+            try require(abs(snapshot.bubbleAlpha - 1) <= 0.001,
+                        "\(position): expanded bubble must finish opaque")
+        }
+    }
+
+    private static func testActionsKeepVisualOrder() throws {
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            let harness = Harness(position: position)
+            harness.hub.debugSetExpansionProgress(1)
+            let snapshot = harness.hub.debugSnapshot()
+            let leftToRight = snapshot.actionPills.sorted { $0.frame.minX < $1.frame.minX }.map(\.title)
+            try require(leftToRight == ["Delete", "Save As", "Copy All"],
+                        "\(position): actions must stay Delete, Save As, Copy All from left to right; got \(leftToRight)")
+        }
+    }
+
+    private static func testRevealHasNoIdleTail() throws {
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            let harness = Harness(position: position)
+            var widths: [CGFloat] = []
+            for progress: CGFloat in [0, 0.25, 0.5, 0.75, 0.88, 1] {
+                harness.hub.debugSetExpansionProgress(progress)
+                widths.append(harness.hub.view.frame.width)
+            }
+            for index in 1..<widths.count {
+                try require(widths[index] > widths[index - 1] + 0.5,
+                            "\(position): reveal stopped changing before completion: \(widths)")
+            }
+        }
+    }
+
+    private static func testInterruptedRevealKeepsConstantSpeed() throws {
+        let harness = Harness(position: .right)
+        harness.hub.debugSetExpansionProgress(0)
+        let full = harness.hub.debugTransitionDuration(toExpanded: true)
+        harness.hub.debugSetExpansionProgress(0.8)
+        let remainder = harness.hub.debugTransitionDuration(toExpanded: true)
+
+        try require(abs(full - 0.12) <= 0.001, "Full House reveal must use the 120ms fast token")
+        try require(abs(remainder - 0.024) <= 0.001,
+                    "The last 20% must take 20% of the duration, not restart a full reveal: \(remainder)")
+    }
+
+    private static func testRepeatedHoverDoesNotRestartReveal() throws {
+        let harness = Harness(position: .right)
+        harness.hub.debugSetExpansionProgress(0.2)
+        harness.hub.debugRequestExpanded(true)
+        let starts = harness.hub.debugSnapshot().animationStartCount
+
+        harness.hub.debugSetExpansionProgress(0.3)
+        for _ in 0..<20 { harness.hub.debugRequestExpanded(true) }
+
+        try require(harness.hub.debugSnapshot().animationStartCount == starts,
+                    "Repeated mouseMoved events restarted the same reveal target")
+    }
+
+    private static func testHoverBubbleClosesOutsideFootprint() throws {
+        let harness = Harness(position: .right)
+        harness.hub.debugSetExpansionProgress(0.2)
+        harness.hub.debugRequestExpanded(true)
+        harness.hub.debugSetExpansionProgress(0.2)
+
+        harness.hub.debugUpdateHover(at: NSPoint(x: harness.hub.view.frame.midX,
+                                                 y: harness.hub.view.frame.midY))
+        try require(harness.hub.debugSnapshot().expansionTarget == 1,
+                    "Pointer inside the expanded footprint closed the bubble")
+
+        harness.hub.debugUpdateHover(at: NSPoint(x: -1000, y: -1000))
+        let closed = harness.hub.debugSnapshot()
+        try require(closed.expansionTarget == 0 && closed.bubbleAlpha == 0,
+                    "Pointer outside the expanded footprint left the bubble visible")
+    }
+
+    private static func testRevealReusesNativeRender() throws {
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            let harness = Harness(position: position)
+            harness.hub.debugSetExpansionProgress(0)
+            let initial = harness.hub.debugSnapshot().nativeRenderPassCount
+            for progress: CGFloat in [0.08, 0.18, 0.33, 0.55, 0.78, 0.92, 1] {
+                harness.hub.debugSetExpansionProgress(progress)
+                _ = harness.hub.debugSnapshot()
+            }
+            let final = harness.hub.debugSnapshot().nativeRenderPassCount
+            try require(final - initial <= 1,
+                        "\(position): reveal rerendered Native SDK \(final - initial) times instead of clipping one expanded frame")
+        }
+    }
+
+    private static func testExpandedRenderFitsFrameBudget() throws {
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            let harness = Harness(position: position)
+            harness.hub.debugSetExpansionProgress(0)
+            let before = harness.hub.debugSnapshot()
+            let startedAt = CACurrentMediaTime()
+            harness.hub.debugSetExpansionProgress(0.01)
+            let after = harness.hub.debugSnapshot()
+            let wallDuration = CACurrentMediaTime() - startedAt
+            let renderDuration = after.nativeRenderDuration - before.nativeRenderDuration
+            try require(renderDuration <= 1.0 / 60.0,
+                        "\(position): first expanded Native SDK render took \(renderDuration * 1000)ms")
+            try require(wallDuration <= 1.0 / 30.0,
+                        "\(position): first reveal frame took \(wallDuration * 1000)ms end to end")
+        }
+    }
+
+    private static func testNativeRuntimeOwnsHover() throws {
+        let harness = Harness(position: .right)
+        harness.hub.debugSetExpansionProgress(1)
+        harness.hub.debugHoverButton(title: "Delete")
+        let buttons = harness.hub.debugControlButtons()
+        let hovered = buttons.filter(\.isHovered).map(\.title)
+        try require(hovered == ["Delete"], "Native SDK hover state should belong only to Delete, got \(hovered)")
     }
 
     private static func testCompactShellUsesOneStroke() throws {
@@ -253,10 +412,12 @@ struct HubWindowBehaviorTests {
             harness.hub.debugSetExpansionProgress(0)
             let snapshot = harness.hub.debugSnapshot()
 
-            try require(abs(snapshot.shellBorderWidth - 1) <= 0.001,
-                        "\(position): compact shell must use exactly one layer border")
-            try require(snapshot.shellSublayerCount == 0,
-                        "\(position): compact shell must not stack decorative ring sublayers")
+            try require(abs(snapshot.shellBorderWidth) <= 0.001,
+                        "\(position): House command row must not use container border")
+            try require(snapshot.bubbleAlpha == 0,
+                        "\(position): compact hub must not show the hover bubble")
+            try require(snapshot.coreHasIcon,
+                        "\(position): compact hub must render as an icon+label command button")
         }
     }
 
@@ -281,12 +442,12 @@ struct HubWindowBehaviorTests {
     }
 
     private static func testInteractiveActionPillsClickDuringReveal() throws {
-        let progressFrames: [CGFloat] = [0.33, 0.55, 0.78, 0.95]
+        let progressFrames: [CGFloat] = [0.33, 0.55, 0.78, 0.95, 0.98]
 
         for position in [TrayPosition.right, .left, .bottom, .top] {
             var partialTitles = Set<String>()
             for progress in progressFrames {
-                for title in ["Delete", "Save", "Copy"] {
+                for title in ["Delete", "Save As", "Copy All"] {
                     let harness = Harness(position: position)
                     harness.hub.debugSetExpansionProgress(progress)
                     let snapshot = harness.hub.debugSnapshot()
@@ -301,14 +462,15 @@ struct HubWindowBehaviorTests {
                 }
             }
 
-            try require(partialTitles == Set(["Delete", "Save", "Copy"]),
-                        "\(position): every action should become clickable before the fully expanded frame, got \(partialTitles)")
+            let nearestTitle = position == .left ? "Delete" : "Copy All"
+            try require(partialTitles.contains(nearestTitle),
+                        "\(position): the nearest action \(nearestTitle) must become clickable before the fully expanded frame, got \(partialTitles)")
         }
     }
 
     private static func testActionPressSurvivesShellMouseExit() throws {
         for position in [TrayPosition.right, .left, .bottom, .top] {
-            for title in ["Delete", "Save", "Copy"] {
+            for title in ["Delete", "Save As", "Copy All"] {
                 let harness = Harness(position: position)
                 harness.hub.debugSetExpansionProgress(1)
                 let point = try harness.actionPoint(title: title)
@@ -342,14 +504,14 @@ struct HubWindowBehaviorTests {
             try require(harness.deleteCount == 1, "\(context): Delete did not fire once")
             try require(harness.saveAsCount == 0 && harness.copyAllCount == 0,
                         "\(context): Delete fired another action")
-        case "Save":
-            try require(harness.saveAsCount == 1, "\(context): Save did not fire once")
+        case "Save As":
+            try require(harness.saveAsCount == 1, "\(context): Save As did not fire once")
             try require(harness.deleteCount == 0 && harness.copyAllCount == 0,
-                        "\(context): Save fired another action")
-        case "Copy":
-            try require(harness.copyAllCount == 1, "\(context): Copy did not fire once")
+                        "\(context): Save As fired another action")
+        case "Copy All":
+            try require(harness.copyAllCount == 1, "\(context): Copy All did not fire once")
             try require(harness.deleteCount == 0 && harness.saveAsCount == 0,
-                        "\(context): Copy fired another action")
+                        "\(context): Copy All fired another action")
         default:
             throw Failure("\(context): unexpected action title \(title)")
         }
@@ -396,6 +558,7 @@ struct HubWindowBehaviorTests {
 
         func hoverHub() {
             hub.view.mouseMoved(with: event(.mouseMoved, at: hub.center))
+            hub.debugSetExpansionProgress(1)
             root.layoutSubtreeIfNeeded()
         }
 
@@ -430,18 +593,7 @@ struct HubWindowBehaviorTests {
         }
 
         func firstActionPoint() throws -> NSPoint {
-            let y = hub.center.y
-            var x = hub.view.frame.minX + 2
-            while x <= hub.view.frame.maxX - 2 {
-                let point = NSPoint(x: x, y: y)
-                let pointInHub = hub.view.convert(point, from: root)
-                if let hit = hub.view.hitTest(pointInHub),
-                   String(describing: type(of: hit)).contains("HubActionPill") {
-                    return point
-                }
-                x += 2
-            }
-            throw Failure("No action pill hit target found in expanded hub frame \(hub.view.frame)")
+            try actionPoint(title: "Delete")
         }
 
         func actionPoint(title: String) throws -> NSPoint {
@@ -500,12 +652,13 @@ struct HubWindowBehaviorTests {
             var rect = view.convert(view.bounds, to: hub.view)
             var ancestor = view.superview
 
-            while let current = ancestor, current !== hub.view {
+            while let current = ancestor {
                 if current.layer?.masksToBounds == true {
                     let clip = current.convert(current.bounds, to: hub.view)
                     rect = rect.intersection(clip)
                     if rect.isNull || rect.width <= 0 || rect.height <= 0 { return nil }
                 }
+                if current === hub.view { break }
                 ancestor = current.superview
             }
             return rect

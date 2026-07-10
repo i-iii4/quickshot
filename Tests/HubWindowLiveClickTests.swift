@@ -78,7 +78,7 @@ private final class HubWindowLiveClickTests: NSObject, NSApplicationDelegate {
 
     private func run() {
         for position in [TrayPosition.right, .left, .bottom, .top] {
-            for title in ["Delete", "Save", "Copy"] {
+            for title in ["Delete", "Save As", "Copy All"] {
                 runLiveClick(position: position, title: title)
             }
         }
@@ -97,11 +97,13 @@ private final class HubWindowLiveClickTests: NSObject, NSApplicationDelegate {
             return
         }
 
+        let panelWidth: CGFloat = 960
+        let panelHeight: CGFloat = 240
         TrayPosition.testCurrent = position
-        let panel = LiveClickPanel(contentRect: NSRect(x: screen.frame.midX - 260,
-                                                       y: screen.frame.midY - 120,
-                                                       width: 520,
-                                                       height: 240),
+        let panel = LiveClickPanel(contentRect: NSRect(x: screen.frame.midX - panelWidth / 2,
+                                                       y: screen.frame.midY - panelHeight / 2,
+                                                       width: panelWidth,
+                                                       height: panelHeight),
                                    styleMask: [.borderless, .nonactivatingPanel],
                                    backing: .buffered,
                                    defer: false)
@@ -114,7 +116,7 @@ private final class HubWindowLiveClickTests: NSObject, NSApplicationDelegate {
         panel.becomesKeyOnlyIfNeeded = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
 
-        let root = TrayHostContentView(frame: NSRect(x: 0, y: 0, width: 520, height: 240))
+        let root = TrayHostContentView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight))
         panel.contentView = root
 
         let hub = HubWindow()
@@ -126,7 +128,7 @@ private final class HubWindowLiveClickTests: NSObject, NSApplicationDelegate {
         hub.onCopyAll = { copyCount += 1 }
         hub.setState(count: 2, collapsed: false)
         root.addSubview(hub.view)
-        hub.setOrigin(NSPoint(x: 250, y: 100))
+        hub.setOrigin(NSPoint(x: floor((panelWidth - hub.width) / 2), y: 100))
         hub.show()
         root.layoutSubtreeIfNeeded()
 
@@ -150,7 +152,7 @@ private final class HubWindowLiveClickTests: NSObject, NSApplicationDelegate {
         postMouse(.leftMouseUp, at: actionPoint, panel: panel)
         spin(0.12)
 
-        let counts = ["Delete": deleteCount, "Save": saveCount, "Copy": copyCount]
+        let counts = ["Delete": deleteCount, "Save As": saveCount, "Copy All": copyCount]
         if counts[title] != 1 {
             failures.append("\(position) \(title): expected one live click callback, got \(counts); \(hitDescription(atWindowPoint: actionPoint, root: root, hub: hub))")
         }

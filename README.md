@@ -44,30 +44,34 @@ back in at capture time.
 
 ## Tray And Hub
 
-- When there is at least one screenshot, QuickShot shows the compact hub near
-  the screen corner.
+- When there is at least one screenshot, QuickShot shows the compact
+  icon+label hub near the screen corner.
 - Clicking the hub collapses or expands screenshots.
 - A new screenshot expands the tray.
+- Existing screenshot cards keep their positions when a new one arrives. The
+  new card occupies the next free slot away from the hub instead of reflowing
+  the stack.
 - The hub position is based on the full screen frame, not the Dock/menu-bar safe
   area.
-- Hover reveal exposes three command pills: `Delete`, `Save`, and `Copy`.
-- Per-thumbnail controls use QuickShot command-button styling, not native Liquid
-  Glass controls.
+- Hover reveal exposes three independent House command buttons in a token-spaced row: `Delete`,
+  `Save As`, and `Copy All`.
+- Hover fades in one rounded House Dark bubble around the complete command row;
+  it is absent at rest. Its `14pt` radius and `6pt` inset are concentric with
+  the buttons' `8pt` radius. Neutral commands use the dark `secondary` variant
+  instead of the light dark-theme `primary` variant.
+- Hub, thumbnail, pinned, settings, and status-menu commands are real Native
+  SDK controls rendered from one fixed House Dark token register. AppKit owns only window
+  hosting and system chrome.
+- Hover, pressed, and click dispatch travel through the Native SDK runtime;
+  visible labels are not used as action identifiers.
+- Native SDK `button-group` is reserved for model-owned exclusive choices such
+  as tray position; independent commands never use group chrome.
+- The visual scheme is fixed to House Dark. System High Contrast and Reduce
+  Motion settings are projected into the embedded runtime and repaint the
+  complete surface.
 - Empty transparent tray space must not steal clicks from real controls.
 
 Visual references are stored in `reference/screenshots/`.
-
-## Interface Model Direction
-
-QuickShot is evaluating stronger interface models for the application shell.
-The current candidate is Native SDK (`vercel-labs/native`): not as a screenshot
-engine replacement, but as a possible way to get a cleaner component/state/
-automation model for the hub, cards, command pills, focus, hover, and click
-stories.
-
-Any framework spike must preserve the capture UX contract: immediate selection,
-fresh final pixels, no stale screenshots, no tray blink, no duplicate cursor,
-and stable clickable controls.
 
 ## Current Implementation
 
@@ -84,6 +88,22 @@ The current capture flow follows this UX goal:
 Implementation details are allowed to change freely as long as this UX contract
 does not regress.
 
+## Native UI Design System
+
+Native SDK component provenance, tokens, documented compositions, the complete
+catalog, and reusable markup contracts live in the sibling project:
+
+```text
+/Users/i_iii/Проекты/native-ui-design-system
+```
+
+`build.sh` and `scripts/test.sh` call that project's `scripts/check.sh` before
+compiling QuickShot UI. Override its location with `NATIVE_DESIGN_SYSTEM_DIR`.
+QuickShot does not keep a private copy of the catalog or composition validator.
+Production builds and the default regression suite link the Native UI library
+in `ReleaseFast`, so motion and render budgets exercise the shipped path. Debug
+builds remain available for explicit diagnostics.
+
 ## Build
 
 ```bash
@@ -94,6 +114,13 @@ does not regress.
 
 ```bash
 ./scripts/test.sh
+```
+
+The default suite is headless and does not open windows over the active screen.
+The separate live-window click probes remain explicit:
+
+```bash
+QUICKSHOT_RUN_LIVE_UI_TESTS=1 ./scripts/test.sh
 ```
 
 Runtime checks that post synthetic hotkeys or mouse events must stay opt-in:
@@ -116,7 +143,4 @@ permission to the bundle.
 ## Documents
 
 - `PRODUCT_CONTRACT.md` - UX requirements that define regressions.
-- `CAPTURE_REDESIGN_PLAN.md` - short UX-first work plan for the next capture
-  rewrite.
-- `INTERFACE_MODEL_RESEARCH.md` - Native SDK/interface-model evaluation plan.
 - `DEVLOG.md` - dated engineering notes.

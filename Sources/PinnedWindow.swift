@@ -1,13 +1,13 @@
 import AppKit
 
-/// Содержимое пиннованного окна: полный кадр + кнопка «Копировать» (нативный Liquid Glass,
-/// reveal по ховеру через isHidden). Закрытие — системными «светофорами» окна и Esc;
-/// отдельный glass-крестик не плодим (он дублировал бы traffic-light close). Копирование — ⌘C.
+/// Содержимое пиннованного окна: полный кадр + Native SDK-кнопка Copy из того же
+/// House Dark-регистра, что и контролы карточек/хаба. Закрытие — системными «светофорами» окна и Esc;
+/// отдельный крестик не плодим (он дублировал бы traffic-light close). Копирование — ⌘C.
 private final class PinnedContentView: NSView {
 
     private let image: CGImage
     private let imageView = NSImageView()
-    private let copyButton = GlassButton(symbol: "doc.on.doc", title: "Копировать", a11y: "Скопировать в буфер обмена")
+    private let copyButton = NativePinnedCopyButtonView(frame: .zero)
     private var trackingArea: NSTrackingArea?
     private var preparedClipboardImage: Clipboard.PreparedImage?
     var onClose: (() -> Void)?
@@ -23,9 +23,7 @@ private final class PinnedContentView: NSView {
         imageView.autoresizingMask = [.width, .height]
         addSubview(imageView)
 
-        copyButton.onClick = { [weak self] in self?.doCopy() }
-        copyButton.keyEquivalent = "c"
-        copyButton.keyEquivalentModifierMask = .command
+        copyButton.onCopy = { [weak self] in self?.doCopy() }
         copyButton.toolTip = "Скопировать (⌘C)"
         copyButton.isHidden = true
         addSubview(copyButton)
@@ -36,8 +34,13 @@ private final class PinnedContentView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { onClose?() }          // Esc
-        else { super.keyDown(with: event) }
+        if event.keyCode == 53 { onClose?(); return }          // Esc
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
+           event.charactersIgnoringModifiers?.lowercased() == "c" {
+            doCopy()
+            return
+        }
+        super.keyDown(with: event)
     }
     override func cancelOperation(_ sender: Any?) { onClose?() }
 

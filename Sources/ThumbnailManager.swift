@@ -46,7 +46,7 @@ final class TrayHostPanel: NSPanel {
 }
 
 /// Менеджер трея миниатюр. Карточки выкладываются у угла (колонка/ряд), у самого угла —
-/// Vercel/Geist-подобный command hub со счётчиком. Клик по хабу растворяет карточки в него
+/// House Dark command hub со счётчиком. Клик по хабу растворяет карточки в него
 /// (сворачивание) или проявляет обратно (разворачивание). Новый снимок авто-разворачивает.
 /// Общая ширина карточки сохраняется между сессиями.
 final class ThumbnailManager {
@@ -308,7 +308,7 @@ final class ThumbnailManager {
         let (visible, hidden) = cardLayout(on: screen)
         for t in hidden { t.hide() }
         let n = visible.count
-        for (i, pair) in visible.enumerated() {       // i=0 — новейшая (у хаба); дальние растворяются первыми
+        for (i, pair) in visible.enumerated() {       // дальние новые слоты растворяются первыми
             pair.0.dissolve(toHubCenter: c, duration: TrayAnim.collapse, delay: Double(n - 1 - i) * TrayAnim.stagger)
         }
         hub.setState(count: items.count, collapsed: collapsed)
@@ -322,7 +322,7 @@ final class ThumbnailManager {
         let c = hub.center                            // уже в координатах хоста
         let (visible, hidden) = cardLayout(on: screen)
         for t in hidden { t.hide() }
-        for (i, pair) in visible.enumerated() {        // ближняя (новейшая) выходит первой
+        for (i, pair) in visible.enumerated() {        // слоты выходят от хаба к свободному краю
             pair.0.emerge(fromHubCenter: c, toOrigin: toLocal(pair.1), duration: TrayAnim.collapse, delay: Double(i) * TrayAnim.stagger)
         }
         hub.setState(count: items.count, collapsed: collapsed)
@@ -330,8 +330,8 @@ final class ThumbnailManager {
 
     // MARK: раскладка (добавление/ресайз/смена положения)
 
-    /// Расставить карточки по местам. animateNewest=true — новейшая карточка (i=0 у хаба)
-    /// влетает scale+fade, остальные ставятся мгновенно.
+    /// Расставить карточки по стабильным слотам. animateNewest=true анимирует только добавленный
+    /// последний элемент; существующие карточки остаются на прежних координатах.
     private func layout(animateNewest: Bool = false) {
         guard let screen = anchorScreen ?? NSScreen.main else { return }
         ensureHost(on: screen)
@@ -343,9 +343,10 @@ final class ThumbnailManager {
         if collapsed {
             for (t, _) in visible { t.hide() }
         } else {
-            for (i, pair) in visible.enumerated() {
+            let newest = items.last
+            for pair in visible {
                 let localOrigin = toLocal(pair.1)
-                if animateNewest && i == 0 { pair.0.appear(at: localOrigin) }
+                if animateNewest && pair.0 === newest { pair.0.appear(at: localOrigin) }
                 else { pair.0.placeInstant(origin: localOrigin) }
             }
         }
@@ -370,38 +371,23 @@ final class ThumbnailManager {
         }
     }
 
-    /// Позиции видимых карточек (новейшая у хаба) + список переполнения (прячем). В ГЛОБАЛЬНЫХ
-    /// координатах экрана; вызывающий конвертирует в координаты хоста через toLocal.
+    /// Позиции видимых карточек в порядке добавления + список переполнения. Существующие карточки
+    /// сохраняют свои слоты, новый снимок занимает следующий свободный слот по направлению от хаба.
+    /// Координаты глобальные; вызывающий конвертирует их через toLocal.
     private func cardLayout(on screen: NSScreen) -> (visible: [(ThumbnailWindow, NSPoint)], hidden: [ThumbnailWindow]) {
         // Карточки должны жить в той же системе координат, что и хаб: полный frame экрана.
         // Иначе Dock/menu bar сдвигают карточки, а хаб остаётся в углу — между ними появляется дыра.
-        let sf = screen.frame
         let pos = TrayPosition.current
-        let hubW = hub.width, hubH = hub.height                  // капсула: высота для вертикали, ширина для горизонтали
-        var visible: [(ThumbnailWindow, NSPoint)] = []
-        var hidden: [ThumbnailWindow] = []
-        var overflow = false
-
-        if pos.isVertical {
-            let x = pos == .right ? (sf.maxX - ThumbStyle.margin - cardWidth) : (sf.minX + ThumbStyle.margin)
-            var y = sf.minY + ThumbStyle.margin + hubH + ThumbStyle.gap   // над хабом — высота хаба
-            for (idx, t) in items.reversed().enumerated() {
-                if overflow { hidden.append(t); continue }
-                let h = t.cardHeight
-                if idx > 0 && (y + h) > (sf.maxY - ThumbStyle.margin) { overflow = true; hidden.append(t); continue }
-                visible.append((t, NSPoint(x: x, y: y)))
-                y += h + ThumbStyle.gap
-            }
-        } else {
-            var x = (sf.maxX - ThumbStyle.margin - hubW) - ThumbStyle.gap - cardWidth   // слева от хаба — ширина хаба
-            for (idx, t) in items.reversed().enumerated() {
-                if overflow { hidden.append(t); continue }
-                if idx > 0 && x < (sf.minX + ThumbStyle.margin) { overflow = true; hidden.append(t); continue }
-                let y = pos == .bottom ? (sf.minY + ThumbStyle.margin) : (sf.maxY - ThumbStyle.margin - t.cardHeight)
-                visible.append((t, NSPoint(x: x, y: y)))
-                x -= (cardWidth + ThumbStyle.gap)
-            }
-        }
-        return (visible, hidden)
+        let result = thumbnailLayout(screenFrame: screen.frame,
+                                     edge: ThumbnailLayoutEdge(rawValue: pos.rawValue)!,
+                                     cardWidth: cardWidth,
+                                     cardHeights: items.map(\.cardHeight),
+                                     hubSize: NSSize(width: hub.width, height: hub.height),
+                                     margin: ThumbStyle.margin,
+                                     gap: ThumbStyle.gap)
+        return (
+            result.visible.map { (items[$0.index], $0.origin) },
+            result.hidden.map { items[$0] }
+        )
     }
 }

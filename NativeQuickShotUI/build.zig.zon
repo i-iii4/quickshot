@@ -1,0 +1,8 @@
+.{
+    .name = .quickshot_native_ui,
+    .fingerprint = 0x9ceafb50a554ef62,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{ .native_sdk = .{ .path = "../../native-ui-design-system/node_modules/@native-sdk/cli" } },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "app.zon" },
+}
