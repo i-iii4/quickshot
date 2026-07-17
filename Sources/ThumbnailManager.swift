@@ -11,14 +11,6 @@ enum ThumbStyle {
     static let dragThreshold: CGFloat = 6        // порог, после которого клик тела становится drag-out
 }
 
-/// Тайминги анимаций трея (одна точка правки, зеркальные вход/выход). Быстро и почти незаметно:
-/// пространственное движение ~160ms, стаггер минимальный, везде ease-out без перелёта.
-enum TrayAnim {
-    static let move: Double = 0.16               // влёт новой карточки (scale+fade)
-    static let collapse: Double = 0.16           // растворение/проявление карточки (зеркально move)
-    static let stagger: Double = 0.015           // сдвиг старта между карточками
-}
-
 /// Положение трея миниатюр. Сохраняется в UserDefaults, меняется из окна настроек.
 enum TrayPosition: String {
     case right, left, bottom, top
@@ -47,7 +39,8 @@ final class TrayHostPanel: NSPanel {
 
 /// Менеджер трея миниатюр. Карточки выкладываются у угла (колонка/ряд), у самого угла —
 /// House Dark command hub со счётчиком. Клик по хабу растворяет карточки в него
-/// (сворачивание) или проявляет обратно (разворачивание). Новый снимок авто-разворачивает.
+/// (сворачивание) или проявляет обратно (разворачивание). Новый снимок в свёрнутом трее
+/// показывается как короткое подтверждение, не меняя состояние трея.
 /// Общая ширина карточки сохраняется между сессиями.
 final class ThumbnailManager {
 
@@ -58,6 +51,16 @@ final class ThumbnailManager {
 
     private let host: TrayHostPanel
     private let hostContent = TrayHostContentView()
+    private lazy var trayAnimator = TrayProgressAnimator(hostView: hostContent)
+    private lazy var collectionAnimator = CollectionProgressAnimator(hostView: hostContent)
+    private var trayProgress: CGFloat = 0
+    private var collectionCompletion: (() -> Void)?
+    private var collapsedPeekWorkItem: DispatchWorkItem?
+    private var hoverExitWorkItem: DispatchWorkItem?
+    private var collapsedPeekGeneration: UInt = 0
+    private var hoverExitGeneration: UInt = 0
+    private weak var collapsedPeekItem: ThumbnailWindow?
+    private var trayHoverActive = false
 
     private let defaults = UserDefaults.standard
     private let widthKey = "thumbnailCardWidth"
@@ -88,6 +91,9 @@ final class ThumbnailManager {
         hub.onDelete = { [weak self] in self?.deleteAll() }
         hub.onSaveAs = { [weak self] in self?.saveAllAs() }
         hub.onCopyAll = { [weak self] in self?.copyAll() }
+        hub.onHoverChanged = { [weak self] entered in
+            self?.hubHoverChanged(entered: entered)
+        }
         NotificationCenter.default.addObserver(
             self, selector: #selector(trayPositionChanged),
             name: TrayPosition.changedNotification, object: nil)
@@ -112,6 +118,8 @@ final class ThumbnailManager {
     private var clickMonitor: Any?
 
     deinit {
+        collapsedPeekWorkItem?.cancel()
+        hoverExitWorkItem?.cancel()
         NotificationCenter.default.removeObserver(self)
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
@@ -126,17 +134,17 @@ final class ThumbnailManager {
     private func followActiveScreen() {
         guard host.isVisible, let cur = cursorScreen(), host.frame != cur.frame else { return }
         anchorScreen = cur
-        layout(animateNewest: false)
+        layout()
     }
 
     @objc private func screenParamsChanged() {
         guard host.isVisible, let a = anchorScreen, !NSScreen.screens.contains(a),
               let main = NSScreen.main else { return }
         anchorScreen = main
-        layout(animateNewest: false)
+        layout()
     }
 
-    @objc private func trayPositionChanged() { layout(animateNewest: false) }
+    @objc private func trayPositionChanged() { layout() }
 
     @objc private func activeSpaceChanged() {
         guard host.isVisible else { return }
@@ -152,8 +160,91 @@ final class ThumbnailManager {
         func globalFrame(_ v: NSView) -> NSRect {
             NSRect(x: o.x + v.frame.minX, y: o.y + v.frame.minY, width: v.frame.width, height: v.frame.height)
         }
-        if !hub.view.isHidden, globalFrame(hub.view).contains(m) { return true }
+        let localMouse = NSPoint(x: m.x - o.x, y: m.y - o.y)
+        if !hub.view.isHidden, hub.contains(localMouse) { return true }
         return items.contains { !$0.hostView.isHidden && globalFrame($0.hostView).contains(m) }
+    }
+
+    private var cardsAreCollapsed: Bool {
+        thumbnailTrayCollapseTarget(userCollapsed: collapsed,
+                                    hoverExpanded: trayHoverActive) == 1
+    }
+
+    private func cancelCollapsedPeekDismiss() {
+        collapsedPeekGeneration &+= 1
+        collapsedPeekWorkItem?.cancel()
+        collapsedPeekWorkItem = nil
+    }
+
+    private func cancelHoverExit() {
+        hoverExitGeneration &+= 1
+        hoverExitWorkItem?.cancel()
+        hoverExitWorkItem = nil
+    }
+
+    private func hubHoverChanged(entered: Bool) {
+        guard !items.isEmpty else { return }
+        if entered {
+            cancelHoverExit()
+            beginTrayHoverSession()
+        } else if trayHoverActive {
+            scheduleCollapsedPresentationExit()
+        }
+    }
+
+    private func thumbnailHoverChanged(_ thumbnail: ThumbnailWindow, entered: Bool) {
+        if entered {
+            cancelHoverExit()
+            if collapsedPeekItem === thumbnail { cancelCollapsedPeekDismiss() }
+            if collapsed, !trayHoverActive, collapsedPeekItem == nil, trayProgress < 0.999 {
+                beginTrayHoverSession()
+            }
+        } else if trayHoverActive || collapsedPeekItem === thumbnail {
+            scheduleCollapsedPresentationExit()
+        }
+    }
+
+    private func beginTrayHoverSession() {
+        guard !trayHoverActive, !items.isEmpty else { return }
+        if collapsed {
+            cancelCollapsedPeekDismiss()
+            collapsedPeekItem = nil
+            finishCollectionMotion()
+        }
+        trayHoverActive = true
+        hub.setTrayHoverActive(true)
+        if collapsed, let screen = anchorScreen ?? NSScreen.main {
+            runTrayTransition(to: 0, on: screen)
+        }
+    }
+
+    private func scheduleCollapsedPresentationExit() {
+        guard trayHoverActive || (collapsed && collapsedPeekItem != nil) else { return }
+        cancelHoverExit()
+        let generation = hoverExitGeneration
+        let work = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.trayHoverActive || (self.collapsed && self.collapsedPeekItem != nil) else { return }
+            guard self.hoverExitGeneration == generation else { return }
+            self.hoverExitWorkItem = nil
+            guard !self.mouseOverTray() else { return }
+            if self.trayHoverActive {
+                self.endTrayHoverSession()
+            } else if let peek = self.collapsedPeekItem {
+                self.dismissCollapsedPeek(peek)
+            }
+        }
+        hoverExitWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + TrayAnim.hoverExitGrace, execute: work)
+    }
+
+    private func endTrayHoverSession() {
+        guard trayHoverActive else { return }
+        trayHoverActive = false
+        hub.setTrayHoverActive(false)
+        guard collapsed, let screen = anchorScreen ?? NSScreen.main else { return }
+        finishCollectionMotion()
+        runTrayTransition(to: 1, on: screen)
     }
 
     private var anchorHeight: CGFloat { (anchorScreen ?? NSScreen.main)?.frame.height ?? 900 }
@@ -183,21 +274,227 @@ final class ThumbnailManager {
     // MARK: добавление/удаление
 
     func add(image: CGImage, on screen: NSScreen) {
+        finishCollectionMotion()
+        finishTrayMotion()
+        cancelCollapsedPeekDismiss()
+        cancelHoverExit()
         ensureHost(on: screen)
         let t = ThumbnailWindow(image: image, screen: screen, manager: self,
                                 width: cardWidth, screenHeight: screen.frame.height)
+        t.onHoverChanged = { [weak self, weak t] entered in
+            guard let self, let t else { return }
+            self.thumbnailHoverChanged(t, entered: entered)
+        }
         items.append(t)
         hostContent.addSubview(t.hostView, positioned: .below, relativeTo: hub.view)  // новейшая — поверх старых, под хабом
         for it in items { it.applyWidth(cardWidth, screenHeight: screen.frame.height) }
         showHost()
-        if collapsed { expand() }                 // новый снимок авто-разворачивает трей
-        else { layout(animateNewest: true) }      // новейшая карточка влетает scale+fade
+        positionHub(on: screen, animateChevron: false, animateCount: true)
+        hub.setCountTransitionProgress(0)
+        cardsAreCollapsed ? presentCollapsedCapture(t, on: screen)
+                          : animateInsertion(t, on: screen)
     }
 
     func remove(_ t: ThumbnailWindow) {
-        items.removeAll { $0 === t }
-        t.close()
-        if items.isEmpty { host.orderOut(nil) } else { layout() }
+        guard items.contains(where: { $0 === t }) else { return }
+        animateRemoval([t])
+    }
+
+    private func runCollectionMotion(duration: CFTimeInterval,
+                                     onFrame: @escaping (CGFloat) -> Void,
+                                     completion: @escaping () -> Void) {
+        collectionCompletion = completion
+        collectionAnimator.run(duration: duration,
+                               onFrame: onFrame,
+                               onDone: { [weak self] in
+            guard let self else { return }
+            self.collectionCompletion = nil
+            completion()
+        })
+    }
+
+    private func finishCollectionMotion() {
+        guard let completion = collectionCompletion else {
+            collectionAnimator.cancel()
+            return
+        }
+        collectionCompletion = nil
+        collectionAnimator.cancel()
+        completion()
+    }
+
+    private func animateInsertion(_ inserted: ThumbnailWindow, on screen: NSScreen) {
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let (visible, hidden) = cardLayout(on: screen)
+        for item in hidden { item.hide() }
+        for (item, origin) in visible where item !== inserted {
+            item.placeInstant(origin: toLocal(origin))
+        }
+        guard let origin = visible.first(where: { $0.0 === inserted })?.1 else {
+            inserted.hide()
+            runCollectionMotion(duration: reduceMotion ? TrayAnim.reducedTransition : TrayAnim.insertion,
+                                onFrame: { [weak self] progress in
+                self?.hub.setCountTransitionProgress(progress)
+            }, completion: { [weak self] in
+                self?.hub.setCountTransitionProgress(1)
+            })
+            return
+        }
+        inserted.prepareInsertion(at: toLocal(origin),
+                                  from: collectionDirectionalOffset(),
+                                  reduceMotion: reduceMotion)
+        runCollectionMotion(duration: reduceMotion ? TrayAnim.reducedTransition : TrayAnim.insertion,
+                            onFrame: { [weak self, weak inserted] progress in
+            inserted?.applyInsertion(progress: progress, reduceMotion: reduceMotion)
+            self?.hub.setCountTransitionProgress(progress)
+        }, completion: { [weak self, weak inserted] in
+            inserted?.finishCollectionMotion()
+            self?.hub.setCountTransitionProgress(1)
+        })
+    }
+
+    private func presentCollapsedCapture(_ inserted: ThumbnailWindow, on screen: NSScreen) {
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        collapsedPeekItem = inserted
+        for item in items where item !== inserted { item.hide() }
+        let edge = ThumbnailLayoutEdge(rawValue: TrayPosition.current.rawValue)!
+        let margin = TrayPosition.current == .left
+            ? ThumbStyle.margin + hub.leadingRevealClearance
+            : ThumbStyle.margin
+        let slot = thumbnailLayout(screenFrame: screen.frame,
+                                   edge: edge,
+                                   cardWidth: cardWidth,
+                                   cardHeights: [inserted.cardHeight],
+                                   hubSize: NSSize(width: hub.width, height: hub.height),
+                                   margin: margin,
+                                   gap: ThumbStyle.gap).visible.first
+        guard let slot else {
+            collapsedPeekItem = nil
+            inserted.hide()
+            hub.setCountTransitionProgress(1)
+            return
+        }
+        inserted.prepareInsertion(at: toLocal(slot.origin),
+                                  from: collectionDirectionalOffset(),
+                                  reduceMotion: reduceMotion)
+        runCollectionMotion(duration: reduceMotion ? TrayAnim.reducedTransition : TrayAnim.insertion,
+                            onFrame: { [weak self, weak inserted] progress in
+            inserted?.applyInsertion(progress: progress, reduceMotion: reduceMotion)
+            self?.hub.setCountTransitionProgress(progress)
+        }, completion: { [weak self, weak inserted] in
+            guard let self, let inserted else { return }
+            inserted.finishCollectionMotion()
+            self.hub.setCountTransitionProgress(1)
+            self.scheduleCollapsedPeekDismiss(inserted,
+                                              after: TrayAnim.collapsedPeekHold,
+                                              reduceMotion: reduceMotion)
+        })
+    }
+
+    private func scheduleCollapsedPeekDismiss(_ inserted: ThumbnailWindow,
+                                              after delay: TimeInterval,
+                                              reduceMotion: Bool) {
+        cancelCollapsedPeekDismiss()
+        let generation = collapsedPeekGeneration
+        let work = DispatchWorkItem { [weak self, weak inserted] in
+            guard let self, let inserted,
+                  self.collapsedPeekGeneration == generation,
+                  self.collapsed, !self.trayHoverActive,
+                  self.collapsedPeekItem === inserted else { return }
+            self.collapsedPeekWorkItem = nil
+            guard !self.mouseOverTray() else { return }
+            self.dismissCollapsedPeek(inserted, reduceMotion: reduceMotion)
+        }
+        collapsedPeekWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private func dismissCollapsedPeek(_ inserted: ThumbnailWindow,
+                                      reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) {
+        guard collapsed, !trayHoverActive, collapsedPeekItem === inserted else { return }
+        finishCollectionMotion()
+        guard collapsed, !trayHoverActive, collapsedPeekItem === inserted else { return }
+        cancelCollapsedPeekDismiss()
+        collapsedPeekItem = nil
+        inserted.prepareRemoval(toward: collectionDirectionalOffset(), reduceMotion: reduceMotion)
+        runCollectionMotion(duration: reduceMotion ? TrayAnim.reducedTransition : TrayAnim.collapsedPeekExit,
+                            onFrame: { [weak inserted] progress in
+            inserted?.applyRemoval(progress: progress, reduceMotion: reduceMotion)
+        }, completion: { [weak inserted] in
+            inserted?.finishCollectionMotion(hidden: true)
+        })
+    }
+
+    private func animateRemoval(_ removed: [ThumbnailWindow]) {
+        finishCollectionMotion()
+        finishTrayMotion()
+        cancelCollapsedPeekDismiss()
+        cancelHoverExit()
+        let removesVisiblePeek = removed.contains { $0 === collapsedPeekItem }
+        if removesVisiblePeek { collapsedPeekItem = nil }
+        guard let screen = anchorScreen ?? NSScreen.main else { return }
+        let removedIDs = Set(removed.map { ObjectIdentifier($0) })
+        let oldFrames = Dictionary(uniqueKeysWithValues: items.map { (ObjectIdentifier($0), $0.layoutFrame) })
+        items.removeAll { removedIDs.contains(ObjectIdentifier($0)) }
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let animateCards = !cardsAreCollapsed || removesVisiblePeek
+
+        positionHub(on: screen, animateChevron: false, animateCount: true)
+        if items.isEmpty { hub.show() }
+        hub.setCountTransitionProgress(0)
+
+        let (visible, hidden) = cardLayout(on: screen)
+        for item in hidden { item.hide() }
+        let reflowing: [(ThumbnailWindow, NSRect)]
+        if animateCards {
+            reflowing = visible.compactMap { item, origin -> (ThumbnailWindow, NSRect)? in
+                guard let oldFrame = oldFrames[ObjectIdentifier(item)] else { return nil }
+                item.prepareReflow(from: oldFrame,
+                                   to: thumbnailAxisLockedOrigin(candidate: toLocal(origin),
+                                                                 oldOuterFrame: oldFrame,
+                                                                 resizeBand: ThumbStyle.resizeBand,
+                                                                 vertical: TrayPosition.current.isVertical),
+                                   reduceMotion: reduceMotion)
+                return (item, oldFrame)
+            }
+        } else {
+            reflowing = []
+        }
+        if animateCards {
+            for item in removed {
+                item.prepareRemoval(toward: collectionDirectionalOffset(), reduceMotion: reduceMotion)
+            }
+        }
+
+        runCollectionMotion(duration: reduceMotion ? TrayAnim.reducedTransition : TrayAnim.removalAndReflow,
+                            onFrame: { [weak self] progress in
+            for (item, oldFrame) in reflowing {
+                item.applyReflow(progress: progress, from: oldFrame, reduceMotion: reduceMotion)
+            }
+            if animateCards {
+                for item in removed { item.applyRemoval(progress: progress, reduceMotion: reduceMotion) }
+            }
+            self?.hub.setCountTransitionProgress(progress)
+        }, completion: { [weak self] in
+            guard let self else { return }
+            for (item, _) in reflowing { item.finishCollectionMotion() }
+            for item in removed { item.close() }
+            self.hub.setCountTransitionProgress(1)
+            if self.items.isEmpty {
+                self.collapsed = false
+                self.trayHoverActive = false
+                self.hub.setTrayHoverActive(false)
+                self.collapsedPeekItem = nil
+                self.trayAnimator.synchronize(0)
+                self.trayProgress = 0
+                self.hub.hide()
+                self.host.orderOut(nil)
+            }
+        })
+    }
+
+    private func collectionDirectionalOffset() -> NSPoint {
+        thumbnailCollectionOffset(vertical: TrayPosition.current.isVertical)
     }
 
     /// Копирование НЕ закрывает карточку — только короткий фидбэк.
@@ -227,12 +524,7 @@ final class ThumbnailManager {
 
     func deleteAll() {
         guard !items.isEmpty else { return }
-        let doomed = items
-        items.removeAll()
-        collapsed = false
-        for item in doomed { item.close() }
-        hub.hide()
-        host.orderOut(nil)
+        animateRemoval(items)
     }
 
     func saveAllAs() {
@@ -301,59 +593,109 @@ final class ThumbnailManager {
     func collapse() {
         // Сворачиваем при любом count >= 1 (хаб теперь виден и при одном снимке — клик должен работать).
         guard !collapsed, !items.isEmpty, let screen = anchorScreen ?? NSScreen.main else { return }
+        finishCollectionMotion()
+        cancelCollapsedPeekDismiss()
+        cancelHoverExit()
+        collapsedPeekItem = nil
+        trayHoverActive = false
+        hub.setTrayHoverActive(false)
         collapsed = true
-        positionHub(on: screen)
-        for t in items { t.setCollapsed(true) }
-        let c = hub.center                            // уже в координатах хоста
-        let (visible, hidden) = cardLayout(on: screen)
-        for t in hidden { t.hide() }
-        let n = visible.count
-        for (i, pair) in visible.enumerated() {       // дальние новые слоты растворяются первыми
-            pair.0.dissolve(toHubCenter: c, duration: TrayAnim.collapse, delay: Double(n - 1 - i) * TrayAnim.stagger)
-        }
-        hub.setState(count: items.count, collapsed: collapsed)
+        runTrayTransition(to: 1, on: screen)
     }
 
     func expand() {
         guard collapsed, let screen = anchorScreen ?? NSScreen.main else { return }
+        cancelCollapsedPeekDismiss()
+        cancelHoverExit()
+        finishCollectionMotion()
+        collapsedPeekItem = nil
         collapsed = false
-        positionHub(on: screen)
-        for t in items { t.setCollapsed(false) }
-        let c = hub.center                            // уже в координатах хоста
+        runTrayTransition(to: 0, on: screen)
+    }
+
+    private func runTrayTransition(to target: CGFloat, on screen: NSScreen) {
+        positionHub(on: screen, animateChevron: false)
+        let travelOffset = thumbnailTrayTravelOffset(vertical: TrayPosition.current.isVertical)
         let (visible, hidden) = cardLayout(on: screen)
-        for t in hidden { t.hide() }
-        for (i, pair) in visible.enumerated() {        // слоты выходят от хаба к свободному краю
-            pair.0.emerge(fromHubCenter: c, toOrigin: toLocal(pair.1), duration: TrayAnim.collapse, delay: Double(i) * TrayAnim.stagger)
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+
+        for item in hidden {
+            item.setCollapsed(target == 1)
+            item.hide()
         }
-        hub.setState(count: items.count, collapsed: collapsed)
+        for (item, globalOrigin) in visible {
+            item.prepareTrayTransition(progress: trayProgress,
+                                       travelOffset: travelOffset,
+                                       restingOrigin: toLocal(globalOrigin),
+                                       expanding: target == 0,
+                                       reduceMotion: reduceMotion)
+        }
+        hub.setTrayCollapseProgress(trayProgress)
+
+        let cards = visible.map(\.0)
+        trayAnimator.retarget(to: target,
+                              response: TrayAnim.response(reduceMotion: reduceMotion),
+                              onFrame: { [weak self] progress in
+            guard let self else { return }
+            self.trayProgress = progress
+            for item in cards {
+                item.applyTrayTransition(progress: progress,
+                                         travelOffset: travelOffset,
+                                         reduceMotion: reduceMotion)
+            }
+            self.hub.setTrayCollapseProgress(progress)
+        }, onDone: { [weak self] in
+            guard let self else { return }
+            self.trayProgress = target
+            let isCollapsed = target == 1
+            for item in cards { item.finishTrayTransition(collapsed: isCollapsed) }
+            self.hub.setTrayCollapseProgress(target)
+        })
+    }
+
+    private func finishTrayMotion() {
+        let target = thumbnailTrayCollapseTarget(userCollapsed: collapsed,
+                                                 hoverExpanded: trayHoverActive)
+        trayAnimator.synchronize(target)
+        trayProgress = target
+        for item in items { item.finishTrayTransition(collapsed: target == 1) }
+        hub.setTrayCollapseProgress(target)
     }
 
     // MARK: раскладка (добавление/ресайз/смена положения)
 
-    /// Расставить карточки по стабильным слотам. animateNewest=true анимирует только добавленный
-    /// последний элемент; существующие карточки остаются на прежних координатах.
-    private func layout(animateNewest: Bool = false) {
+    /// Расставить карточки по стабильным слотам без запуска transition.
+    private func layout() {
+        finishCollectionMotion()
         guard let screen = anchorScreen ?? NSScreen.main else { return }
+        let settledProgress = thumbnailTrayCollapseTarget(userCollapsed: collapsed,
+                                                          hoverExpanded: trayHoverActive)
+        trayAnimator.synchronize(settledProgress)
+        trayProgress = settledProgress
         ensureHost(on: screen)
-        positionHub(on: screen)
+        positionHub(on: screen, animateChevron: false)
+        hub.setTrayCollapseProgress(settledProgress)
         let edgePos = TrayPosition.current
-        for t in items { t.setCollapsed(collapsed); t.configureResize(for: edgePos) }
+        for t in items { t.setCollapsed(settledProgress == 1); t.configureResize(for: edgePos) }
         let (visible, hidden) = cardLayout(on: screen)
         for t in hidden { t.hide() }
-        if collapsed {
+        if settledProgress == 1 {
             for (t, _) in visible { t.hide() }
         } else {
-            let newest = items.last
             for pair in visible {
                 let localOrigin = toLocal(pair.1)
-                if animateNewest && pair.0 === newest { pair.0.appear(at: localOrigin) }
-                else { pair.0.placeInstant(origin: localOrigin) }
+                pair.0.placeInstant(origin: localOrigin)
             }
         }
     }
 
-    private func positionHub(on screen: NSScreen) {
-        hub.setState(count: items.count, collapsed: collapsed)   // сначала размер (ширина капсулы), потом позиция
+    private func positionHub(on screen: NSScreen,
+                             animateChevron: Bool = true,
+                             animateCount: Bool = false) {
+        hub.setState(count: items.count,
+                     collapsed: collapsed,
+                     animateChevron: animateChevron,
+                     animateCount: animateCount)   // сначала размер (ширина капсулы), потом позиция
         hub.setOrigin(toLocal(hubOrigin(on: screen)))
         if items.isEmpty { hub.hide() } else { hub.show() }      // счётчик виден при любом count >= 1
     }
@@ -365,7 +707,8 @@ final class ThumbnailManager {
         let w = hub.width, h = hub.height                        // капсула: ширина переменная, высота фикс.
         switch TrayPosition.current {
         case .right:  return NSPoint(x: sf.maxX - ThumbStyle.margin - w, y: sf.minY + ThumbStyle.margin)
-        case .left:   return NSPoint(x: sf.minX + ThumbStyle.margin,     y: sf.minY + ThumbStyle.margin)
+        case .left:   return NSPoint(x: sf.minX + ThumbStyle.margin + hub.leadingRevealClearance,
+                                     y: sf.minY + ThumbStyle.margin)
         case .bottom: return NSPoint(x: sf.maxX - ThumbStyle.margin - w, y: sf.minY + ThumbStyle.margin)
         case .top:    return NSPoint(x: sf.maxX - ThumbStyle.margin - w, y: sf.maxY - ThumbStyle.margin - h)
         }
@@ -378,12 +721,15 @@ final class ThumbnailManager {
         // Карточки должны жить в той же системе координат, что и хаб: полный frame экрана.
         // Иначе Dock/menu bar сдвигают карточки, а хаб остаётся в углу — между ними появляется дыра.
         let pos = TrayPosition.current
+        let edgeMargin = pos == .left
+            ? ThumbStyle.margin + hub.leadingRevealClearance
+            : ThumbStyle.margin
         let result = thumbnailLayout(screenFrame: screen.frame,
                                      edge: ThumbnailLayoutEdge(rawValue: pos.rawValue)!,
                                      cardWidth: cardWidth,
                                      cardHeights: items.map(\.cardHeight),
                                      hubSize: NSSize(width: hub.width, height: hub.height),
-                                     margin: ThumbStyle.margin,
+                                     margin: edgeMargin,
                                      gap: ThumbStyle.gap)
         return (
             result.visible.map { (items[$0.index], $0.origin) },

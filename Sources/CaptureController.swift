@@ -11,7 +11,8 @@ final class CaptureController {
     private static let permissionGrantedKey = "screenCaptureAccessGranted"
 
     private let thumbnails = ThumbnailManager()
-    private var session: CaptureSession?
+    private var selectionSession: CaptureSession?
+    private var finishingSessions: [UUID: CaptureSession] = [:]
     private var prewarmTask: Task<Void, Never>?
     private var prewarmID = UUID()
     private var hasScreenCaptureAccess: Bool? = UserDefaults.standard.bool(forKey: permissionGrantedKey) ? true : nil
@@ -36,7 +37,10 @@ final class CaptureController {
     }
 
     func triggerCapture(startedAt triggerStartedAt: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()) {
-        guard session == nil else { return }
+        guard selectionSession == nil else {
+            Self.log.info("capture trigger ignored reason=selection-active")
+            return
+        }
         Self.log.info("capture trigger accepted")
 
         if hasScreenCaptureAccess != true {
@@ -60,18 +64,33 @@ final class CaptureController {
         }
 
         let s = CaptureSession(
+            onSelectionReleased: { [weak self] id in
+                self?.releaseSelectionSession(id: id)
+            },
             onImage: { [weak self] image, screen in
                 self?.deliverCapturedImage(image, on: screen)
             },
             onError: { [weak self] error in
                 self?.handleCaptureError(error)
             },
-            onEnd: { [weak self] in
-                self?.session = nil
+            onEnd: { [weak self] id in
+                self?.removeSession(id: id)
             },
             startedAt: triggerStartedAt)
-        session = s
+        selectionSession = s
         s.start()
+    }
+
+    private func releaseSelectionSession(id: UUID) {
+        guard let session = selectionSession, session.id == id else { return }
+        finishingSessions[id] = session
+        selectionSession = nil
+        Self.log.info("capture selection released inFlight=\(self.finishingSessions.count, privacy: .public)")
+    }
+
+    private func removeSession(id: UUID) {
+        if selectionSession?.id == id { selectionSession = nil }
+        finishingSessions.removeValue(forKey: id)
     }
 
     private func deliverCapturedImage(_ image: CGImage, on screen: NSScreen) {
@@ -91,8 +110,11 @@ final class CaptureController {
         prewarmTask?.cancel()
         prewarmTask = nil
         prewarmID = UUID()
-        session?.shutdown()
-        session = nil
+        let sessions = Array(finishingSessions.values)
+        selectionSession?.shutdown()
+        for session in sessions { session.shutdown() }
+        selectionSession = nil
+        finishingSessions.removeAll()
     }
 
     private func handleCaptureError(_ error: Error) {
@@ -149,9 +171,12 @@ private final class CaptureSession {
         case cancelled
     }
 
+    let id = UUID()
+
+    private let onSelectionReleased: (UUID) -> Void
     private let onImage: (CGImage, NSScreen) -> Void
     private let onError: (Error) -> Void
-    private let onEnd: () -> Void
+    private let onEnd: (UUID) -> Void
 
     private var phase: Phase = .selecting
     private var overlay: OverlayController?
@@ -162,10 +187,12 @@ private final class CaptureSession {
     private var didEnd = false
     private let startedAt: CFAbsoluteTime
 
-    init(onImage: @escaping (CGImage, NSScreen) -> Void,
+    init(onSelectionReleased: @escaping (UUID) -> Void,
+         onImage: @escaping (CGImage, NSScreen) -> Void,
          onError: @escaping (Error) -> Void,
-         onEnd: @escaping () -> Void,
+         onEnd: @escaping (UUID) -> Void,
          startedAt: CFAbsoluteTime) {
+        self.onSelectionReleased = onSelectionReleased
         self.onImage = onImage
         self.onError = onError
         self.onEnd = onEnd
@@ -227,6 +254,7 @@ private final class CaptureSession {
         overlay?.dismiss()
         overlay = nil
         Self.log.info("capture selection completed width=\(Int(clamped.width), privacy: .public) height=\(Int(clamped.height), privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
+        onSelectionReleased(id)
         startFreshCaptureAndDelivery(selection: clamped, screen: screen)
     }
 
@@ -320,7 +348,7 @@ private final class CaptureSession {
         overlay = nil
         gestureSnapshot = nil
         Self.log.info("capture end outcome=\(self.endOutcome, privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
-        onEnd()
+        onEnd(id)
     }
 
     private var elapsedMs: Double {

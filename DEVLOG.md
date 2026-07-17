@@ -4,6 +4,47 @@
 
 ---
 
+## 17.07.2026 — единая hover-сессия и interruptible motion трея
+
+Ручное состояние `collapsed` отделено от временного представления. Hover на
+хабе теперь раскрывает карточки, не меняя смысл следующего клика. Хаб, его ряд
+команд и полные контейнеры карточек образуют одну hover-сессию: перевод курсора
+на снимок больше не закрывает нижнее меню. Уход из всей области запускает общий
+grace `180ms`; возврат отменяет именно актуальный таймер через generation guard.
+
+Новый снимок в свёрнутом трее больше не раскрывает его постоянно. Карточка
+появляется за `150ms`, остаётся полностью видимой `1.2s` и исчезает за `130ms`.
+Hover удерживает её без лимита, а после ухода использует тот же grace. Tracking
+перенесён на полный card container, включая resize band, поэтому между хабом и
+карточкой нет мёртвой зоны.
+
+Сворачивание карточек и шеврон используют один retargetable
+`TrayProgressAnimator` с сохранением presentation velocity. Полёт полноразмерных
+карточек заменён коротким axis-locked dissolve; opacity и shadow вычисляются из
+абсолютного progress. Добавление, удаление и reflow выполняются одним
+collection clock без stagger, а счётчик меняется вертикальным clipped-одометром
+без скачков ширины.
+
+Headless suite дополнен perceptual motion, collection terminal-state, odometer,
+hover ownership и static architecture gates. Production и тесты используют
+Native SDK `ReleaseFast`; live-window проверки остаются явным opt-in.
+
+---
+
+## 17.07.2026 — следующий capture не ждёт delivery предыдущего
+
+После mouse-up selection admission освобождается до асинхронной доставки
+изображения. Активная `selectionSession` отделена от `finishingSessions`, поэтому
+следующий hotkey может сразу открыть новый overlay, пока предыдущий снимок
+завершает fresh capture, clipboard preparation и thumbnail handoff. Каждая
+finishing session сохраняется до собственного terminal outcome и затем
+гарантированно закрывается.
+
+Static capture gates проверяют разделение selection/delivery lifecycle и не
+допускают возврата к одному глобальному session lock.
+
+---
+
 ## 10.07.2026 — новые скриншоты занимают свободные слоты без reflow
 
 Раскладка карточек больше не проходит `items.reversed()`. Порядок массива и

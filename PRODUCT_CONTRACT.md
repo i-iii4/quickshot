@@ -60,41 +60,53 @@ but any behavior that breaks this contract is a regression.
 ## Tray And Hub
 
 1. Hub click toggles thumbnail collapse/expand.
-2. A new screenshot expands the tray.
-3. Hub action buttons are clickable and do not accidentally toggle collapse.
-4. Per-thumbnail `Copy`, close, resize, and card interactions remain clickable.
-5. Thumbnail geometry is append-only: adding a screenshot never changes any
+2. Manual collapse state and hover presentation are separate. Hovering the hub
+   temporarily reveals a collapsed tray without changing what the next hub
+   click means.
+3. Hub and visible card containers form one hover session. Moving from the hub
+   or its command row onto any card keeps both the command row and cards open.
+4. Leaving the complete region starts a `180ms` grace period. Re-entry cancels
+   that exact pending close; superseded timers cannot close a newer session.
+5. A new screenshot does not permanently expand a collapsed tray. Its
+   acknowledgement uses `150ms` insertion, `1.2s` fully visible hold, and
+   `130ms` exit. Hover holds it until pointer exit plus the normal grace period.
+6. Hub action buttons are clickable and do not accidentally toggle collapse.
+7. Per-thumbnail `Copy`, close, resize, and card interactions remain clickable.
+8. Thumbnail geometry is append-only: adding a screenshot never changes any
    existing card origin. The new screenshot takes the next free slot away from
    the hub (above the stack for the current bottom-anchored vertical layout;
    below it when that anchor direction is mirrored).
-6. The tray/hub position is based on full screen frames and may overlap Dock or
+9. The tray/hub position is based on full screen frames and may overlap Dock or
    menu bar.
-7. The hub is a compact Vercel/Native-inspired icon+label command surface
+10. The hub is a compact Vercel/Native-inspired icon+label command surface
    aligned to the House small-control register: 28pt height, 8pt radius, 14pt
    labels, 16pt icons, and 8pt gaps between independent command buttons.
-8. Hover reveal exposes three visible actions: `Delete`, `Save As`, and `Copy All`.
-9. Per-thumbnail controls use independent House command buttons in a
+11. Hover reveal exposes three visible actions: `Delete`, `Save As`, and `Copy All`.
+12. Per-thumbnail controls use independent House command buttons in a
    token-spaced row, not exclusive-choice `button-group` chrome or
    native Liquid Glass buttons.
-10. Empty transparent tray space does not steal pointer events from controls.
-11. The tray must not blink during capture completion.
-12. The left-to-right action order is always `Delete`, `Save As`, `Copy All`,
+13. Empty transparent tray space does not steal pointer events from controls.
+14. The tray must not blink during capture completion.
+15. The left-to-right action order is always `Delete`, `Save As`, `Copy All`,
     regardless of the screen edge.
-13. Hover reveal uses the House fast-motion token (`120ms`, or `0ms` under
+16. Hover reveal uses the House fast-motion token (`120ms`, or `0ms` under
     Reduce Motion), scales interrupted transitions by the remaining distance,
     changes width through the final frame, and does not rerender Native SDK
     pixels on every display-link tick.
-14. At rest only the compact command button is visible. Hover fades in one
+17. At rest only the compact command button is visible. Hover fades in one
     token-owned House Dark bubble behind the complete command row; gaps inside
     the hub belong to that surface and pixels outside it remain transparent.
-15. Bubble and button corners are concentric: House `xl` outer radius `14pt`,
+18. Bubble and button corners are concentric: House `xl` outer radius `14pt`,
     House control radius `8pt`, and their difference is the `6pt` inset.
-16. Repeated `mouseMoved` events for an unchanged hover target never restart
+19. Repeated `mouseMoved` events for an unchanged hover target never restart
     the active reveal animation.
-17. While hover is active, cursor exit is evaluated against the stable fully
+20. While hover is active, cursor exit is evaluated against the stable fully
     expanded footprint independently of the resizing view. Leaving it always
     drives the bubble opacity back to zero, even if AppKit already stopped
     delivering events to the current view bounds.
+21. Tray cards, chevron rotation, opacity, and shadows derive from one
+    interruptible tray progress. Collection insertion/removal/reflow and the
+    clipped vertical count odometer have explicit headless regression tests.
 
 ## UI Architecture
 

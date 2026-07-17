@@ -5,8 +5,8 @@ cd "$(dirname "$0")/.."
 ARCH="$(uname -m)"
 DEPLOY="26.0"
 SDK="$(xcrun --show-sdk-path)"
-OUT="$(mktemp -t quickshot-hub-visual-matrix)"
-PNG="${1:-/tmp/quickshot-hub-matrix-preview.png}"
+OUT="$(mktemp -t quickshot-odometer-visual-matrix)"
+PNG="${1:-/tmp/quickshot-odometer-matrix.png}"
 trap 'rm -f "$OUT"' EXIT
 
 ZIG_BIN="${QUICKSHOT_ZIG:-$(command -v zig || true)}"
@@ -34,7 +34,7 @@ xcrun swiftc \
   Sources/NativeSDKBridge.swift \
   Sources/NativeHubView.swift \
   Sources/HubWindow.swift \
-  Tests/HubWindowVisualMatrix.swift \
+  Tests/HubOdometerVisualMatrix.swift \
   "$NATIVE_UI_LIB" \
   -o "$OUT"
 

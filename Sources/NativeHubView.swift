@@ -11,9 +11,16 @@ private enum NativeHubMetrics {
 
     static let height = token(.controlHeight)
     static let radius = token(.controlRadius)
+    static let controlInset = token(.controlInset)
+    static let iconSide = token(.iconSide)
+    static let iconGap = token(.iconGap)
+    static let countBleed: CGFloat = 4
     static let groupGap = token(.groupGap)
     static let shellInset = token(.shellInset)
     static let bubbleRadius = token(.bubbleRadius)
+    static var baseAnimationDuration: CFTimeInterval {
+        CFTimeInterval(CGFloat(quickshot_native_ui_metric(NativeSDKMetric.animationDurationMilliseconds.rawValue)) / 1000)
+    }
     static var animationDuration: CFTimeInterval {
         let metric: NativeSDKMetric = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             ? .reducedAnimationDurationMilliseconds
@@ -22,7 +29,117 @@ private enum NativeHubMetrics {
     }
 }
 
-private func nativeHubLinear(_ f: CGFloat) -> CGFloat { f }
+struct NativeHubSpringSample {
+    let value: CGFloat
+    let velocity: CGFloat
+}
+
+func nativeHubSpringStep(value: CGFloat,
+                         velocity: CGFloat,
+                         target: CGFloat,
+                         angularFrequency: CGFloat,
+                         deltaTime: CGFloat) -> NativeHubSpringSample {
+    let displacement = value - target
+    let c2 = velocity + angularFrequency * displacement
+    let decay = exp(-angularFrequency * deltaTime)
+    let nextDisplacement = (displacement + c2 * deltaTime) * decay
+    let nextVelocity = (c2 - angularFrequency * (displacement + c2 * deltaTime)) * decay
+    return NativeHubSpringSample(value: target + nextDisplacement,
+                                 velocity: nextVelocity)
+}
+
+/// A finite, critically damped reveal. Retargeting keeps the presentation
+/// velocity, while the House fast token remains a hard perceptual deadline.
+private final class NativeHubSpringAnimator: NSObject {
+    private weak var hostView: NSView?
+    private var link: CADisplayLink?
+    private var value: CGFloat = 0
+    private var velocity: CGFloat = 0
+    private var target: CGFloat = 0
+    private var angularFrequency: CGFloat = 1
+    private var lastTimestamp: CFTimeInterval = 0
+    private var deadline: CFTimeInterval = 0
+    private var onFrame: ((CGFloat) -> Void)?
+    private var onDone: (() -> Void)?
+
+    init(hostView: NSView) {
+        self.hostView = hostView
+        super.init()
+    }
+
+    func synchronize(_ value: CGFloat) {
+        cancel()
+        self.value = value
+        target = value
+        velocity = 0
+    }
+
+    func retarget(to target: CGFloat,
+                  response: CFTimeInterval,
+                  onFrame: @escaping (CGFloat) -> Void,
+                  onDone: (() -> Void)? = nil) {
+        self.target = target
+        self.onFrame = onFrame
+        self.onDone = onDone
+        let distance = abs(target - value)
+        guard distance > 0.001, response > 0, let hostView else {
+            finish(at: target)
+            return
+        }
+
+        let now = CACurrentMediaTime()
+        let segmentDuration = max(1.0 / 240.0, response * CFTimeInterval(distance))
+        angularFrequency = CGFloat(7 / segmentDuration)
+        lastTimestamp = now
+        deadline = now + segmentDuration
+        if link == nil {
+            let displayLink = hostView.displayLink(target: self, selector: #selector(step(_:)))
+            displayLink.add(to: .main, forMode: .common)
+            link = displayLink
+        }
+    }
+
+    @objc private func step(_ sender: CADisplayLink) {
+        let now = CACurrentMediaTime()
+        if now >= deadline {
+            finish(at: target)
+            return
+        }
+
+        let dt = CGFloat(max(0, min(now - lastTimestamp, 1.0 / 30.0)))
+        lastTimestamp = now
+        guard dt > 0 else { return }
+
+        let sample = nativeHubSpringStep(value: value,
+                                         velocity: velocity,
+                                         target: target,
+                                         angularFrequency: angularFrequency,
+                                         deltaTime: dt)
+        value = sample.value
+        velocity = sample.velocity
+        onFrame?(min(1, max(0, value)))
+    }
+
+    private func finish(at value: CGFloat) {
+        self.value = value
+        target = value
+        velocity = 0
+        let frame = onFrame
+        let completion = onDone
+        cancel()
+        frame?(value)
+        completion?()
+    }
+
+    func cancel() {
+        link?.invalidate()
+        link = nil
+        onFrame = nil
+        onDone = nil
+    }
+
+    deinit { link?.invalidate() }
+}
 
 private enum NativeHubPressedButton: Int32 {
     case none = 0
@@ -45,6 +162,7 @@ private enum NativeHubPressedButton: Int32 {
 private enum NativeControlSurface: String {
     case hub
     case hubBubble = "hub_bubble"
+    case hubCoreBackground = "hub_core_background"
     case thumbnail
     case pinned
     case settings
@@ -93,11 +211,14 @@ struct NativeControlDebugButtonSnapshot {
 
 private final class NativeHubRenderView: NSView {
     var onButtonPressed: ((NativeHubPressedButton) -> Void)?
+    var onInteractionChanged: ((NativeInteractionChannel, NativeHubPressedButton) -> Void)?
+    var rendersPressedState = true
     private(set) var isPressing = false
 
     private let nativeApp: UnsafeMutableRawPointer?
     private var rgbaBytes: [UInt8] = []
     private var retainedImageData: Data?
+    private var retainedCGImage: CGImage?
     private var lastRenderSignature: NativeHubRenderSignature?
     private var lastSurfaceSignature: NativeHubSurfaceSignature?
     private var renderRevision: UInt64 = 0
@@ -107,6 +228,8 @@ private final class NativeHubRenderView: NSView {
     private var collapsed = false
     private var vertical = true
     private var expanded = false
+    private var coreRevealed = false
+    private var coreWidth: CGFloat?
     private var actionsAfter = false
     private var surface: NativeControlSurface = .hub
     private var compact = false
@@ -169,7 +292,12 @@ private final class NativeHubRenderView: NSView {
         trackingArea = area
     }
 
-    func setState(count: Int, collapsed: Bool, vertical: Bool, expanded: Bool, actionsAfter: Bool) {
+    func setState(count: Int,
+                  collapsed: Bool,
+                  vertical: Bool,
+                  expanded: Bool,
+                  coreRevealed: Bool,
+                  actionsAfter: Bool) {
         setSurface(.hub)
         if self.count != count {
             self.count = count
@@ -187,10 +315,21 @@ private final class NativeHubRenderView: NSView {
             self.expanded = expanded
             sendCommand("hub.expanded:\(expanded ? 1 : 0)")
         }
+        if self.coreRevealed != coreRevealed {
+            self.coreRevealed = coreRevealed
+            sendCommand("hub.core_revealed:\(coreRevealed ? 1 : 0)")
+        }
         if self.actionsAfter != actionsAfter {
             self.actionsAfter = actionsAfter
             sendCommand("hub.actions_after:\(actionsAfter ? 1 : 0)")
         }
+    }
+
+    func setCoreWidth(_ width: CGFloat?) {
+        let normalized = width.flatMap { $0 > 0 ? $0 : nil }
+        guard coreWidth != normalized else { return }
+        coreWidth = normalized
+        sendCommand("hub.core_width:\(normalized ?? 0)")
     }
 
     func setSurface(_ surface: NativeControlSurface) {
@@ -272,9 +411,23 @@ private final class NativeHubRenderView: NSView {
                             intent: .defaultIntent)
         layer?.contentsScale = scale
         layer?.contents = image
+        retainedCGImage = image
         lastRenderSignature = signature
         renderPassCount += 1
         totalRenderDuration += CACurrentMediaTime() - startedAt
+    }
+
+    func renderedCrop(in rect: NSRect) -> CGImage? {
+        renderNow()
+        guard let image = retainedCGImage else { return nil }
+        let scale = CGFloat(image.width) / max(1, bounds.width)
+        let pixelRect = CGRect(x: rect.minX * scale,
+                               y: rect.minY * scale,
+                               width: rect.width * scale,
+                               height: rect.height * scale).integral
+            .intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        guard pixelRect.width > 0, pixelRect.height > 0 else { return nil }
+        return image.cropping(to: pixelRect)
     }
 
     func hasInteractiveButton(at point: NSPoint) -> Bool {
@@ -367,6 +520,7 @@ private final class NativeHubRenderView: NSView {
         guard let node = button(at: point) else { return }
         isPressing = true
         native_sdk_app_touch(nativeApp, 1, 0, Float(point.x), Float(point.y), 1)
+        guard rendersPressedState else { return }
         sendInteraction(.pressed, action: node.action)
         renderNow()
     }
@@ -378,6 +532,7 @@ private final class NativeHubRenderView: NSView {
         guard target?.id != hoveredNodeID else { return }
         hoveredNodeID = target?.id
         native_sdk_app_touch(nativeApp, 1, 2, Float(point.x), Float(point.y), 1)
+        guard rendersPressedState else { return }
         sendInteraction(.hover, action: target?.action ?? .none)
         renderNow()
     }
@@ -387,8 +542,10 @@ private final class NativeHubRenderView: NSView {
         defer { isPressing = false }
         let point = convert(event.locationInWindow, from: nil)
         native_sdk_app_touch(nativeApp, 1, 1, Float(point.x), Float(point.y), 0)
-        sendInteraction(.pressed, action: .none)
-        renderNow()
+        if rendersPressedState {
+            sendInteraction(.pressed, action: .none)
+            renderNow()
+        }
         guard let action = NativeHubPressedButton(rawValue: quickshot_native_ui_take_action(nativeApp)),
               action != .none else { return }
         onButtonPressed?(action)
@@ -423,6 +580,12 @@ private final class NativeHubRenderView: NSView {
 
     private func sendInteraction(_ channel: NativeInteractionChannel, action: NativeHubPressedButton) {
         sendCommand("ui.\(channel.rawValue):\(action.rawValue)")
+        onInteractionChanged?(channel, action)
+    }
+
+    func mirrorInteraction(_ channel: NativeInteractionChannel, action: NativeHubPressedButton) {
+        sendInteraction(channel, action: action)
+        renderNow()
     }
 
     private func actionForButton(identifier: String, title: String) -> NativeHubPressedButton {
@@ -444,7 +607,7 @@ private final class NativeHubRenderView: NSView {
         case "Save As": return .saveAs
         case "Copy All": return .copyAll
         default:
-            return identifier.hasSuffix("screenshots") ? .toggle : .none
+            return identifier.hasPrefix("Show ") || identifier.hasPrefix("Hide ") ? .toggle : .none
         }
     }
 
@@ -539,14 +702,186 @@ extension NativeSDKWidgetSemantics {
     }
 }
 
+private final class NativeOdometerView: NSView {
+    private let outgoingLayer = CALayer()
+    private let incomingLayer = CALayer()
+    private let edgeFadeMask = CAGradientLayer()
+    private(set) var currentImage: CGImage?
+    private var outgoingImage: CGImage?
+    private var incomingOffset: CGFloat = 0
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        isHidden = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.masksToBounds = true
+        edgeFadeMask.startPoint = CGPoint(x: 0.5, y: 0)
+        edgeFadeMask.endPoint = CGPoint(x: 0.5, y: 1)
+        edgeFadeMask.colors = [NSColor.clear.cgColor,
+                               NSColor.black.cgColor,
+                               NSColor.black.cgColor,
+                               NSColor.clear.cgColor]
+        edgeFadeMask.locations = [0, 0.16, 0.84, 1]
+        layer?.mask = edgeFadeMask
+        for imageLayer in [outgoingLayer, incomingLayer] {
+            imageLayer.contentsGravity = .resizeAspect
+            imageLayer.magnificationFilter = .nearest
+            imageLayer.minificationFilter = .trilinear
+            layer?.addSublayer(imageLayer)
+        }
+        outgoingLayer.isHidden = true
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        updateImageLayerGeometry()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        updateImageLayerGeometry()
+    }
+
+    override func setBoundsSize(_ newSize: NSSize) {
+        super.setBoundsSize(newSize)
+        updateImageLayerGeometry()
+    }
+
+    private func updateImageLayerGeometry() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        updateGeometry(of: outgoingLayer, image: outgoingImage)
+        updateGeometry(of: incomingLayer, image: currentImage)
+        edgeFadeMask.frame = bounds
+        CATransaction.commit()
+    }
+
+    private func updateGeometry(of imageLayer: CALayer, image: CGImage?) {
+        let rect = displayFrame(for: image)
+        imageLayer.bounds = NSRect(origin: .zero, size: rect.size)
+        imageLayer.position = CGPoint(x: rect.midX, y: rect.midY)
+    }
+
+    private func displayFrame(for image: CGImage?) -> NSRect {
+        guard let image, image.height > 0, bounds.height > 0 else { return bounds }
+        let naturalWidth = bounds.height * CGFloat(image.width) / CGFloat(image.height)
+        let width = min(bounds.width, naturalWidth)
+        return NSRect(x: bounds.maxX - width,
+                      y: bounds.minY,
+                      width: width,
+                      height: bounds.height)
+    }
+
+    func setCurrent(_ image: CGImage?) {
+        currentImage = image
+        outgoingImage = nil
+        isHidden = true
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        incomingLayer.contents = image
+        incomingLayer.opacity = 1
+        incomingLayer.transform = CATransform3DIdentity
+        outgoingLayer.contents = nil
+        outgoingLayer.isHidden = true
+        outgoingLayer.opacity = 0
+        outgoingLayer.transform = CATransform3DIdentity
+        CATransaction.commit()
+        incomingOffset = 0
+        updateImageLayerGeometry()
+    }
+
+    func prepareTransition(from oldImage: CGImage?, to newImage: CGImage?, increasing: Bool) {
+        currentImage = newImage
+        outgoingImage = oldImage
+        isHidden = false
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        outgoingLayer.contents = oldImage
+        outgoingLayer.isHidden = oldImage == nil
+        incomingLayer.contents = newImage
+        CATransaction.commit()
+        updateImageLayerGeometry()
+        setProgress(0, increasing: increasing)
+    }
+
+    func setProgress(_ progress: CGFloat, increasing: Bool) {
+        let p = min(1, max(0, progress))
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let motion = odometerPresentationState(progress: p,
+                                               increasing: increasing,
+                                               distance: max(1, bounds.height),
+                                               reduceMotion: reduceMotion)
+        let opacity = motionStrongEaseInOut(p)
+        incomingOffset = motion.incomingOffset
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        outgoingLayer.transform = CATransform3DMakeTranslation(0, motion.outgoingOffset, 0)
+        incomingLayer.transform = CATransform3DMakeTranslation(0, motion.incomingOffset, 0)
+        outgoingLayer.opacity = Float(1 - opacity)
+        incomingLayer.opacity = Float(opacity)
+        CATransaction.commit()
+        if p >= 0.999 {
+            finishTransition()
+        }
+    }
+
+    func finishTransition() {
+        outgoingImage = nil
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        incomingLayer.contents = currentImage
+        incomingLayer.opacity = 1
+        incomingLayer.transform = CATransform3DIdentity
+        outgoingLayer.contents = nil
+        outgoingLayer.opacity = 0
+        outgoingLayer.transform = CATransform3DIdentity
+        outgoingLayer.isHidden = true
+        CATransaction.commit()
+        incomingOffset = 0
+        updateImageLayerGeometry()
+        isHidden = true
+    }
+
+#if TESTING
+    var debugIncomingFrame: NSRect {
+        let local = displayFrame(for: currentImage)
+        return NSRect(x: frame.minX + local.minX,
+                      y: frame.minY + local.minY + incomingOffset,
+                      width: local.width,
+                      height: local.height)
+    }
+    var debugClips: Bool { layer?.masksToBounds == true }
+    var debugLayerCount: Int { layer?.sublayers?.count ?? 0 }
+    var debugHasOutgoingContent: Bool { outgoingLayer.contents != nil && !outgoingLayer.isHidden }
+    var debugUsesEdgeFade: Bool { layer?.mask === edgeFadeMask }
+#endif
+}
+
 final class NativeHubShellView: NSView {
     var onToggle: (() -> Void)?
     var onDelete: (() -> Void)?
     var onSaveAs: (() -> Void)?
     var onCopyAll: (() -> Void)?
+    var onHoverChanged: ((Bool) -> Void)?
 
     private let bubbleView = NativeHubRenderView(frame: .zero)
+    private let coreBackgroundView = NativeHubRenderView(frame: .zero)
     private let nativeView = NativeHubRenderView(frame: .zero)
+    private let revealedLabelView = NativeHubRenderView(frame: .zero)
+    private let compactCoreView = NativeHubRenderView(frame: .zero)
+    private let odometerView = NativeOdometerView(frame: .zero)
+    private let compactIconRotationView = NSView(frame: .zero)
+    private let compactIconContentView = NSView(frame: .zero)
+    private let compactIconView = NativeHubRenderView(frame: .zero)
+    private let revealMaskLayer = CAShapeLayer()
+    private let coreBackgroundMaskLayer = CAShapeLayer()
+    private let revealedContentMaskLayer = CAShapeLayer()
+    private let revealedLabelMaskLayer = CAShapeLayer()
+    private let compactContentMaskLayer = CAShapeLayer()
+    private let compactIconMaskLayer = CAShapeLayer()
     private var trackingArea: NSTrackingArea?
     private var localHoverMonitor: Any?
     private var globalHoverMonitor: Any?
@@ -557,21 +892,82 @@ final class NativeHubShellView: NSView {
     private var expandsRight = false
     private var progress: CGFloat = 0
     private var targetProgress: CGFloat = 0
+    private var pointerHoverActive = false
+    private var trayHoverHeld = false
+    private var chevronProgress: CGFloat = 0
+    private var chevronTargetProgress: CGFloat = 0
+    private var hasConfiguredChevron = false
     private var animationStartCount = 0
     private var coreWidth: CGFloat = NativeHubMetrics.height
+    private var stableCompactButtonWidth: CGFloat = NativeHubMetrics.height
+    private var stableCompactCountFrame: NSRect = .zero
+    private var stableCompactIconFrame: NSRect = .zero
+    private var compactCoreNativeFrame = NSRect(x: NativeHubMetrics.shellInset,
+                                                y: NativeHubMetrics.shellInset,
+                                                width: NativeHubMetrics.height,
+                                                height: NativeHubMetrics.height)
+    private var revealedCoreNativeFrame = NSRect(x: NativeHubMetrics.shellInset,
+                                                 y: NativeHubMetrics.shellInset,
+                                                 width: NativeHubMetrics.height,
+                                                 height: NativeHubMetrics.height)
+    private var backgroundCoreNativeFrame = NSRect(x: NativeHubMetrics.shellInset,
+                                                   y: NativeHubMetrics.shellInset,
+                                                   width: NativeHubMetrics.height,
+                                                   height: NativeHubMetrics.height)
+    private var revealedActionNativeFrames: [NSRect] = []
+    private var revealedIntrinsicCoreWidth: CGFloat = NativeHubMetrics.height
+    private var countTranslationX: CGFloat = 0
+    private var compactContentBaseFrame: NSRect = .zero
+    private var expandedCountTargetMinX: CGFloat = 0
+    private var compactCountMaskFrame: NSRect = .zero
+    private var compactIconMaskFrame: NSRect = .zero
+    private var revealedCountMaskFrame: NSRect = .zero
+    private var revealedIconMaskFrame: NSRect = .zero
+    private var revealedLabelNativeFrame: NSRect = .zero
     private var measuredExpandedWidth: CGFloat?
     private var actionWidths: [String: CGFloat] = [:]
-    private lazy var animator = FrameAnimator(hostView: self)
+    private var hasCountTransition = false
+    private var countTransitionProgress: CGFloat = 1
+    private var countTransitionDirection: CGFloat = 1
+    private var countTransitionStartButtonWidth: CGFloat = NativeHubMetrics.height
+    private var countTransitionEndButtonWidth: CGFloat = NativeHubMetrics.height
+    private lazy var geometryAnimator = NativeHubSpringAnimator(hostView: self)
+    private lazy var chevronAnimator = NativeHubSpringAnimator(hostView: self)
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
-        layer?.masksToBounds = true
+        layer?.masksToBounds = false
         layer?.cornerCurve = .continuous
+        revealMaskLayer.fillColor = NSColor.black.cgColor
+        layer?.mask = revealMaskLayer
+        coreBackgroundMaskLayer.fillColor = NSColor.black.cgColor
+        revealedContentMaskLayer.fillColor = NSColor.black.cgColor
+        revealedLabelMaskLayer.fillColor = NSColor.black.cgColor
+        revealedLabelMaskLayer.fillRule = .evenOdd
+        compactContentMaskLayer.fillColor = NSColor.black.cgColor
+        compactContentMaskLayer.fillRule = .evenOdd
+        compactIconMaskLayer.fillColor = NSColor.black.cgColor
+        coreBackgroundView.layer?.mask = coreBackgroundMaskLayer
+        nativeView.layer?.mask = revealedContentMaskLayer
+        revealedLabelView.layer?.mask = revealedLabelMaskLayer
+        compactCoreView.layer?.mask = compactContentMaskLayer
+        compactIconView.layer?.mask = compactIconMaskLayer
+        compactIconRotationView.wantsLayer = true
+        compactIconRotationView.layer?.backgroundColor = NSColor.clear.cgColor
+        compactIconRotationView.layer?.masksToBounds = true
+        compactIconContentView.wantsLayer = true
+        compactIconContentView.layer?.backgroundColor = NSColor.clear.cgColor
+        compactIconContentView.layer?.masksToBounds = false
+        compactIconContentView.addSubview(compactIconView)
+        compactIconRotationView.addSubview(compactIconContentView)
+        compactCoreView.isHidden = false
         bubbleView.setSurface(.hubBubble)
+        coreBackgroundView.setSurface(.hubCoreBackground)
+        coreBackgroundView.rendersPressedState = false
         bubbleView.alphaValue = 0
-        nativeView.onButtonPressed = { [weak self] pressed in
+        let handlePress: (NativeHubPressedButton) -> Void = { [weak self] pressed in
             guard let self else { return }
             switch pressed {
             case .toggle: self.onToggle?()
@@ -582,8 +978,24 @@ final class NativeHubShellView: NSView {
                  .menuCapture, .menuSettings, .menuAccess, .menuQuit: break
             }
         }
+        nativeView.onButtonPressed = handlePress
+        revealedLabelView.onButtonPressed = handlePress
+        compactCoreView.onButtonPressed = handlePress
+        compactIconView.onButtonPressed = handlePress
+        coreBackgroundView.onButtonPressed = handlePress
+        coreBackgroundView.onInteractionChanged = { [weak self] channel, action in
+            self?.nativeView.mirrorInteraction(channel, action: action)
+            self?.revealedLabelView.mirrorInteraction(channel, action: action)
+            self?.compactCoreView.mirrorInteraction(channel, action: action)
+            self?.compactIconView.mirrorInteraction(channel, action: action)
+        }
         addSubview(bubbleView)
+        addSubview(coreBackgroundView)
         addSubview(nativeView)
+        addSubview(revealedLabelView)
+        addSubview(compactCoreView)
+        addSubview(odometerView)
+        addSubview(compactIconRotationView)
         setFrameSize(NSSize(width: compactWidth, height: compactHeight))
     }
 
@@ -595,9 +1007,17 @@ final class NativeHubShellView: NSView {
 
     var compactHeight: CGFloat { NativeHubMetrics.height + NativeHubMetrics.shellInset * 2 }
     var compactWidth: CGFloat { coreWidth }
+    var requiredLeadingClearance: CGFloat { leadingReveal }
     var coreCenter: NSPoint {
-        let coreX = expandsRight ? CGFloat.zero : bounds.width - coreWidth
-        return NSPoint(x: frame.minX + coreX + coreWidth / 2, y: frame.midY)
+        NSPoint(x: collapsedOrigin.x + coreWidth / 2,
+                y: collapsedOrigin.y + compactHeight / 2)
+    }
+
+    func containsVisiblePointInSuperview(_ point: NSPoint) -> Bool {
+        NSRect(x: frame.minX + visibleBounds.minX,
+               y: frame.minY + visibleBounds.minY,
+               width: visibleBounds.width,
+               height: visibleBounds.height).contains(point)
     }
 
     private var actionWidth: CGFloat {
@@ -606,60 +1026,181 @@ final class NativeHubShellView: NSView {
     }
 
     private var expandedWidth: CGFloat {
-        measuredExpandedWidth ?? (coreWidth + NativeHubMetrics.groupGap + actionWidth)
+        max(compactWidth,
+            measuredExpandedWidth ?? (coreWidth + NativeHubMetrics.groupGap + actionWidth))
+    }
+
+    private var leadingReveal: CGFloat {
+        expandsRight ? max(0, revealedCoreNativeFrame.width - stableCompactButtonWidth) : 0
+    }
+
+    private var compactShellX: CGFloat {
+        expandsRight ? leadingReveal : max(0, expandedWidth - compactWidth)
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden, alphaValue > 0.01, bounds.contains(point) else { return nil }
+        guard !isHidden, alphaValue > 0.01, visibleBounds.contains(point) else { return nil }
+        let backgroundPoint = convert(point, to: coreBackgroundView)
+        if coreBackgroundMaskLayer.path?.contains(backgroundPoint) == true,
+           coreBackgroundView.hasInteractiveButton(at: backgroundPoint) {
+            return coreBackgroundView
+        }
         let nativePoint = convert(point, to: nativeView)
-        return nativeView.hasInteractiveButton(at: nativePoint) ? nativeView : nil
+        return nativeView.alphaValue > 0.01 &&
+            revealedContentMaskLayer.path?.contains(nativePoint) == true &&
+            nativeView.hasInteractiveButton(at: nativePoint) ? nativeView : nil
     }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let trackingArea { removeTrackingArea(trackingArea) }
-        let area = NSTrackingArea(rect: .zero,
-                                  options: [.activeAlways, .inVisibleRect, .mouseEnteredAndExited, .mouseMoved],
+        let area = NSTrackingArea(rect: compactBounds,
+                                  options: [.activeAlways, .mouseEnteredAndExited, .mouseMoved],
                                   owner: self,
                                   userInfo: nil)
         addTrackingArea(area)
         trackingArea = area
     }
 
-    override func mouseEntered(with event: NSEvent) { setExpanded(true) }
-    override func mouseMoved(with event: NSEvent) { setExpanded(true) }
+    override func mouseEntered(with event: NSEvent) { setPointerHover(true) }
+    override func mouseMoved(with event: NSEvent) { setPointerHover(true) }
     override func mouseExited(with event: NSEvent) {
         guard let superview else {
-            setExpanded(false)
+            setPointerHover(false)
             return
         }
         let point = superview.convert(event.locationInWindow, from: nil)
         updateHover(at: point)
     }
 
-    func set(count: Int, collapsed: Bool, vertical: Bool, expandsRight: Bool) {
+    func set(count: Int,
+             collapsed: Bool,
+             vertical: Bool,
+             expandsRight: Bool,
+             animateChevron: Bool = true,
+             animateCount: Bool = false) {
+        let previousCount = self.count
+        let previousCountImage = odometerView.currentImage
+        let previousCompactButtonWidth = compactCoreNativeFrame.width
+        let previousCollapsed = self.collapsed
+        let previousVertical = self.vertical
+        let shouldAnimateChevron = hasConfiguredChevron
+            && previousCollapsed != collapsed
+            && previousVertical == vertical
+
         self.count = count
         self.collapsed = collapsed
         self.vertical = vertical
         self.expandsRight = expandsRight
-        nativeView.setState(count: count,
-                            collapsed: collapsed,
-                            vertical: vertical,
-                            expanded: progress > 0.001,
-                            actionsAfter: expandsRight)
         refreshMeasuredMetrics()
+        configureStaticGeometry()
+        if previousCount != count && animateCount {
+            prepareCountTransition(from: previousCount,
+                                   to: count,
+                                   oldImage: previousCountImage,
+                                   newImage: odometerView.currentImage,
+                                   oldButtonWidth: previousCompactButtonWidth,
+                                   newButtonWidth: compactCoreNativeFrame.width)
+        } else if previousCount != count {
+            finishCountTransitionImmediately()
+        }
+
+        let target: CGFloat = collapsed ? 1 : 0
+        chevronTargetProgress = target
+        if !animateChevron {
+            chevronAnimator.synchronize(chevronProgress)
+            applyChevronRotation()
+            hasConfiguredChevron = true
+            return
+        }
+        if !hasConfiguredChevron || previousVertical != vertical || NativeHubMetrics.animationDuration == 0 {
+            chevronAnimator.synchronize(target)
+            chevronProgress = target
+            applyChevronRotation()
+        } else if shouldAnimateChevron {
+            chevronAnimator.retarget(to: target,
+                                     response: NativeHubMetrics.baseAnimationDuration,
+                                     onFrame: { [weak self] value in
+                guard let self else { return }
+                self.chevronProgress = value
+                self.applyChevronRotation()
+            }, onDone: { [weak self] in
+                guard let self else { return }
+                self.chevronProgress = target
+                self.applyChevronRotation()
+            })
+        } else {
+            applyChevronRotation()
+        }
+        hasConfiguredChevron = true
+    }
+
+    func setCountTransitionProgress(_ value: CGFloat) {
+        guard hasCountTransition else { return }
+        countTransitionProgress = min(1, max(0, value))
         layoutForProgress(progress)
+    }
+
+    private func finishCountTransitionImmediately() {
+        hasCountTransition = false
+        countTransitionProgress = 1
+        countTransitionStartButtonWidth = compactCoreNativeFrame.width
+        countTransitionEndButtonWidth = compactCoreNativeFrame.width
+        odometerView.finishTransition()
+        updateCoreContentMasks(progress: progress)
+    }
+
+    private func prepareCountTransition(from oldCount: Int,
+                                        to newCount: Int,
+                                        oldImage: CGImage?,
+                                        newImage: CGImage?,
+                                        oldButtonWidth: CGFloat,
+                                        newButtonWidth: CGFloat) {
+        hasCountTransition = true
+        countTransitionProgress = 0
+        countTransitionDirection = newCount >= oldCount ? 1 : -1
+        countTransitionStartButtonWidth = oldButtonWidth
+        countTransitionEndButtonWidth = newButtonWidth
+        odometerView.prepareTransition(from: oldImage,
+                                       to: newImage,
+                                       increasing: countTransitionDirection > 0)
+        updateCoreContentMasks(progress: progress)
+        layoutForProgress(progress)
+    }
+
+    private func applyCountTransition() {
+        odometerView.setProgress(countTransitionProgress,
+                                 increasing: countTransitionDirection > 0)
+        if countTransitionProgress >= 0.999 {
+            hasCountTransition = false
+            updateCoreContentMasks(progress: progress)
+        }
+    }
+
+    func setChevronProgress(_ value: CGFloat) {
+        chevronProgress = max(0, min(1, value))
+        chevronTargetProgress = chevronProgress
+        chevronAnimator.synchronize(chevronProgress)
+        applyChevronRotation()
+    }
+
+    private func applyChevronRotation() {
+        let angle = CGFloat.pi * min(1, max(0, chevronProgress))
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        compactIconContentView.layer?.setAffineTransform(CGAffineTransform(rotationAngle: angle))
+        CATransaction.commit()
     }
 
     func setCollapsedOrigin(_ origin: NSPoint) {
         collapsedOrigin = origin
-        layoutForProgress(progress)
+        configureStaticGeometry()
     }
 
     private func setExpanded(_ expanded: Bool) {
-        if !expanded && nativeView.isPressing { return }
+        if !expanded && (nativeView.isPressing || coreBackgroundView.isPressing) { return }
         let target: CGFloat = expanded ? 1 : 0
         guard target != targetProgress else { return }
         targetProgress = target
@@ -669,64 +1210,330 @@ final class NativeHubShellView: NSView {
             stopHoverMonitoring()
         }
         guard abs(progress - target) > 0.001 else { return }
-        let start = progress
-        let remainingDistance = abs(target - start)
         animationStartCount += 1
-        animator.run(duration: NativeHubMetrics.animationDuration * CFTimeInterval(remainingDistance),
-                     delay: 0,
-                     easing: nativeHubLinear,
-                     onFrame: { [weak self] t in
-            guard let self else { return }
-            self.progress = start + (target - start) * t
-            self.layoutForProgress(self.progress)
-        }, onDone: { [weak self] in
-            guard let self else { return }
-            self.progress = target
-            self.layoutForProgress(target)
-        })
+        if NativeHubMetrics.animationDuration == 0 {
+            geometryAnimator.synchronize(target)
+            progress = target
+            layoutForProgress(progress)
+        } else {
+            geometryAnimator.retarget(to: target,
+                                      response: NativeHubMetrics.baseAnimationDuration,
+                                      onFrame: { [weak self] value in
+                guard let self else { return }
+                self.progress = value
+                self.layoutForProgress(value)
+            }, onDone: { [weak self] in
+                guard let self else { return }
+                self.progress = target
+                self.layoutForProgress(target)
+            })
+        }
+
+    }
+
+    private func setPointerHover(_ active: Bool) {
+        guard pointerHoverActive != active else { return }
+        pointerHoverActive = active
+        setExpanded(pointerHoverActive || trayHoverHeld)
+        onHoverChanged?(active)
+    }
+
+    func setTrayHoverHeld(_ held: Bool) {
+        guard trayHoverHeld != held else { return }
+        trayHoverHeld = held
+        setExpanded(pointerHoverActive || trayHoverHeld)
     }
 
     private func layoutForProgress(_ p: CGFloat) {
-        let widthProgress = min(1, max(0, p))
-        let currentWidth = compactWidth + (expandedWidth - compactWidth) * widthProgress
-        let originX = expandsRight ? collapsedOrigin.x : collapsedOrigin.x - (currentWidth - compactWidth)
-        frame = NSRect(x: originX, y: collapsedOrigin.y, width: currentWidth, height: compactHeight)
+        let clippedProgress = min(1, max(0, p))
+        let clippedContent = clippedProgress
+        let contentHandoff = contentPhase(clippedProgress, from: 0.24, to: 0.44)
+        let compactContentAlpha = 1 - contentHandoff
+        let revealedContentAlpha = contentHandoff
+        let rect = visibleBounds(for: clippedProgress)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        revealMaskLayer.frame = bounds
+        revealMaskLayer.path = CGPath(roundedRect: rect,
+                                      cornerWidth: NativeHubMetrics.bubbleRadius,
+                                      cornerHeight: NativeHubMetrics.bubbleRadius,
+                                      transform: nil)
+        coreBackgroundMaskLayer.frame = coreBackgroundView.bounds
+        let compactButtonWidth: CGFloat
+        if hasCountTransition {
+            let widthProgress = motionStrongEaseInOut(countTransitionProgress)
+            compactButtonWidth = countTransitionStartButtonWidth
+                + (countTransitionEndButtonWidth - countTransitionStartButtonWidth) * widthProgress
+            updateOdometerViewport(forButtonWidth: compactButtonWidth)
+        } else {
+            compactButtonWidth = compactCoreNativeFrame.width
+        }
+        let revealedButtonWidth = backgroundCoreNativeFrame.width
+        let currentButtonWidth = compactButtonWidth + (revealedButtonWidth - compactButtonWidth) * clippedProgress
+        let buttonRect = NSRect(x: backgroundCoreNativeFrame.maxX - currentButtonWidth,
+                                y: backgroundCoreNativeFrame.minY,
+                                width: currentButtonWidth,
+                                height: backgroundCoreNativeFrame.height)
+        coreBackgroundMaskLayer.path = CGPath(roundedRect: buttonRect,
+                                              cornerWidth: NativeHubMetrics.radius,
+                                              cornerHeight: NativeHubMetrics.radius,
+                                              transform: nil)
+        bubbleView.alphaValue = clippedContent
+        nativeView.alphaValue = clippedContent
+        revealedLabelView.alphaValue = revealedContentAlpha
+        compactCoreView.alphaValue = compactContentAlpha
+        odometerView.alphaValue = hasCountTransition ? 1 : 0
+        compactIconRotationView.alphaValue = 1
+        updateCoreContentMasks(progress: clippedProgress)
+#if TESTING
+        odometerView.frame.origin.x = compactContentBaseFrame.minX + countTranslationX * clippedProgress
+#else
+        odometerView.layer?.transform = CATransform3DMakeTranslation(countTranslationX * clippedProgress, 0, 0)
+#endif
+        if hasCountTransition { applyCountTransition() }
+        CATransaction.commit()
+    }
 
-        let nativeExpanded = p > 0.001
-        let nativeWidth = nativeExpanded ? expandedWidth : compactWidth
-        let nativeX = expandsRight ? CGFloat.zero : currentWidth - nativeWidth
-        bubbleView.frame = NSRect(x: nativeX, y: 0, width: nativeWidth, height: compactHeight)
+    private func contentPhase(_ progress: CGFloat, from start: CGFloat, to end: CGFloat) -> CGFloat {
+        guard end > start else { return progress >= end ? 1 : 0 }
+        return motionStrongEaseOut((progress - start) / (end - start))
+    }
+
+    private var compactBounds: NSRect {
+        NSRect(x: compactShellX,
+               y: 0,
+               width: compactWidth,
+               height: compactHeight)
+    }
+
+    private var visibleBounds: NSRect { visibleBounds(for: progress) }
+
+    private func visibleBounds(for progress: CGFloat) -> NSRect {
+        let compact = NSRect(x: compactShellX, y: 0, width: compactWidth, height: compactHeight)
+        let minX = compact.minX * (1 - progress)
+        let maxX = compact.maxX + (expandedWidth - compact.maxX) * progress
+        return NSRect(x: minX,
+                      y: 0,
+                      width: maxX - minX,
+                      height: compactHeight)
+    }
+
+    private func configureStaticGeometry() {
+        let width = expandedWidth
+        let originX = collapsedOrigin.x - compactShellX
+        frame = NSRect(x: originX,
+                       y: collapsedOrigin.y,
+                       width: width,
+                       height: compactHeight)
+
+        bubbleView.frame = bounds
         bubbleView.setSurface(.hubBubble)
-        bubbleView.alphaValue = bubbleOpacity(for: p)
         bubbleView.renderNow()
-        nativeView.frame = NSRect(x: nativeX, y: 0, width: nativeWidth, height: compactHeight)
+
+        let stableCompactButtonMaxX = compactCoreNativeFrame.minX + stableCompactButtonWidth
+        let nativeX = compactShellX + stableCompactButtonMaxX - revealedCoreNativeFrame.maxX
+        nativeView.frame = NSRect(x: nativeX, y: 0, width: width, height: compactHeight)
         nativeView.setState(count: count,
                             collapsed: collapsed,
                             vertical: vertical,
-                            expanded: nativeExpanded,
+                            expanded: true,
+                            coreRevealed: true,
                             actionsAfter: expandsRight)
         nativeView.renderNow()
-        layer?.cornerRadius = p > 0.001 ? NativeHubMetrics.bubbleRadius : 0
+        revealedLabelView.frame = nativeView.frame
+        revealedLabelView.setCoreWidth(revealedCoreNativeFrame.width)
+        revealedLabelView.setState(count: count,
+                                    collapsed: collapsed,
+                                    vertical: vertical,
+                                    expanded: true,
+                                    coreRevealed: true,
+                                    actionsAfter: expandsRight)
+        revealedLabelView.renderNow()
+
+        let targetCoreFrame = NSRect(x: nativeX + revealedCoreNativeFrame.minX,
+                                     y: revealedCoreNativeFrame.minY,
+                                     width: revealedCoreNativeFrame.width,
+                                     height: revealedCoreNativeFrame.height)
+        let backgroundWidth = backgroundCoreNativeFrame.width + NativeHubMetrics.shellInset * 2
+        let backgroundX = targetCoreFrame.minX - backgroundCoreNativeFrame.minX
+        coreBackgroundView.frame = NSRect(x: backgroundX,
+                                          y: 0,
+                                          width: backgroundWidth,
+                                          height: compactHeight)
+        coreBackgroundView.setState(count: count,
+                                    collapsed: collapsed,
+                                    vertical: vertical,
+                                    expanded: false,
+                                    coreRevealed: false,
+                                    actionsAfter: expandsRight)
+        coreBackgroundView.setCoreWidth(revealedCoreNativeFrame.width)
+        coreBackgroundView.setSurface(.hubCoreBackground)
+        coreBackgroundView.renderNow()
+
+        let compactContentOffset = max(0, stableCompactButtonWidth - compactCoreNativeFrame.width)
+        let compactX = compactShellX + compactContentOffset
+        compactCoreView.frame = NSRect(x: compactX,
+                                       y: 0,
+                                       width: compactWidth,
+                                       height: compactHeight)
+        compactCoreView.setState(count: count,
+                                 collapsed: collapsed,
+                                 vertical: vertical,
+                                 expanded: false,
+                                 coreRevealed: false,
+                                 actionsAfter: expandsRight)
+        compactCoreView.renderNow()
+        compactIconView.frame = compactCoreView.bounds
+        compactIconView.setState(count: count,
+                                 collapsed: false,
+                                 vertical: vertical,
+                                 expanded: false,
+                                 coreRevealed: false,
+                                 actionsAfter: expandsRight)
+        compactIconView.renderNow()
+        configureContentMasks()
+        updateTrackingAreas()
+        layoutForProgress(progress)
     }
 
-    private func bubbleOpacity(for progress: CGFloat) -> CGFloat {
-        let t = min(1, max(0, progress / 0.45))
-        return t * t * (3 - 2 * t)
+    private func compactSlices(for buttonFrame: NSRect) -> (count: NSRect, icon: NSRect) {
+        let rowY = buttonFrame.minY + 4
+        let rowHeight = max(1, buttonFrame.height - 8)
+        let contentWidth = max(1, buttonFrame.width - NativeHubMetrics.controlInset * 2)
+        let textWidth = max(1, contentWidth - NativeHubMetrics.iconSide - NativeHubMetrics.iconGap)
+        let startX = buttonFrame.midX - contentWidth / 2
+        return (
+            NSRect(x: startX, y: rowY, width: textWidth, height: rowHeight),
+            NSRect(x: startX + textWidth + NativeHubMetrics.iconGap,
+                   y: rowY,
+                   width: NativeHubMetrics.iconSide,
+                   height: rowHeight)
+        )
+    }
+
+    private func configureContentMasks() {
+        let compactSlices = compactSlices(for: compactCoreNativeFrame)
+        let compactCountRect = compactSlices.count
+        let compactCountCropRect = compactCountRect
+            .insetBy(dx: -NativeHubMetrics.countBleed, dy: 0)
+            .intersection(compactCoreView.bounds)
+        let compactIconRect = compactSlices.icon
+        let revealedContentWidth = max(1, revealedIntrinsicCoreWidth - NativeHubMetrics.controlInset * 2)
+        let revealedTextWidth = max(compactCountRect.width,
+                                    revealedContentWidth - NativeHubMetrics.iconSide - NativeHubMetrics.iconGap)
+        let revealedStartX = revealedCoreNativeFrame.midX - revealedContentWidth / 2
+        let revealedCountRect = NSRect(x: revealedStartX,
+                                       y: revealedCoreNativeFrame.minY + 4,
+                                       width: compactCountRect.width,
+                                       height: max(1, revealedCoreNativeFrame.height - 8))
+        let revealedLabelRect = NSRect(x: revealedCountRect.maxX,
+                                       y: revealedCountRect.minY,
+                                       width: max(1, revealedTextWidth - stableCompactCountFrame.width),
+                                       height: revealedCountRect.height)
+        let revealedIconRect = NSRect(x: revealedStartX + revealedContentWidth - NativeHubMetrics.iconSide,
+                                      y: revealedCountRect.minY,
+                                      width: NativeHubMetrics.iconSide,
+                                      height: revealedCountRect.height)
+        compactCountMaskFrame = compactCountCropRect
+        compactIconMaskFrame = compactIconRect
+        revealedCountMaskFrame = revealedCountRect
+        revealedIconMaskFrame = revealedIconRect
+        revealedLabelNativeFrame = revealedLabelRect
+        revealedContentMaskLayer.frame = nativeView.bounds
+        let actionPath = CGMutablePath()
+        for frame in revealedActionNativeFrames { actionPath.addRect(frame) }
+        revealedContentMaskLayer.path = actionPath
+        revealedLabelMaskLayer.frame = revealedLabelView.bounds
+
+        compactContentMaskLayer.frame = compactCoreView.bounds
+        updateOdometerViewport(forButtonWidth: compactCoreNativeFrame.width)
+        if !hasCountTransition {
+            odometerView.setCurrent(compactCoreView.renderedCrop(in: compactCountCropRect))
+        }
+        compactIconMaskLayer.frame = compactIconView.bounds
+        compactIconMaskLayer.path = CGPath(rect: compactIconRect, transform: nil)
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        compactIconContentView.layer?.setAffineTransform(.identity)
+        let rotationSide = max(stableCompactIconFrame.width, stableCompactIconFrame.height)
+        let targetRotationOrigin = NSPoint(x: stableCompactIconFrame.midX - rotationSide / 2,
+                                           y: stableCompactIconFrame.midY - rotationSide / 2)
+        let sourceRotationOrigin = NSPoint(x: compactIconRect.midX - rotationSide / 2,
+                                           y: compactIconRect.midY - rotationSide / 2)
+        compactIconRotationView.frame = NSRect(x: compactShellX + targetRotationOrigin.x,
+                                               y: targetRotationOrigin.y,
+                                               width: rotationSide,
+                                               height: rotationSide)
+        compactIconContentView.frame = compactIconRotationView.bounds
+        compactIconContentView.layer?.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        compactIconContentView.layer?.position = CGPoint(x: compactIconRotationView.bounds.midX,
+                                                        y: compactIconRotationView.bounds.midY)
+        compactIconView.frame = NSRect(x: -sourceRotationOrigin.x,
+                                       y: -sourceRotationOrigin.y,
+                                       width: compactCoreView.bounds.width,
+                                       height: compactCoreView.bounds.height)
+        CATransaction.commit()
+        applyChevronRotation()
+
+        expandedCountTargetMinX = revealedLabelView.frame.minX + revealedCountRect.minX
+        countTranslationX = expandedCountTargetMinX - odometerView.frame.minX
+        updateCoreContentMasks(progress: progress)
+    }
+
+    private func updateOdometerViewport(forButtonWidth buttonWidth: CGFloat) {
+        let countWidth = max(1,
+                             buttonWidth
+                                - NativeHubMetrics.controlInset * 2
+                                - NativeHubMetrics.iconSide
+                                - NativeHubMetrics.iconGap)
+        let width = countWidth + NativeHubMetrics.countBleed * 2
+        let rightEdge = compactShellX
+            + stableCompactCountFrame.maxX
+            + NativeHubMetrics.countBleed
+        odometerView.frame = NSRect(x: rightEdge - width,
+                                    y: stableCompactCountFrame.minY,
+                                    width: width,
+                                    height: stableCompactCountFrame.height)
+        compactContentBaseFrame = odometerView.frame
+        if expandedCountTargetMinX != 0 {
+            countTranslationX = expandedCountTargetMinX - odometerView.frame.minX
+        }
+    }
+
+    private func updateCoreContentMasks(progress: CGFloat) {
+        compactContentMaskLayer.path = hasCountTransition
+            ? nil
+            : contentMaskPath(outer: compactCoreNativeFrame, holes: [compactIconMaskFrame])
+        revealedLabelMaskLayer.path = contentMaskPath(
+            outer: revealedCoreNativeFrame,
+            holes: [revealedIconMaskFrame] + (hasCountTransition ? [revealedCountMaskFrame] : [])
+        )
+    }
+
+    private func contentMaskPath(outer: NSRect, holes: [NSRect]) -> CGPath? {
+        guard outer.width > 0.5, outer.height > 0.5 else { return nil }
+        let path = CGMutablePath()
+        path.addRect(outer)
+        for hole in holes where hole.width > 0.5 && hole.height > 0.5 {
+            path.addRect(hole)
+        }
+        return path
     }
 
     private func expandedHoverFrame() -> NSRect {
-        let originX = expandsRight
-            ? collapsedOrigin.x
-            : collapsedOrigin.x - (expandedWidth - compactWidth)
-        return NSRect(x: originX,
+        return NSRect(x: collapsedOrigin.x - compactShellX,
                       y: collapsedOrigin.y,
                       width: expandedWidth,
                       height: compactHeight).insetBy(dx: -2, dy: -2)
     }
 
     private func updateHover(at pointInSuperview: NSPoint) {
-        guard targetProgress > 0 else { return }
-        if !expandedHoverFrame().contains(pointInSuperview) {
+        if pointerHoverActive, !expandedHoverFrame().contains(pointInSuperview) {
+            setPointerHover(false)
+        } else if !pointerHoverActive, !trayHoverHeld {
+            // A long press can defer closing until mouse-up. The shared monitor
+            // retries the effective target without manufacturing a new hover.
             setExpanded(false)
         }
     }
@@ -758,7 +1565,10 @@ final class NativeHubShellView: NSView {
     }
 
     func resetHoverState() {
-        animator.cancel()
+        if pointerHoverActive { onHoverChanged?(false) }
+        pointerHoverActive = false
+        trayHoverHeld = false
+        geometryAnimator.synchronize(0)
         stopHoverMonitoring()
         targetProgress = 0
         progress = 0
@@ -766,35 +1576,113 @@ final class NativeHubShellView: NSView {
     }
 
     private func refreshMeasuredMetrics() {
+        let previousCompactFrame = compactCoreView.frame
+        let previousBackgroundFrame = coreBackgroundView.frame
+        compactCoreView.frame = NSRect(x: 0, y: 0, width: 800, height: compactHeight)
+        compactCoreView.setCoreWidth(nil)
+        if stableCompactCountFrame.isEmpty || stableCompactIconFrame.isEmpty {
+            compactCoreView.setState(count: 100,
+                                     collapsed: collapsed,
+                                     vertical: vertical,
+                                     expanded: false,
+                                     coreRevealed: false,
+                                     actionsAfter: expandsRight)
+            compactCoreView.renderNow()
+            if let stableCompactNode = compactCoreView.buttonNodes().first {
+                stableCompactButtonWidth = ceil(stableCompactNode.frame.width)
+                let slices = compactSlices(for: stableCompactNode.frame)
+                stableCompactCountFrame = slices.count
+                stableCompactIconFrame = slices.icon
+            }
+        }
+        compactCoreView.setState(count: count,
+                                 collapsed: collapsed,
+                                 vertical: vertical,
+                                 expanded: false,
+                                 coreRevealed: false,
+                                 actionsAfter: expandsRight)
+        compactCoreView.renderNow()
+        if let compactCoreNode = compactCoreView.buttonNodes().first {
+            compactCoreNativeFrame = compactCoreNode.frame
+            coreWidth = ceil(stableCompactButtonWidth + NativeHubMetrics.shellInset * 2)
+        }
+
         let previousFrame = nativeView.frame
-        let previousExpanded = progress > 0.001
         nativeView.frame = NSRect(x: 0, y: 0, width: 800, height: compactHeight)
+        nativeView.setCoreWidth(nil)
+        nativeView.setState(count: 100,
+                            collapsed: false,
+                            vertical: vertical,
+                            expanded: true,
+                            coreRevealed: true,
+                            actionsAfter: expandsRight)
+        nativeView.renderNow()
+        let hideCoreNode = nativeView.buttonNodes().first { node in
+            !(node.title == "Delete" || node.title == "Save As" || node.title == "Copy All")
+        }
+        nativeView.setState(count: 100,
+                            collapsed: true,
+                            vertical: vertical,
+                            expanded: true,
+                            coreRevealed: true,
+                            actionsAfter: expandsRight)
+        nativeView.renderNow()
+        let showCoreNode = nativeView.buttonNodes().first { node in
+            !(node.title == "Delete" || node.title == "Save As" || node.title == "Copy All")
+        }
+        let fixedCoreWidth = ceil(max(hideCoreNode?.frame.width ?? 0, showCoreNode?.frame.width ?? 0))
+
+        nativeView.setCoreWidth(nil)
         nativeView.setState(count: count,
                             collapsed: collapsed,
                             vertical: vertical,
                             expanded: true,
+                            coreRevealed: true,
                             actionsAfter: expandsRight)
         nativeView.renderNow()
-        let nodes = nativeView.buttonNodes()
-        let actionNodes = nodes.filter { $0.title == "Delete" || $0.title == "Save As" || $0.title == "Copy All" }
-        let coreNode = nodes.first { node in
+        let intrinsicCurrentCoreNode = nativeView.buttonNodes().first { node in
             !(node.title == "Delete" || node.title == "Save As" || node.title == "Copy All")
         }
-        if let coreNode {
-            coreWidth = ceil(coreNode.frame.width + NativeHubMetrics.shellInset * 2)
+        revealedIntrinsicCoreWidth = intrinsicCurrentCoreNode?.frame.width ?? NativeHubMetrics.height
+
+        coreBackgroundView.frame = NSRect(x: 0, y: 0, width: 800, height: compactHeight)
+        coreBackgroundView.setState(count: count,
+                                    collapsed: collapsed,
+                                    vertical: vertical,
+                                    expanded: false,
+                                    coreRevealed: false,
+                                    actionsAfter: expandsRight)
+        coreBackgroundView.setCoreWidth(fixedCoreWidth)
+        coreBackgroundView.setSurface(.hubCoreBackground)
+        coreBackgroundView.renderNow()
+        if let backgroundCoreNode = coreBackgroundView.buttonNodes().first {
+            backgroundCoreNativeFrame = backgroundCoreNode.frame
         }
-        for node in actionNodes {
-            actionWidths[node.title] = ceil(node.frame.width)
-        }
-        if let content = union(nodes.map(\.frame)) {
-            measuredExpandedWidth = ceil(content.maxX + content.minX)
-        }
+
+        nativeView.setCoreWidth(fixedCoreWidth)
         nativeView.setState(count: count,
                             collapsed: collapsed,
                             vertical: vertical,
-                            expanded: previousExpanded,
+                            expanded: true,
+                            coreRevealed: true,
                             actionsAfter: expandsRight)
+        nativeView.renderNow()
+        let revealedNodes = nativeView.buttonNodes()
+        let actionNodes = revealedNodes.filter { $0.title == "Delete" || $0.title == "Save As" || $0.title == "Copy All" }
+        revealedActionNativeFrames = actionNodes.map(\.frame)
+        let revealedCoreNode = revealedNodes.first { node in
+            !(node.title == "Delete" || node.title == "Save As" || node.title == "Copy All")
+        }
+        if let revealedCoreNode { revealedCoreNativeFrame = revealedCoreNode.frame }
+        for node in actionNodes {
+            actionWidths[node.title] = ceil(node.frame.width)
+        }
+        if let content = union(revealedNodes.map(\.frame)) {
+            measuredExpandedWidth = ceil(content.maxX + content.minX)
+        }
         nativeView.frame = previousFrame
+        compactCoreView.frame = previousCompactFrame
+        coreBackgroundView.frame = previousBackgroundFrame
     }
 
     private func union(_ rects: [NSRect]) -> NSRect? {
@@ -806,23 +1694,62 @@ final class NativeHubShellView: NSView {
     }
 
 #if TESTING
+    func debugTransitionCount(to newCount: Int) {
+        set(count: newCount,
+            collapsed: collapsed,
+            vertical: vertical,
+            expandsRight: expandsRight,
+            animateChevron: false,
+            animateCount: true)
+    }
+
+    func debugSetCountTransitionProgress(_ value: CGFloat) {
+        setCountTransitionProgress(value)
+    }
+
     func debugSetExpansionProgress(_ value: CGFloat) {
         progress = max(0, min(1, value))
+        geometryAnimator.synchronize(progress)
         layoutForProgress(progress)
+    }
+
+    func debugSetChevronProgress(_ value: CGFloat) {
+        setChevronProgress(value)
     }
 
     func debugSnapshot() -> HubDebugSnapshot {
         nativeView.renderNow()
+        revealedLabelView.renderNow()
+        compactCoreView.renderNow()
+        compactIconView.renderNow()
+        coreBackgroundView.renderNow()
         let buttons = nativeView.buttonNodes()
-        let shellBounds = bounds
+        let shellBounds = visibleBounds
         let actionRects = buttons.compactMap { node -> NSRect? in
             guard node.title == "Delete" || node.title == "Save As" || node.title == "Copy All" else { return nil }
             return nativeView.convert(node.frame, to: self)
         }
         let actionClipFrame = union(actionRects) ?? currentActionClipFrame()
-        let coreFrame = buttons
-            .first(where: { !($0.title == "Delete" || $0.title == "Save As" || $0.title == "Copy All") })
-            .map { nativeView.convert($0.frame, to: self) } ?? currentCoreFrame()
+        let coreFrame = coreBackgroundMaskLayer.path
+            .map { coreBackgroundView.convert($0.boundingBox, to: self) }
+            ?? currentCoreFrame()
+        let coreBackgroundFrame = coreBackgroundView.buttonNodes().first
+            .map { coreBackgroundView.convert($0.frame, to: self) } ?? coreFrame
+        let coreCountFrame = hasCountTransition
+            ? odometerView.debugIncomingFrame.insetBy(dx: NativeHubMetrics.countBleed, dy: 0)
+            : compactCoreView.convert(
+                compactCountMaskFrame.insetBy(dx: NativeHubMetrics.countBleed, dy: 0),
+                to: self
+            )
+        let odometerViewportFrame = odometerView.frame
+        let coreIconFrame = compactIconRotationView.frame
+        let coreLabelFrame = progress > 0.001
+            ? revealedLabelView.convert(revealedLabelNativeFrame, to: self)
+            : .zero
+        let countText = count > 99 ? "99+" : "\(count)"
+        let coreTitle = progress > 0.001
+            ? "\(countText) \(collapsed ? "Show" : "Hide")"
+            : countText
 
         let actionSnapshots = buttons.compactMap { node -> HubDebugPillSnapshot? in
             let title: String
@@ -834,6 +1761,9 @@ final class NativeHubShellView: NSView {
             let shellRect = nativeView.convert(node.frame, to: self)
             let clipRect = shellBounds.intersection(shellRect)
             let fullyVisible = clipRect.width >= shellRect.width - 0.5 && clipRect.height >= shellRect.height - 0.5
+            let maskCoversCenter = revealedContentMaskLayer.path?.contains(
+                NSPoint(x: node.frame.midX, y: node.frame.midY)
+            ) == true
             let relative = NSRect(x: shellRect.minX - actionClipFrame.minX,
                                   y: shellRect.minY - actionClipFrame.minY,
                                   width: shellRect.width,
@@ -841,8 +1771,8 @@ final class NativeHubShellView: NSView {
             return HubDebugPillSnapshot(title: title,
                                         frame: relative,
                                         cornerRadius: NativeHubMetrics.radius,
-                                        labelAlpha: fullyVisible ? 1 : 0,
-                                        isInteractive: fullyVisible && progress > 0,
+                                        labelAlpha: fullyVisible && maskCoversCenter ? 1 : 0,
+                                        isInteractive: fullyVisible && maskCoversCenter && nativeView.alphaValue > 0.01,
                                         hasIcon: true)
         }
 
@@ -859,13 +1789,36 @@ final class NativeHubShellView: NSView {
                                 shellBorderWidth: layer?.borderWidth ?? 0,
                                 shellSublayerCount: layer?.sublayers?.count ?? 0,
                                 coreFrame: coreFrame,
+                                coreBackgroundFrame: coreBackgroundFrame,
+                                coreCountFrame: coreCountFrame,
+                                odometerViewportFrame: odometerViewportFrame,
+                                odometerClips: odometerView.debugClips,
+                                odometerLayerCount: odometerView.debugLayerCount,
+                                odometerHasOutgoingContent: odometerView.debugHasOutgoingContent,
+                                odometerUsesEdgeFade: odometerView.debugUsesEdgeFade,
+                                coreLabelFrame: coreLabelFrame,
+                                coreLabelRequiredWidth: revealedLabelNativeFrame.width,
+                                coreIconFrame: coreIconFrame,
+                                chevronRotation: CGFloat.pi * chevronProgress,
+                                chevronTargetRotation: CGFloat.pi * chevronTargetProgress,
+                                chevronHostTransformIsIdentity: CATransform3DIsIdentity(
+                                    compactIconRotationView.layer?.transform ?? CATransform3DIdentity
+                                ),
+                                chevronHostClips: compactIconRotationView.layer?.masksToBounds == true,
+                                coreTitle: coreTitle,
                                 coreHasIcon: true,
+                                stableCoreContentAlpha: compactCoreView.alphaValue + revealedLabelView.alphaValue,
+                                revealedLabelAlpha: revealedLabelView.alphaValue,
+                                compactTextUsesCompleteNativeRender: compactContentMaskLayer.path?.boundingBox == compactCoreNativeFrame,
+                                revealedTextUsesCompleteNativeRender: revealedLabelMaskLayer.path?.boundingBox == revealedCoreNativeFrame,
+                                odometerHiddenAtRest: !hasCountTransition && odometerView.isHidden,
                                 coreCornerRadius: NativeHubMetrics.radius,
                                 actionClipFrame: actionClipFrame,
                                 actionPills: actionSnapshots.sorted { $0.frame.minX < $1.frame.minX },
                                 animationDuration: NativeHubMetrics.animationDuration,
-                                nativeRenderPassCount: nativeView.renderPassCount,
-                                nativeRenderDuration: nativeView.totalRenderDuration)
+                                contentFadeDuration: NativeHubMetrics.animationDuration,
+                                nativeRenderPassCount: nativeView.renderPassCount + revealedLabelView.renderPassCount + compactCoreView.renderPassCount + compactIconView.renderPassCount + coreBackgroundView.renderPassCount,
+                                nativeRenderDuration: nativeView.totalRenderDuration + revealedLabelView.totalRenderDuration + compactCoreView.totalRenderDuration + compactIconView.totalRenderDuration + coreBackgroundView.totalRenderDuration)
     }
 
     func debugControlButtons() -> [NativeControlDebugButtonSnapshot] {
@@ -877,11 +1830,24 @@ final class NativeHubShellView: NSView {
     }
 
     func debugPixel(at point: NSPoint) -> UInt32 {
-        let foreground = nativeView.debugPixel(at: convert(point, to: nativeView))
+        guard visibleBounds.contains(point) else { return 0 }
+        let revealedPoint = convert(point, to: nativeView)
+        let compactPoint = convert(point, to: compactCoreView)
+        let backgroundPoint = convert(point, to: coreBackgroundView)
+        let revealed = revealedContentMaskLayer.path?.contains(revealedPoint) == true
+            ? nativeView.debugPixel(at: revealedPoint) : 0
+        let compact = compactContentMaskLayer.path?.contains(compactPoint) == true
+            ? compactCoreView.debugPixel(at: compactPoint) : 0
+        let coreBackground = coreBackgroundMaskLayer.path?.contains(backgroundPoint) == true
+            ? coreBackgroundView.debugPixel(at: backgroundPoint) : 0
         let background = bubbleView.debugPixel(at: convert(point, to: bubbleView))
-        let foregroundAlpha = CGFloat(foreground & 0xff) / 255
+        let revealedAlpha = CGFloat(revealed & 0xff) / 255 * nativeView.alphaValue
+        let compactAlpha = CGFloat(compact & 0xff) / 255 * compactCoreView.alphaValue
+        let coreBackgroundAlpha = CGFloat(coreBackground & 0xff) / 255
         let backgroundAlpha = CGFloat(background & 0xff) / 255 * bubbleView.alphaValue
-        let alpha = foregroundAlpha + backgroundAlpha * (1 - foregroundAlpha)
+        let baseAlpha = coreBackgroundAlpha + backgroundAlpha * (1 - coreBackgroundAlpha)
+        let revealedComposite = revealedAlpha + baseAlpha * (1 - revealedAlpha)
+        let alpha = compactAlpha + revealedComposite * (1 - compactAlpha)
         return UInt32((alpha * 255).rounded())
     }
 
@@ -891,8 +1857,10 @@ final class NativeHubShellView: NSView {
     }
 
     func debugRequestExpanded(_ expanded: Bool) {
-        setExpanded(expanded)
+        setPointerHover(expanded)
     }
+
+    func debugSetTrayHoverHeld(_ held: Bool) { setTrayHoverHeld(held) }
 
     func debugUpdateHover(at pointInSuperview: NSPoint) {
         updateHover(at: pointInSuperview)
@@ -900,7 +1868,7 @@ final class NativeHubShellView: NSView {
 
     private func currentCoreFrame() -> NSRect {
         let width = coreWidth - NativeHubMetrics.shellInset * 2
-        return NSRect(x: expandsRight ? NativeHubMetrics.shellInset : bounds.width - NativeHubMetrics.shellInset - width,
+        return NSRect(x: compactShellX + NativeHubMetrics.shellInset,
                       y: NativeHubMetrics.shellInset,
                       width: width,
                       height: NativeHubMetrics.height)
@@ -908,7 +1876,7 @@ final class NativeHubShellView: NSView {
 
     private func currentActionClipFrame() -> NSRect {
         if expandsRight {
-            let x = coreWidth + NativeHubMetrics.groupGap
+            let x = compactShellX + coreWidth + NativeHubMetrics.groupGap
             return NSRect(x: x, y: NativeHubMetrics.shellInset,
                           width: max(0, bounds.width - x - NativeHubMetrics.shellInset),
                           height: NativeHubMetrics.height)

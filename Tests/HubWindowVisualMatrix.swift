@@ -30,7 +30,7 @@ struct HubWindowVisualMatrix {
 
     private static func matrixView() -> NSView {
         let positions: [TrayPosition] = [.right, .left, .bottom, .top]
-        let counts = [1, 2, 120]
+        let counts = [1, 5, 10, 120]
         let progressFrames: [CGFloat] = [0, 0.18, 0.55, 1]
         let cellW: CGFloat = 620
         let cellH: CGFloat = 116

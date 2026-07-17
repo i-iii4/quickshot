@@ -27,11 +27,13 @@ OUT="$(mktemp -t quickshot-hub-tests)"
 SURFACE_OUT="$(mktemp -t quickshot-native-surface-tests)"
 STATUS_LAYOUT_OUT="$(mktemp -t quickshot-status-menu-layout-tests)"
 THUMBNAIL_LAYOUT_OUT="$(mktemp -t quickshot-thumbnail-layout-tests)"
+THUMBNAIL_MOTION_OUT="$(mktemp -t quickshot-thumbnail-motion-tests)"
+THUMBNAIL_COLLECTION_OUT="$(mktemp -t quickshot-thumbnail-collection-tests)"
 HUB_LIVE_OUT="$(mktemp -t quickshot-hub-live-tests)"
 THUMBNAIL_LIVE_OUT="$(mktemp -t quickshot-thumbnail-live-tests)"
 SELECTION_OUT="$(mktemp -t quickshot-selection-tests)"
 CAPTURE_HOT_PATH_OUT="$(mktemp -t quickshot-capture-hot-path-tests)"
-trap 'rm -f "$OUT" "$SURFACE_OUT" "$STATUS_LAYOUT_OUT" "$THUMBNAIL_LAYOUT_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CAPTURE_HOT_PATH_OUT"' EXIT
+trap 'rm -f "$OUT" "$SURFACE_OUT" "$STATUS_LAYOUT_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CAPTURE_HOT_PATH_OUT"' EXIT
 
 # Pixel timing is a product contract, so exercise the same optimized Native SDK
 # renderer that ships in QuickShot instead of measuring the debug reference path.
@@ -45,6 +47,7 @@ xcrun swiftc \
   -framework AppKit \
   -framework CoreGraphics \
   Tests/HubWindowTestSupport.swift \
+  Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
   Sources/NativeHubView.swift \
   Sources/HubWindow.swift \
@@ -62,6 +65,7 @@ xcrun swiftc \
   -framework AppKit \
   -framework CoreGraphics \
   Tests/HubWindowTestSupport.swift \
+  Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
   Sources/NativeHubView.swift \
   Sources/HubWindow.swift \
@@ -93,6 +97,46 @@ xcrun swiftc \
 
 "$THUMBNAIL_LAYOUT_OUT"
 
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 5 \
+  -framework AppKit \
+  Sources/MotionCurves.swift \
+  Sources/ThumbnailMotion.swift \
+  Tests/ThumbnailMotionTests.swift \
+  -o "$THUMBNAIL_MOTION_OUT"
+
+"$THUMBNAIL_MOTION_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 5 \
+  -D TESTING \
+  -framework AppKit \
+  -framework CoreGraphics \
+  -framework QuartzCore \
+  Sources/WindowCaptureProtection.swift \
+  Sources/Theme.swift \
+  Sources/MotionCurves.swift \
+  Sources/NativeSDKBridge.swift \
+  Sources/NativeHubView.swift \
+  Sources/Clipboard.swift \
+  Sources/CardSizing.swift \
+  Sources/TrayHostContentView.swift \
+  Sources/HubWindow.swift \
+  Sources/PinnedWindow.swift \
+  Sources/ThumbnailMotion.swift \
+  Sources/ThumbnailWindow.swift \
+  Sources/ThumbnailLayout.swift \
+  Sources/ThumbnailManager.swift \
+  Tests/ThumbnailCollectionBehaviorTests.swift \
+  "$NATIVE_UI_LIB" \
+  -o "$THUMBNAIL_COLLECTION_OUT"
+
+"$THUMBNAIL_COLLECTION_OUT"
+
 if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   xcrun swiftc \
   -sdk "$SDK" \
@@ -103,6 +147,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   -framework CoreGraphics \
   -framework QuartzCore \
   Sources/TrayHostContentView.swift \
+  Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
   Sources/NativeHubView.swift \
   Tests/HubWindowLiveClickTests.swift \
@@ -122,6 +167,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   -framework QuartzCore \
   Sources/WindowCaptureProtection.swift \
   Sources/Theme.swift \
+  Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
   Sources/NativeHubView.swift \
   Sources/Clipboard.swift \
@@ -129,6 +175,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/TrayHostContentView.swift \
   Sources/HubWindow.swift \
   Sources/PinnedWindow.swift \
+  Sources/ThumbnailMotion.swift \
   Sources/ThumbnailWindow.swift \
   Sources/ThumbnailLayout.swift \
   Sources/ThumbnailManager.swift \
@@ -260,6 +307,56 @@ if output="$(rg -n "copy\\(cgImage:|copyAll\\(cgImages:" Sources/Clipboard.swift
 fi
 rg -q "cachedClipboardPayload" Sources/ThumbnailManager.swift
 rg -F -q "thumbnailLayout(screenFrame:" Sources/ThumbnailManager.swift
+rg -F -q "container.layer?.transform = transform" Sources/ThumbnailWindow.swift
+rg -F -q "TrayProgressAnimator(hostView: hostContent)" Sources/ThumbnailManager.swift
+rg -F -q "collectionAnimator = CollectionProgressAnimator(hostView: hostContent)" Sources/ThumbnailManager.swift
+rg -F -q "thumbnailTrayVisualState(progress:" Sources/ThumbnailWindow.swift
+rg -F -q "prepareReflow(from:" Sources/ThumbnailManager.swift
+rg -F -q "setCountTransitionProgress(progress)" Sources/ThumbnailManager.swift
+rg -F -q "collapsedPeekHold" Sources/ThumbnailManager.swift
+rg -F -q "hub.onHoverChanged" Sources/ThumbnailManager.swift
+rg -F -q "hub.setTrayHoverActive(true)" Sources/ThumbnailManager.swift
+rg -F -q "hub.setTrayHoverActive(false)" Sources/ThumbnailManager.swift
+rg -F -q "thumbnailHoverChanged" Sources/ThumbnailManager.swift
+rg -F -q "TrayAnim.hoverExitGrace" Sources/ThumbnailManager.swift
+rg -F -q "guard !self.mouseOverTray() else { return }" Sources/ThumbnailManager.swift
+rg -F -q "self.hoverExitGeneration == generation" Sources/ThumbnailManager.swift
+rg -F -q "self.collapsedPeekGeneration == generation" Sources/ThumbnailManager.swift
+rg -F -q "container.onHoverChanged" Sources/ThumbnailWindow.swift
+rg -F -q "thumbnailAxisLockedOrigin" Sources/ThumbnailManager.swift
+rg -U -q 'inserted\.hide\(\)\n\s*runCollectionMotion' Sources/ThumbnailManager.swift
+rg -F -q "class NativeOdometerView" Sources/NativeHubView.swift
+rg -F -q "odometerView.debugClips" Sources/NativeHubView.swift
+if output="$(rg -n "outgoingCountView|compactCountClipView|outgoingCountMaskLayer" Sources/NativeHubView.swift)"; then
+  echo "$output"
+  echo "Odometer regression: full Native button renders must not return as rolling layers." >&2
+  exit 1
+fi
+if ! rg -U -q 'if hidden \{\n\s*container\.interactionsEnabled = false\n\s*container\.isHidden = true\n\s*return' Sources/ThumbnailWindow.swift; then
+  echo "Thumbnail regression: hidden collection completion must terminate before restoring resting alpha." >&2
+  exit 1
+fi
+if output="$(awk 'index($0, "func add(image:") { active = 1 } active { print } index($0, "func remove(") { exit }' Sources/ThumbnailManager.swift | rg -n "\bexpand\(\)")"; then
+  echo "$output"
+  echo "Collapsed capture regression: adding a screenshot must not auto-expand the tray." >&2
+  exit 1
+fi
+rg -F -q "hub.setTrayCollapseProgress(progress)" Sources/ThumbnailManager.swift
+if output="$(rg -n "\bdissolve\(|\bemerge\(|TrayAnim\.(stagger|maxStagger|delay)|contentProgress|contentAnimator|class FrameAnimator" Sources)"; then
+  echo "$output"
+  echo "Motion architecture regression: tray collapse must keep one coordinator and one master progress." >&2
+  exit 1
+fi
+if output="$(awk 'index($0, "func collapse()") { active = 1 } active { print } index($0, "func expand()") { exit }' Sources/ThumbnailManager.swift | rg -n "setCollapsed\(")"; then
+  echo "$output"
+  echo "Thumbnail controls regression: collapse must not hide card controls before fade completion." >&2
+  exit 1
+fi
+if output="$(rg -n "startFrame\.(minX|minY|width|height)|target\.(minX|minY|width|height).*\* e" Sources/ThumbnailWindow.swift)"; then
+  echo "$output"
+  echo "Thumbnail motion regression: collapse/expand must not resize layout frames per display tick." >&2
+  exit 1
+fi
 if output="$(rg -n "items\.reversed\(\)" Sources/ThumbnailManager.swift)"; then
   echo "$output"
   echo "Thumbnail layout regression: newest screenshots must append into free slots without reflowing existing cards." >&2
@@ -297,7 +394,9 @@ rg -F -q "prewarmTask?.cancel()" Sources/CaptureController.swift
 rg -F -q "prewarmTask = Task.detached" Sources/CaptureController.swift
 rg -F -q "self.prewarmID == prewarmID" Sources/CaptureController.swift
 rg -F -q "prewarmTask = nil" Sources/CaptureController.swift
-rg -F -q "session?.shutdown()" Sources/CaptureController.swift
+rg -F -q "selectionSession?.shutdown()" Sources/CaptureController.swift
+rg -F -q "private var finishingSessions: [UUID: CaptureSession] = [:]" Sources/CaptureController.swift
+rg -F -q "finishingSessions[id] = session" Sources/CaptureController.swift
 rg -F -q "freshCaptureTask?.cancel()" Sources/CaptureController.swift
 rg -q "window.sharingType = .none" Sources/WindowCaptureProtection.swift
 rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/Overlay.swift

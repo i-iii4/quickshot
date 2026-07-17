@@ -1,68 +1,93 @@
+<template name="hub-core-fixed">
+  <button width="{core_width}" size="sm" variant="secondary" icon="{chevronIcon}" icon-placement="trailing" label="{coreLabel}" on-press="toggle">{coreText}</button>
+</template>
+
+<template name="hub-core-auto">
+  <button size="sm" variant="secondary" icon="{chevronIcon}" icon-placement="trailing" label="{coreLabel}" on-press="toggle">{coreText}</button>
+</template>
+
 <row gap="8" cross="center" padding="0" label="QuickShot controls">
-  <if test="{hubBubbleSurface}">
-    <panel width="800" height="40" background="surface" radius="xl" label="QuickShot hub bubble"></panel>
+  <if test="{hubCoreBackgroundSurface}">
+    <row padding="6" label="QuickShot core surface">
+      <button width="{core_width}" size="sm" variant="secondary" label="{coreLabel}" on-press="toggle"></button>
+    </row>
   </if>
   <else>
-    <if test="{thumbnailSurface}">
-      <row gap="8" cross="center" label="Screenshot card actions">
-        <if test="{compact}">
-          <button size="sm" variant="secondary" icon="{copyIcon}" label="{copyLabel}" on-press="copy"></button>
-        </if>
-        <else>
-          <button size="sm" variant="secondary" icon="{copyIcon}" label="{copyLabel}" on-press="copy">{copyText}</button>
-        </else>
-        <button size="sm" variant="destructive" icon="x" label="Dismiss screenshot" on-press="dismiss"></button>
-      </row>
+    <if test="{hubBubbleSurface}">
+      <panel width="800" height="40" background="surface" radius="xl" label="QuickShot hub bubble"></panel>
     </if>
     <else>
-      <if test="{statusMenuSurface}">
-        <column gap="6" padding="8" background="background" label="QuickShot menu">
-          <button size="sm" variant="ghost" label="Menu capture" on-press="menu_capture">Сделать снимок</button>
-          <button size="sm" variant="ghost" label="Menu settings" on-press="menu_settings">Настройки...</button>
-          <button size="sm" variant="ghost" label="Menu access" on-press="menu_access">Открыть доступ к записи экрана</button>
-          <button size="sm" variant="destructive" label="Menu quit" on-press="menu_quit">Выйти из QuickShot</button>
-        </column>
+      <if test="{thumbnailSurface}">
+        <row gap="8" cross="center" label="Screenshot card actions">
+          <if test="{compact}">
+            <button size="sm" variant="secondary" icon="{copyIcon}" label="{copyLabel}" on-press="copy"></button>
+          </if>
+          <else>
+            <button size="sm" variant="secondary" icon="{copyIcon}" label="{copyLabel}" on-press="copy">{copyText}</button>
+          </else>
+          <button size="sm" variant="destructive" icon="x" label="Dismiss screenshot" on-press="dismiss"></button>
+        </row>
       </if>
       <else>
-        <if test="{settingsSurface}">
-          <column gap="10" padding="20" background="background" label="QuickShot settings">
-            <text>Положение трея миниатюр</text>
-            <button-group gap="0" cross="center" label="Tray position">
-              <button size="sm" selected="{positionLeft}" label="Tray left" on-press="position_left">Слева</button>
-              <button size="sm" selected="{positionRight}" label="Tray right" on-press="position_right">Справа</button>
-              <button size="sm" selected="{positionBottom}" label="Tray bottom" on-press="position_bottom">Снизу</button>
-              <button size="sm" selected="{positionTop}" label="Tray top" on-press="position_top">Сверху</button>
-            </button-group>
-            <text size="sm" foreground="text_muted" wrap="true">Новый снимок появляется у соответствующего угла экрана.</text>
+        <if test="{statusMenuSurface}">
+          <column gap="6" padding="8" background="background" label="QuickShot menu">
+            <button size="sm" variant="ghost" label="Menu capture" on-press="menu_capture">Сделать снимок</button>
+            <button size="sm" variant="ghost" label="Menu settings" on-press="menu_settings">Настройки...</button>
+            <button size="sm" variant="ghost" label="Menu access" on-press="menu_access">Открыть доступ к записи экрана</button>
+            <button size="sm" variant="destructive" label="Menu quit" on-press="menu_quit">Выйти из QuickShot</button>
           </column>
         </if>
         <else>
-          <if test="{pinnedSurface}">
-            <button size="sm" variant="secondary" icon="{copyIcon}" label="{copyLabel}" on-press="copy">{copyText}</button>
+          <if test="{settingsSurface}">
+            <column gap="10" padding="20" background="background" label="QuickShot settings">
+              <text>Положение трея миниатюр</text>
+              <button-group gap="0" cross="center" label="Tray position">
+                <button size="sm" selected="{positionLeft}" label="Tray left" on-press="position_left">Слева</button>
+                <button size="sm" selected="{positionRight}" label="Tray right" on-press="position_right">Справа</button>
+                <button size="sm" selected="{positionBottom}" label="Tray bottom" on-press="position_bottom">Снизу</button>
+                <button size="sm" selected="{positionTop}" label="Tray top" on-press="position_top">Сверху</button>
+              </button-group>
+              <text size="sm" foreground="text_muted" wrap="true">Новый снимок появляется у соответствующего угла экрана.</text>
+            </column>
           </if>
           <else>
-            <row gap="8" cross="center" padding="6" label="QuickShot hub commands">
-              <if test="{actions_after}">
-                <button size="sm" variant="secondary" icon="{chevronIcon}" icon-placement="trailing" label="{coreLabel}" on-press="toggle">{countLabel}</button>
-                <if test="{expanded}">
-                  <row gap="8" cross="center" label="Screenshot actions">
-                    <button size="sm" variant="destructive" icon="trash" on-press="delete">Delete</button>
-                    <button size="sm" variant="secondary" icon="download" on-press="save_as">Save As</button>
-                    <button size="sm" variant="secondary" icon="copy" on-press="copy_all">Copy All</button>
-                  </row>
+            <if test="{pinnedSurface}">
+              <button size="sm" variant="secondary" icon="{copyIcon}" label="{copyLabel}" on-press="copy">{copyText}</button>
+            </if>
+            <else>
+              <row gap="8" cross="center" padding="6" label="QuickShot hub commands">
+                <if test="{actions_after}">
+                  <if test="{coreWidthSet}">
+                    <use template="hub-core-fixed" />
+                  </if>
+                  <else>
+                    <use template="hub-core-auto" />
+                  </else>
+                  <if test="{expanded}">
+                    <row gap="8" cross="center" label="Screenshot actions">
+                      <button size="sm" variant="destructive" icon="trash" on-press="delete">Delete</button>
+                      <button size="sm" variant="secondary" icon="download" on-press="save_as">Save As</button>
+                      <button size="sm" variant="secondary" icon="copy" on-press="copy_all">Copy All</button>
+                    </row>
+                  </if>
                 </if>
-              </if>
-              <else>
-                <if test="{expanded}">
-                  <row gap="8" cross="center" label="Screenshot actions">
-                    <button size="sm" variant="destructive" icon="trash" on-press="delete">Delete</button>
-                    <button size="sm" variant="secondary" icon="download" on-press="save_as">Save As</button>
-                    <button size="sm" variant="secondary" icon="copy" on-press="copy_all">Copy All</button>
-                  </row>
-                </if>
-                <button size="sm" variant="secondary" icon="{chevronIcon}" icon-placement="trailing" label="{coreLabel}" on-press="toggle">{countLabel}</button>
-              </else>
-            </row>
+                <else>
+                  <if test="{expanded}">
+                    <row gap="8" cross="center" label="Screenshot actions">
+                      <button size="sm" variant="destructive" icon="trash" on-press="delete">Delete</button>
+                      <button size="sm" variant="secondary" icon="download" on-press="save_as">Save As</button>
+                      <button size="sm" variant="secondary" icon="copy" on-press="copy_all">Copy All</button>
+                    </row>
+                  </if>
+                  <if test="{coreWidthSet}">
+                    <use template="hub-core-fixed" />
+                  </if>
+                  <else>
+                    <use template="hub-core-auto" />
+                  </else>
+                </else>
+              </row>
+            </else>
           </else>
         </else>
       </else>

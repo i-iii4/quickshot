@@ -19,6 +19,7 @@ struct CaptureHotPathStaticTests {
             try testLiveSelectionStartsImmediately(captureSource)
             try testFreshRegionCaptureAfterSelection(captureSource: captureSource,
                                                      freshRegionSource: freshRegionSource)
+            try testRepeatedCaptureDoesNotWaitForFreshPixels(captureSource)
             try testOverlayKeepsLiveSelectionContract(overlaySource: overlaySource,
                                                       protectionSource: protectionSource)
             try testCompletedCaptureIsObservable(captureSource: captureSource)
@@ -115,6 +116,29 @@ struct CaptureHotPathStaticTests {
                     "FreshRegionCapture must keep a same-process window fallback")
         try require(freshRegionSource.contains("image.cropping(to: px)"),
                     "FreshRegionCapture must guard against APIs returning a full-display image")
+    }
+
+    private static func testRepeatedCaptureDoesNotWaitForFreshPixels(_ source: String) throws {
+        let triggerBody = try functionBody(named: "triggerCapture", in: source, after: "final class CaptureController")
+        try require(triggerBody.contains("guard selectionSession == nil"),
+                    "Capture admission must be gated only by an active selection overlay")
+        try require(!triggerBody.contains("finishingSessions.isEmpty"),
+                    "In-flight pixel delivery must not block the next selection overlay")
+        try require(source.contains("private var finishingSessions: [UUID: CaptureSession] = [:]"),
+                    "Finishing captures need independent ownership after selection releases")
+
+        let completeBody = try functionBody(named: "completeSelection", in: source, after: "private final class CaptureSession")
+        guard let release = completeBody.range(of: "onSelectionReleased(id)"),
+              let capture = completeBody.range(of: "startFreshCaptureAndDelivery(selection: clamped, screen: screen)") else {
+            throw Failure("Mouse-up must release selection admission before starting slow pixel delivery")
+        }
+        try require(release.lowerBound < capture.lowerBound,
+                    "Slow ScreenCaptureKit delivery still owns the next-trigger admission lock")
+
+        let releaseBody = try functionBody(named: "releaseSelectionSession", in: source, after: "final class CaptureController")
+        try require(releaseBody.contains("finishingSessions[id] = session")
+                    && releaseBody.contains("selectionSession = nil"),
+                    "Released selection must remain retained without blocking a new overlay")
     }
 
     private static func testOverlayKeepsLiveSelectionContract(overlaySource: String,
@@ -224,8 +248,11 @@ struct CaptureHotPathStaticTests {
                     "App termination must explicitly shut down active capture UI")
 
         let controllerShutdown = try functionBody(named: "shutdown", in: captureSource, after: "final class CaptureController")
-        try require(controllerShutdown.contains("session?.shutdown()"),
-                    "CaptureController.shutdown must dismiss any active capture session")
+        try require(controllerShutdown.contains("selectionSession?.shutdown()"),
+                    "CaptureController.shutdown must dismiss the active selection overlay")
+        try require(controllerShutdown.contains("Array(finishingSessions.values)")
+                    && controllerShutdown.contains("for session in sessions { session.shutdown() }"),
+                    "CaptureController.shutdown must cancel every in-flight capture delivery")
         try require(controllerShutdown.contains("prewarmTask?.cancel()") && controllerShutdown.contains("prewarmTask = nil"),
                     "CaptureController.shutdown must cancel owned startup prewarm work")
 

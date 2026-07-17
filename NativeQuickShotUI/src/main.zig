@@ -8,6 +8,8 @@ pub const Model = struct {
     collapsed: bool = false,
     vertical: bool = true,
     expanded: bool = false,
+    core_revealed: bool = false,
+    core_width: f32 = 0,
     actions_after: bool = false,
     compact: bool = false,
     copied: bool = false,
@@ -20,15 +22,24 @@ pub const Model = struct {
 
     pub const view_unbound = .{ "last_action", "high_contrast", "reduce_motion" };
 
-    pub fn countLabel(model: *const Model, arena: std.mem.Allocator) []const u8 {
-        if (model.count == 1) return "1 screenshot";
-        if (model.count > 99) return "99+ screenshots";
-        return std.fmt.allocPrint(arena, "{d} screenshots", .{model.count}) catch "";
+    pub fn coreText(model: *const Model, arena: std.mem.Allocator) []const u8 {
+        const count_text = if (model.count > 99)
+            "99+"
+        else
+            std.fmt.allocPrint(arena, "{d}", .{model.count}) catch "";
+        if (!model.core_revealed) return count_text;
+        const action = if (model.collapsed) "Show" else "Hide";
+        return std.fmt.allocPrint(arena, "{s} {s}", .{ count_text, action }) catch count_text;
     }
 
     pub fn coreLabel(model: *const Model, arena: std.mem.Allocator) []const u8 {
-        const verb = if (model.collapsed) "Expand" else "Collapse";
-        return std.fmt.allocPrint(arena, "{s} screenshots", .{verb}) catch "Toggle screenshots";
+        const verb = if (model.collapsed) "Show" else "Hide";
+        const noun = if (model.count == 1) "screenshot" else "screenshots";
+        return std.fmt.allocPrint(arena, "{s} {d} {s}", .{ verb, model.count, noun }) catch "Toggle screenshots";
+    }
+
+    pub fn coreWidthSet(model: *const Model) bool {
+        return model.core_width > 0;
     }
 
     pub fn chevronIcon(model: *const Model) []const u8 {
@@ -42,6 +53,10 @@ pub const Model = struct {
 
     pub fn hubBubbleSurface(model: *const Model) bool {
         return model.surface == .hub_bubble;
+    }
+
+    pub fn hubCoreBackgroundSurface(model: *const Model) bool {
+        return model.surface == .hub_core_background;
     }
 
     pub fn pinnedSurface(model: *const Model) bool {
@@ -77,6 +92,7 @@ pub const Model = struct {
 pub const Surface = enum {
     hub,
     hub_bubble,
+    hub_core_background,
     thumbnail,
     pinned,
     settings,
@@ -141,6 +157,8 @@ pub const Msg = union(enum) {
     set_collapsed: bool,
     set_vertical: bool,
     set_expanded: bool,
+    set_core_revealed: bool,
+    set_core_width: f32,
     set_actions_after: bool,
     set_surface: Surface,
     set_compact: bool,
@@ -156,6 +174,8 @@ const command_count_prefix = "hub.count:";
 const command_collapsed_prefix = "hub.collapsed:";
 const command_vertical_prefix = "hub.vertical:";
 const command_expanded_prefix = "hub.expanded:";
+const command_core_revealed_prefix = "hub.core_revealed:";
+const command_core_width_prefix = "hub.core_width:";
 const command_actions_after_prefix = "hub.actions_after:";
 const command_surface_prefix = "surface:";
 const command_compact_prefix = "control.compact:";
@@ -190,7 +210,7 @@ fn designTokens(model: *const Model) canvas.DesignTokens {
         .contrast = if (model.high_contrast) .high else .standard,
         .reduce_motion = model.reduce_motion,
     });
-    if (model.surface == .hub or model.surface == .hub_bubble or model.surface == .thumbnail or model.surface == .pinned) {
+    if (model.surface == .hub or model.surface == .hub_bubble or model.surface == .hub_core_background or model.surface == .thumbnail or model.surface == .pinned) {
         tokens.colors.background = canvas.Color.rgba8(0, 0, 0, 0);
     }
     return tokens;
@@ -231,6 +251,8 @@ fn update(model: *Model, msg: Msg) void {
         .set_collapsed => |collapsed| model.collapsed = collapsed,
         .set_vertical => |vertical| model.vertical = vertical,
         .set_expanded => |expanded| model.expanded = expanded,
+        .set_core_revealed => |revealed| model.core_revealed = revealed,
+        .set_core_width => |width| model.core_width = @max(0, width),
         .set_actions_after => |actions_after| model.actions_after = actions_after,
         .set_surface => |surface| model.surface = surface,
         .set_compact => |compact| model.compact = compact,
@@ -256,6 +278,13 @@ fn onCommand(name: []const u8) ?Msg {
     if (std.mem.startsWith(u8, name, command_expanded_prefix)) {
         return .{ .set_expanded = parseBool(name[command_expanded_prefix.len..]) orelse return null };
     }
+    if (std.mem.startsWith(u8, name, command_core_revealed_prefix)) {
+        return .{ .set_core_revealed = parseBool(name[command_core_revealed_prefix.len..]) orelse return null };
+    }
+    if (std.mem.startsWith(u8, name, command_core_width_prefix)) {
+        const raw = name[command_core_width_prefix.len..];
+        return .{ .set_core_width = std.fmt.parseFloat(f32, raw) catch return null };
+    }
     if (std.mem.startsWith(u8, name, command_actions_after_prefix)) {
         return .{ .set_actions_after = parseBool(name[command_actions_after_prefix.len..]) orelse return null };
     }
@@ -263,6 +292,7 @@ fn onCommand(name: []const u8) ?Msg {
         const raw = name[command_surface_prefix.len..];
         if (std.mem.eql(u8, raw, "hub")) return .{ .set_surface = .hub };
         if (std.mem.eql(u8, raw, "hub_bubble")) return .{ .set_surface = .hub_bubble };
+        if (std.mem.eql(u8, raw, "hub_core_background")) return .{ .set_surface = .hub_core_background };
         if (std.mem.eql(u8, raw, "thumbnail")) return .{ .set_surface = .thumbnail };
         if (std.mem.eql(u8, raw, "pinned")) return .{ .set_surface = .pinned };
         if (std.mem.eql(u8, raw, "settings")) return .{ .set_surface = .settings };

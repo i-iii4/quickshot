@@ -1,55 +1,6 @@
 import AppKit
 import QuartzCore
 
-// MARK: кривые сглаживания (нативный словарь: оседание, не симметрия)
-
-private func easeOutCubic(_ f: CGFloat) -> CGFloat { 1 - pow(1 - f, 3) }
-private func easeInOutCubic(_ f: CGFloat) -> CGFloat {
-    f < 0.5 ? 4 * f * f * f : 1 - pow(-2 * f + 2, 3) / 2
-}
-
-/// Покадровая анимация поверх CADisplayLink (синхронно с дисплеем, корректно на ProMotion).
-final class FrameAnimator: NSObject {
-    private weak var hostView: NSView?
-    private var link: CADisplayLink?
-    private var begin: CFTimeInterval = 0
-    private var duration: CFTimeInterval = 0
-    private var easing: (CGFloat) -> CGFloat = easeOutCubic
-    private var onFrame: ((CGFloat) -> Void)?
-    private var onDone: (() -> Void)?
-
-    init(hostView: NSView) { self.hostView = hostView; super.init() }
-
-    func run(duration: CFTimeInterval, delay: CFTimeInterval,
-             easing: @escaping (CGFloat) -> CGFloat,
-             onFrame: @escaping (CGFloat) -> Void, onDone: (() -> Void)? = nil) {
-        cancel()
-        self.duration = duration
-        self.easing = easing
-        self.onFrame = onFrame
-        self.onDone = onDone
-        self.begin = CACurrentMediaTime() + delay
-        guard let hostView else { return }
-        let l = hostView.displayLink(target: self, selector: #selector(step(_:)))
-        l.add(to: .main, forMode: .common)
-        link = l
-    }
-
-    @objc private func step(_ sender: CADisplayLink) {
-        let now = CACurrentMediaTime()
-        guard now >= begin else { return }
-        let t = duration <= 0 ? 1 : min(1, (now - begin) / duration)
-        onFrame?(easing(CGFloat(t)))
-        if t >= 1 { let done = onDone; cancel(); done?() }
-    }
-
-    func cancel() {
-        link?.invalidate(); link = nil
-        onFrame = nil; onDone = nil
-    }
-    deinit { link?.invalidate() }
-}
-
 private final class PassthroughImageView: NSImageView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
@@ -196,7 +147,9 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         manager?.hostBecomeKey()
         setControlsVisible(true)
     }
-    override func mouseExited(with event: NSEvent) { setControlsVisible(false) }
+    override func mouseExited(with event: NSEvent) {
+        setControlsVisible(false)
+    }
 
     private func setControlsVisible(_ visible: Bool, animated: Bool = true) {
         if visible {
@@ -323,8 +276,26 @@ private final class ThumbnailView: NSView, NSDraggingSource {
 /// которая центрирована на крае и слегка выходит наружу). Несёт тень слоем. Пустые поля
 /// (не ручка, не карточка) пропускают клики сквозь — иначе поля стали бы мёртвой зоной.
 private final class CardContainer: NSView {
+    var interactionsEnabled = true
+    var onHoverChanged: ((Bool) -> Void)?
+    private var trackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.activeAlways, .inVisibleRect, .mouseEnteredAndExited],
+                                  owner: self,
+                                  userInfo: nil)
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { onHoverChanged?(true) }
+    override func mouseExited(with event: NSEvent) { onHoverChanged?(false) }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden, alphaValue > 0.01, bounds.contains(point) else { return nil }
+        guard interactionsEnabled, !isHidden, alphaValue > 0.01, bounds.contains(point) else { return nil }
         for child in subviews.reversed() where !child.isHidden && child.alphaValue > 0.01 {
             let converted = child.convert(point, from: self)
             if let hit = child.hitTest(converted) { return hit }
@@ -335,8 +306,20 @@ private final class CardContainer: NSView {
 
 /// Обёртка над одной карточкой — САБВЬЮ общего окна-хоста трея. `hostView` (контейнер) на
 /// `resizeBand` больше карточки с каждой стороны; вдоль внутренней стороны сидит одна краевая
-/// ручка ресайза. Анимации двигают frame/alpha контейнера.
+/// ручка ресайза. Motion держит layout-frame неподвижным и меняет только transform/opacity.
 final class ThumbnailWindow {
+
+    private struct VisualState {
+        var translationX: CGFloat
+        var translationY: CGFloat
+        var alpha: CGFloat
+        var shadowOpacity: CGFloat
+
+        static let resting = VisualState(translationX: 0,
+                                         translationY: 0,
+                                         alpha: 1,
+                                         shadowOpacity: TrayAnim.restingShadowOpacity)
+    }
 
     let image: CGImage
     let screen: NSScreen
@@ -347,11 +330,18 @@ final class ThumbnailWindow {
     private let container = CardContainer()
     private let view: ThumbnailView
     private let edgeHandle = EdgeHandle()
-    private let animator: FrameAnimator
     private var resizeEdge: EdgeHandle.Edge = .left
+    private var restingFrame: NSRect = .zero
+    private var visualState = VisualState.resting
+    private var collectionOffset: NSPoint = .zero
 
     var hostView: NSView { container }
     var cardSize: NSSize { NSSize(width: cardWidth, height: cardHeight) }
+    var layoutFrame: NSRect { container.frame }
+    var onHoverChanged: ((Bool) -> Void)? {
+        get { container.onHoverChanged }
+        set { container.onHoverChanged = newValue }
+    }
 
     init(image: CGImage, screen: NSScreen, manager: ThumbnailManager, width: CGFloat, screenHeight: CGFloat) {
         self.image = image
@@ -359,13 +349,12 @@ final class ThumbnailWindow {
         self.cardWidth = width
 
         view = ThumbnailView(image: image)
-        animator = FrameAnimator(hostView: view)         // до замыканий с self ниже
 
         container.wantsLayer = true
         if let l = container.layer {
             l.masksToBounds = false
             l.shadowColor = NSColor.black.cgColor
-            l.shadowOpacity = 0.32
+            l.shadowOpacity = Float(TrayAnim.restingShadowOpacity)
             l.shadowRadius = 11
             l.shadowOffset = CGSize(width: 0, height: -5)
         }
@@ -425,6 +414,7 @@ final class ThumbnailWindow {
         let display = image.cropping(to: layout.cropRect) ?? image
         view.setDisplay(image: display)
         container.setFrameSize(NSSize(width: cardWidth + 2 * band, height: cardHeight + 2 * band))
+        restingFrame.size = container.frame.size
         layoutCardInContainer()
         view.layoutContents()
         positionHandle()
@@ -437,6 +427,20 @@ final class ThumbnailWindow {
     func cachedClipboardPayload() -> Clipboard.PreparedImage? { view.cachedClipboardPayload() }
 
 #if TESTING
+    struct CollectionDebugSnapshot {
+        let isHidden: Bool
+        let alpha: CGFloat
+        let translationX: CGFloat
+        let translationY: CGFloat
+    }
+
+    func debugCollectionSnapshot() -> CollectionDebugSnapshot {
+        CollectionDebugSnapshot(isHidden: container.isHidden,
+                                alpha: visualState.alpha,
+                                translationX: visualState.translationX,
+                                translationY: visualState.translationY)
+    }
+
     func debugShowControls() { view.debugShowControls() }
 
     func debugCloseButtonCenterInHost() -> NSPoint {
@@ -455,63 +459,144 @@ final class ThumbnailWindow {
     func debugCopyButtonState() -> String { view.debugCopyButtonState() }
 #endif
 
-    // MARK: анимация (CADisplayLink, ease-out без overshoot) — двигаем контейнер
+    // MARK: motion
 
-    private func animate(toFrame target: NSRect, toAlpha targetAlpha: CGFloat,
-                         duration: Double, delay: Double,
-                         easing: @escaping (CGFloat) -> CGFloat = easeOutCubic,
-                         completion: (() -> Void)? = nil) {
-        let startFrame = container.frame
-        let startAlpha = container.alphaValue
-        animator.run(duration: duration, delay: delay, easing: easing, onFrame: { [weak self] e in
-            guard let self else { return }
-            self.container.frame = NSRect(
-                x: startFrame.minX + (target.minX - startFrame.minX) * e,
-                y: startFrame.minY + (target.minY - startFrame.minY) * e,
-                width: startFrame.width + (target.width - startFrame.width) * e,
-                height: startFrame.height + (target.height - startFrame.height) * e)
-            self.layoutCardInContainer()
-            self.container.alphaValue = max(0, min(1, startAlpha + (targetAlpha - startAlpha) * e))
-        }, onDone: completion)
+    private func applyVisualState(_ state: VisualState) {
+        visualState = state
+        var transform = CATransform3DIdentity
+        transform.m41 = state.translationX
+        transform.m42 = state.translationY
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        container.layer?.transform = transform
+        container.layer?.shadowOpacity = Float(state.shadowOpacity)
+        container.alphaValue = max(0, min(1, state.alpha))
+        CATransaction.commit()
     }
 
     func placeInstant(origin: NSPoint) {
-        animator.cancel()
-        container.frame = outerRect(cardOrigin: origin)
+        restingFrame = outerRect(cardOrigin: origin)
+        container.frame = restingFrame
         layoutCardInContainer()
-        container.alphaValue = 1
+        applyVisualState(.resting)
+        container.interactionsEnabled = true
         container.isHidden = false
     }
 
-    /// Влёт новой карточки: scale (0.92 → 1) + fade. Быстро, ease-out без перелёта.
-    func appear(at origin: NSPoint) {
-        animator.cancel()
-        let final = outerRect(cardOrigin: origin)
-        let startSize = NSSize(width: final.width * 0.92, height: final.height * 0.92)
-        container.frame = NSRect(x: final.midX - startSize.width / 2, y: final.midY - startSize.height / 2,
-                                 width: startSize.width, height: startSize.height)
+    func prepareInsertion(at origin: NSPoint, from offset: NSPoint, reduceMotion: Bool) {
+        restingFrame = outerRect(cardOrigin: origin)
+        container.frame = restingFrame
         layoutCardInContainer()
-        container.alphaValue = 0
+        collectionOffset = reduceMotion ? .zero : offset
+        setCollapsed(false)
+        container.interactionsEnabled = false
         container.isHidden = false
-        animate(toFrame: final, toAlpha: 1, duration: TrayAnim.move, delay: 0, easing: easeOutCubic)
+        applyInsertion(progress: 0, reduceMotion: reduceMotion)
     }
 
-    func dissolve(toHubCenter c: NSPoint, duration: Double, delay: Double) {
-        let tiny = NSRect(x: c.x - 5, y: c.y - 5, width: 10, height: 10)
-        animate(toFrame: tiny, toAlpha: 0, duration: duration, delay: delay, easing: easeInOutCubic) { [weak self] in
-            self?.container.isHidden = true
+    func applyInsertion(progress: CGFloat, reduceMotion: Bool) {
+        let state = thumbnailInsertionState(progress: progress, reduceMotion: reduceMotion)
+        applyVisualState(VisualState(translationX: collectionOffset.x * (1 - state.movementProgress),
+                                     translationY: collectionOffset.y * (1 - state.movementProgress),
+                                     alpha: state.alpha,
+                                     shadowOpacity: state.shadowOpacity))
+    }
+
+    func prepareRemoval(toward offset: NSPoint, reduceMotion: Bool) {
+        collectionOffset = reduceMotion ? .zero : offset
+        container.interactionsEnabled = false
+        container.isHidden = false
+    }
+
+    func applyRemoval(progress: CGFloat, reduceMotion: Bool) {
+        let state = thumbnailRemovalState(progress: progress, reduceMotion: reduceMotion)
+        applyVisualState(VisualState(translationX: collectionOffset.x * state.movementProgress,
+                                     translationY: collectionOffset.y * state.movementProgress,
+                                     alpha: state.alpha,
+                                     shadowOpacity: state.shadowOpacity))
+    }
+
+    func prepareReflow(from oldFrame: NSRect, to origin: NSPoint, reduceMotion: Bool) {
+        restingFrame = outerRect(cardOrigin: origin)
+        container.frame = restingFrame
+        layoutCardInContainer()
+        container.interactionsEnabled = false
+        container.isHidden = false
+        let dx = reduceMotion ? 0 : oldFrame.minX - restingFrame.minX
+        let dy = reduceMotion ? 0 : oldFrame.minY - restingFrame.minY
+        applyVisualState(VisualState(translationX: dx,
+                                     translationY: dy,
+                                     alpha: 1,
+                                     shadowOpacity: TrayAnim.restingShadowOpacity))
+    }
+
+    func applyReflow(progress: CGFloat, from oldFrame: NSRect, reduceMotion: Bool) {
+        let p = thumbnailReflowProgress(progress, reduceMotion: reduceMotion)
+        let dx = reduceMotion ? 0 : (oldFrame.minX - restingFrame.minX) * (1 - p)
+        let dy = reduceMotion ? 0 : (oldFrame.minY - restingFrame.minY) * (1 - p)
+        applyVisualState(VisualState(translationX: dx,
+                                     translationY: dy,
+                                     alpha: 1,
+                                     shadowOpacity: TrayAnim.restingShadowOpacity))
+    }
+
+    func finishCollectionMotion(hidden: Bool = false) {
+        if hidden {
+            container.interactionsEnabled = false
+            container.isHidden = true
+            return
+        }
+        applyVisualState(.resting)
+        container.interactionsEnabled = true
+        container.isHidden = false
+    }
+
+    func prepareTrayTransition(progress: CGFloat,
+                               travelOffset: NSPoint,
+                               restingOrigin: NSPoint,
+                               expanding: Bool,
+                               reduceMotion: Bool) {
+        restingFrame = outerRect(cardOrigin: restingOrigin)
+        container.frame = restingFrame
+        layoutCardInContainer()
+        if expanding { setCollapsed(false) }
+        applyTrayTransition(progress: progress,
+                            travelOffset: travelOffset,
+                            reduceMotion: reduceMotion)
+        container.interactionsEnabled = false
+        container.isHidden = false
+    }
+
+    func applyTrayTransition(progress: CGFloat,
+                             travelOffset: NSPoint,
+                             reduceMotion: Bool) {
+        let state = thumbnailTrayVisualState(progress: progress, reduceMotion: reduceMotion)
+        applyVisualState(VisualState(translationX: travelOffset.x * state.travelProgress,
+                                     translationY: travelOffset.y * state.travelProgress,
+                                     alpha: state.alpha,
+                                     shadowOpacity: state.shadowOpacity))
+    }
+
+    func finishTrayTransition(collapsed: Bool) {
+        setCollapsed(collapsed)
+        if collapsed {
+            container.interactionsEnabled = false
+            container.isHidden = true
+        } else {
+            applyVisualState(.resting)
+            container.interactionsEnabled = true
+            container.isHidden = false
         }
     }
 
-    func emerge(fromHubCenter c: NSPoint, toOrigin o: NSPoint, duration: Double, delay: Double) {
-        animator.cancel()
-        container.frame = NSRect(x: c.x - 5, y: c.y - 5, width: 10, height: 10)
-        layoutCardInContainer()
-        container.alphaValue = 0
-        container.isHidden = false
-        animate(toFrame: outerRect(cardOrigin: o), toAlpha: 1, duration: duration, delay: delay, easing: easeOutCubic)
+    func hide() {
+        container.interactionsEnabled = false
+        container.isHidden = true
     }
 
-    func hide() { animator.cancel(); container.isHidden = true }
-    func close() { animator.cancel(); container.removeFromSuperview() }
+    func close() {
+        container.interactionsEnabled = false
+        container.removeFromSuperview()
+    }
 }

@@ -47,7 +47,16 @@ back in at capture time.
 - When there is at least one screenshot, QuickShot shows the compact
   icon+label hub near the screen corner.
 - Clicking the hub collapses or expands screenshots.
-- A new screenshot expands the tray.
+- Hovering the compact hub temporarily reveals a collapsed tray without
+  changing its click-owned collapsed state. The hub and every visible card
+  form one hover session, so moving the pointer from the command row onto a
+  screenshot keeps both the row and the cards expanded.
+- Leaving the complete hover region starts a `180ms` grace period. Returning
+  to the hub or any card cancels the pending collapse.
+- A new screenshot does not permanently expand a collapsed tray. It fades into
+  the nearest slot, remains fully visible for `1.2s`, and fades out again. Hover
+  holds that acknowledgement indefinitely and the normal exit grace starts
+  only after the pointer leaves.
 - Existing screenshot cards keep their positions when a new one arrives. The
   new card occupies the next free slot away from the hub instead of reflowing
   the stack.
@@ -70,6 +79,10 @@ back in at capture time.
   Motion settings are projected into the embedded runtime and repaint the
   complete surface.
 - Empty transparent tray space must not steal clicks from real controls.
+- Tray collapse, card opacity/shadow, and chevron rotation derive from one
+  interruptible progress source. Card insertion, removal, and reflow use one
+  collection transaction, while count changes use a vertically clipped
+  odometer transition.
 
 Visual references are stored in `reference/screenshots/`.
 

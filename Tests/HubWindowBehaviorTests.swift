@@ -8,9 +8,20 @@ struct HubWindowBehaviorTests {
         NSApplication.shared.setActivationPolicy(.accessory)
 
         run("core click toggles in compact state", testCoreClickTogglesCompact)
+        run("core press does not recolor sliced content", testCorePressDoesNotRecolor)
         run("core remains clickable after right-edge hover expansion", testRightEdgeExpansionKeepsCoreClickable)
         run("core remains clickable after left-edge hover expansion", testLeftEdgeExpansionKeepsCoreClickable)
         run("hover expansion keeps core anchored for every tray edge", testExpansionAnchorsEveryTrayEdge)
+        run("core reveals Hide and Show without screenshot wording", testCoreRevealLabels)
+        run("expanded core never clips Hide or Show", testExpandedCoreLabelFits)
+        run("core label fades in and Show/Hide keep one width", testCoreFadeAndStableWidth)
+        run("native core states hand off without text crops", testCoreSharedElementsNeverOverlap)
+        run("count odometer preserves baseline and rolls in direction", testCountOdometer)
+        run("count odometer stays clipped inside the intrinsic core", testCountOdometerClipping)
+        run("count odometer stays bounded during hover reveal", testCountOdometerDuringReveal)
+        run("count changes keep compact shell and chevron fixed", testCountGeometryAcrossDigitWidths)
+        run("chevron stays spatially fixed through hover reveal", testChevronStaysFixedThroughHover)
+        run("chevron rotates continuously between tray states", testChevronRotation)
         run("visible controls stay inside shell bounds", testVisibleControlsStayInsideShellBounds)
         run("intermediate expansion frames stay contained and anchored", testIntermediateExpansionFrames)
         run("action labels are never visibly clipped", testActionLabelsAreNeverVisiblyClipped)
@@ -19,10 +30,13 @@ struct HubWindowBehaviorTests {
         run("action labels stay short and intentional", testActionLabelsStayShort)
         run("actions keep one visual order", testActionsKeepVisualOrder)
         run("reveal has no idle tail", testRevealHasNoIdleTail)
-        run("interrupted reveal keeps constant speed", testInterruptedRevealKeepsConstantSpeed)
+        run("interrupted reveal keeps a proportional deadline", testInterruptedRevealKeepsProportionalDeadline)
+        run("spring retarget preserves presentation velocity", testSpringRetargetPreservesVelocity)
         run("repeated hover events do not restart reveal", testRepeatedHoverDoesNotRestartReveal)
         run("hover bubble always closes outside its footprint", testHoverBubbleClosesOutsideFootprint)
+        run("tray hover session holds the hub open across card hover", testTrayHoverSessionHoldsHubOpen)
         run("reveal reuses one native render", testRevealReusesNativeRender)
+        run("reveal keeps AppKit host geometry static", testRevealKeepsStaticHostGeometry)
         run("first expanded render fits one frame", testExpandedRenderFitsFrameBudget)
         run("hover is owned by Native SDK runtime", testNativeRuntimeOwnsHover)
         run("compact shell uses one stroke", testCompactShellUsesOneStroke)
@@ -53,14 +67,140 @@ struct HubWindowBehaviorTests {
         try require(harness.deleteCount == 0, "Core click must not trigger Delete")
     }
 
+    private static func testCorePressDoesNotRecolor() throws {
+        let harness = Harness(position: .right)
+        let before = harness.hub.debugSnapshot().nativeRenderPassCount
+
+        try harness.holdCorePress()
+        let during = harness.hub.debugSnapshot().nativeRenderPassCount
+
+        try require(during == before,
+                    "Core mouseDown must not rerender independent slices into a colored pressed state")
+        try harness.releaseCorePress()
+        try require(harness.toggleCount == 1,
+                    "Suppressing core press color must not suppress the click action")
+    }
+
+    private static func testCountOdometer() throws {
+        let harness = Harness(position: .right, count: 1)
+        let baseline = harness.hub.debugSnapshot().coreCountFrame
+        let baselineGlobalX = harness.hub.view.frame.minX + baseline.maxX
+
+        harness.hub.debugTransitionCount(to: 2)
+        harness.hub.setOrigin(NSPoint(x: 300, y: 40))
+        harness.hub.debugSetCountTransitionProgress(0)
+        let increasingStart = harness.hub.debugSnapshot().coreCountFrame
+        let increasingGlobalX = harness.hub.view.frame.minX + increasingStart.maxX
+        try require(abs(increasingGlobalX - baselineGlobalX) <= 1,
+                    "Odometer changed right-edge alignment: baseline=\(baselineGlobalX) transition=\(increasingGlobalX)")
+        try require(increasingStart.minY < baseline.minY,
+                    "Increasing count must enter from below")
+        harness.hub.debugSetCountTransitionProgress(1)
+        let increasingEnd = harness.hub.debugSnapshot().coreCountFrame
+        try require(abs(increasingEnd.minY - baseline.minY) <= 0.001,
+                    "Increasing count did not return to the canonical baseline")
+
+        harness.hub.debugTransitionCount(to: 1)
+        harness.hub.setOrigin(NSPoint(x: 300, y: 40))
+        harness.hub.debugSetCountTransitionProgress(0)
+        let decreasingStart = harness.hub.debugSnapshot().coreCountFrame
+        try require(decreasingStart.minY > baseline.minY,
+                    "Decreasing count must enter from above")
+        harness.hub.debugSetCountTransitionProgress(1)
+        let decreasingEnd = harness.hub.debugSnapshot().coreCountFrame
+        try require(abs(decreasingEnd.minY - baseline.minY) <= 0.001,
+                    "Decreasing count did not return to the canonical baseline")
+    }
+
+    private static func testCountOdometerClipping() throws {
+        for (oldCount, newCount) in [(1, 2), (2, 1), (9, 10), (10, 9), (99, 100)] {
+            let harness = Harness(position: .right, count: oldCount)
+            harness.hub.debugTransitionCount(to: newCount)
+            // Production repositions the shell immediately after setting the new count.
+            harness.hub.setOrigin(NSPoint(x: 300, y: 40))
+            harness.hub.debugSetCountTransitionProgress(0)
+            let initial = harness.hub.debugSnapshot()
+            try require(initial.odometerClips,
+                        "\(oldCount)->\(newCount): numeric viewport does not clip its rolling layers")
+            try require(initial.odometerUsesEdgeFade,
+                        "\(oldCount)->\(newCount): viewport lacks the edge fade for partial glyphs")
+            try require(initial.odometerLayerCount == 2,
+                        "\(oldCount)->\(newCount): odometer must own exactly incoming and outgoing layers")
+            try require(initial.odometerHasOutgoingContent,
+                        "\(oldCount)->\(newCount): geometry refresh discarded the old value before frame one")
+            try require(initial.coreFrame.contains(initial.odometerViewportFrame),
+                        "\(oldCount)->\(newCount): numeric viewport escapes the core button")
+            let fixedCoreRightEdge = initial.coreFrame.maxX
+            let fixedCountRightEdge = initial.odometerViewportFrame.maxX
+
+            for progress: CGFloat in [0.1, 0.25, 0.5, 0.75, 0.9, 1] {
+                harness.hub.debugSetCountTransitionProgress(progress)
+                let frame = harness.hub.debugSnapshot()
+                try require(frame.coreFrame.contains(frame.odometerViewportFrame),
+                            "\(oldCount)->\(newCount): numeric viewport escapes the intrinsic button at \(progress)")
+                try require(abs(frame.coreFrame.maxX - fixedCoreRightEdge) <= 0.001,
+                            "\(oldCount)->\(newCount): intrinsic button moved its trailing edge at \(progress)")
+                try require(abs(frame.odometerViewportFrame.maxX - fixedCountRightEdge) <= 0.001,
+                            "\(oldCount)->\(newCount): odometer moved its trailing alignment at \(progress)")
+                try require(rectsEqual(frame.coreIconFrame, initial.coreIconFrame, tolerance: 0.001),
+                            "\(oldCount)->\(newCount): odometer displaced the chevron")
+            }
+        }
+    }
+
+    private static func testCountOdometerDuringReveal() throws {
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            let harness = Harness(position: position, count: 9)
+            harness.hub.debugTransitionCount(to: 10)
+            harness.hub.setOrigin(NSPoint(x: 300, y: 40))
+            harness.hub.debugSetCountTransitionProgress(0.5)
+            for reveal: CGFloat in [0, 0.25, 0.5, 0.75, 1] {
+                harness.hub.debugSetExpansionProgress(reveal)
+                let frame = harness.hub.debugSnapshot()
+                try require(frame.coreBackgroundFrame.contains(frame.odometerViewportFrame),
+                            "\(position): hover reveal moved the odometer outside the core at \(reveal)")
+                try require(!frame.odometerViewportFrame.intersects(frame.coreIconFrame),
+                            "\(position): rolling digits overlap the chevron at reveal \(reveal)")
+            }
+        }
+    }
+
+    private static func testCountGeometryAcrossDigitWidths() throws {
+        let harness = Harness(position: .right, count: 9)
+        let singleDigit = harness.hub.debugSnapshot()
+        let singleDigitShell = harness.visibleShellFrameInRoot()
+        let singleDigitIcon = singleDigit.coreIconFrame.offsetBy(dx: harness.hub.view.frame.minX,
+                                                                 dy: harness.hub.view.frame.minY)
+        let singleDigitCount = singleDigit.coreCountFrame.offsetBy(dx: harness.hub.view.frame.minX,
+                                                                   dy: harness.hub.view.frame.minY)
+        let canonicalCountToChevronGap = singleDigitIcon.minX - singleDigitCount.maxX
+        for count in [1, 5, 10, 99, 100] {
+            harness.hub.debugTransitionCount(to: count)
+            harness.hub.setOrigin(NSPoint(x: 300, y: 40))
+            harness.hub.debugSetCountTransitionProgress(1)
+            let changed = harness.hub.debugSnapshot()
+            let changedShell = harness.visibleShellFrameInRoot()
+            let changedIcon = changed.coreIconFrame.offsetBy(dx: harness.hub.view.frame.minX,
+                                                             dy: harness.hub.view.frame.minY)
+            let changedCount = changed.coreCountFrame.offsetBy(dx: harness.hub.view.frame.minX,
+                                                               dy: harness.hub.view.frame.minY)
+            try require(rectsEqual(changedShell, singleDigitShell, tolerance: 0.001),
+                        "Count \(count) changed the compact shell geometry")
+            try require(rectsEqual(changedIcon, singleDigitIcon, tolerance: 0.001),
+                        "Count \(count) displaced the compact chevron")
+            try require(abs((changedIcon.minX - changedCount.maxX) - canonicalCountToChevronGap) <= 0.001,
+                        "Count \(count) changed the count-to-chevron gap")
+        }
+    }
+
     private static func testRightEdgeExpansionKeepsCoreClickable() throws {
         let harness = Harness(position: .right)
         let compactCenter = harness.hub.center
-        let compactFrame = harness.hub.view.frame
+        let compactFrame = harness.visibleShellFrameInRoot()
 
         harness.hoverHub()
 
-        try require(harness.hub.view.frame.width > compactFrame.width, "Hover must expand the action shell")
+        try require(harness.visibleShellFrameInRoot().width > compactFrame.width, "Hover must expand the action shell")
         try require(pointsEqual(harness.hub.center, compactCenter),
                     "Core center moved during right-edge expansion: \(harness.hub.center) vs \(compactCenter)")
 
@@ -73,11 +213,11 @@ struct HubWindowBehaviorTests {
     private static func testLeftEdgeExpansionKeepsCoreClickable() throws {
         let harness = Harness(position: .left)
         let compactCenter = harness.hub.center
-        let compactFrame = harness.hub.view.frame
+        let compactFrame = harness.visibleShellFrameInRoot()
 
         harness.hoverHub()
 
-        try require(harness.hub.view.frame.width > compactFrame.width, "Hover must expand the action shell")
+        try require(harness.visibleShellFrameInRoot().width > compactFrame.width, "Hover must expand the action shell")
         try require(pointsEqual(harness.hub.center, compactCenter),
                     "Core center moved during left-edge expansion: \(harness.hub.center) vs \(compactCenter)")
 
@@ -132,21 +272,21 @@ struct HubWindowBehaviorTests {
     private static func testExpansionAnchorsEveryTrayEdge() throws {
         for position in [TrayPosition.right, .left, .bottom, .top] {
             let harness = Harness(position: position)
-            let compactFrame = harness.hub.view.frame
+            let compactFrame = harness.visibleShellFrameInRoot()
             let compactCenter = harness.hub.center
 
             harness.hoverHub()
 
-            let expandedFrame = harness.hub.view.frame
+            let expandedFrame = harness.visibleShellFrameInRoot()
             try require(expandedFrame.width > compactFrame.width, "\(position) did not expand")
             try require(pointsEqual(harness.hub.center, compactCenter),
                         "\(position) moved core center from \(compactCenter) to \(harness.hub.center)")
 
             if position == .left {
-                try require(abs(expandedFrame.minX - compactFrame.minX) <= 0.5,
-                            "\(position) should keep shell minX anchored: \(compactFrame) -> \(expandedFrame)")
+                try require(expandedFrame.minX < compactFrame.minX,
+                            "\(position) must reserve room left of the fixed chevron for the revealed label: \(compactFrame) -> \(expandedFrame)")
                 try require(expandedFrame.maxX > compactFrame.maxX,
-                            "\(position) should expand to the right: \(compactFrame) -> \(expandedFrame)")
+                            "\(position) should reveal actions to the right: \(compactFrame) -> \(expandedFrame)")
             } else {
                 try require(abs(expandedFrame.maxX - compactFrame.maxX) <= 0.5,
                             "\(position) should keep shell maxX anchored: \(compactFrame) -> \(expandedFrame)")
@@ -170,23 +310,39 @@ struct HubWindowBehaviorTests {
         let progressFrames: [CGFloat] = [0, 0.08, 0.18, 0.33, 0.55, 0.78, 1]
 
         for position in [TrayPosition.right, .left, .bottom, .top] {
-            let harness = Harness(position: position)
-            let compactFrame = harness.hub.view.frame
-            let compactCenter = harness.hub.center
+            for count in [1, 2, 120] {
+                let harness = Harness(position: position, count: count)
+                let compactFrame = harness.visibleShellFrameInRoot()
+                let compactCenter = harness.hub.center
+                let compactRenderedCoreFrame = harness.renderedCoreFrameInRoot()
 
-            for progress in progressFrames {
-                harness.hub.debugSetExpansionProgress(progress)
-                try harness.requireVisibleDescendantsInsideShell()
-                try require(pointsEqual(harness.hub.center, compactCenter),
-                            "\(position) moved core center at progress \(progress)")
+                for progress in progressFrames {
+                    harness.hub.debugSetExpansionProgress(progress)
+                    try harness.requireVisibleDescendantsInsideShell()
+                    try require(pointsEqual(harness.hub.center, compactCenter),
+                                "\(position) count \(count) moved core center at progress \(progress)")
+                    let renderedCoreFrame = harness.renderedCoreFrameInRoot()
+                    try require(abs(renderedCoreFrame.minY - compactRenderedCoreFrame.minY) <= 0.001 &&
+                                abs(renderedCoreFrame.height - compactRenderedCoreFrame.height) <= 0.001,
+                                "\(position) count \(count) moved rendered core vertically at progress \(progress): \(compactRenderedCoreFrame) -> \(renderedCoreFrame)")
+                    if progress == 0 {
+                        try require(rectsEqual(renderedCoreFrame, compactRenderedCoreFrame, tolerance: 0.001),
+                                    "\(position) count \(count) changed compact core geometry")
+                    } else {
+                        try require(abs(renderedCoreFrame.maxX - compactRenderedCoreFrame.maxX) <= 0.001,
+                                    "\(position) count \(count) moved the anchored core edge at progress \(progress): \(compactRenderedCoreFrame) -> \(renderedCoreFrame)")
+                        try require(renderedCoreFrame.width > compactRenderedCoreFrame.width + 0.5,
+                                    "\(position) count \(count) did not expand the core label")
+                    }
 
-                let frame = harness.hub.view.frame
-                if position == .left {
-                    try require(abs(frame.minX - compactFrame.minX) <= 0.5,
-                                "\(position) minX drifted at progress \(progress): \(compactFrame) -> \(frame)")
-                } else {
-                    try require(abs(frame.maxX - compactFrame.maxX) <= 0.5,
-                                "\(position) maxX drifted at progress \(progress): \(compactFrame) -> \(frame)")
+                    let frame = harness.visibleShellFrameInRoot()
+                    if position == .left {
+                        try require(frame.minX <= compactFrame.minX + 0.5 && frame.maxX >= compactFrame.maxX - 0.5,
+                                    "\(position) count \(count) reveal stopped containing the compact shell at progress \(progress): \(compactFrame) -> \(frame)")
+                    } else {
+                        try require(abs(frame.maxX - compactFrame.maxX) <= 0.5,
+                                    "\(position) count \(count) maxX drifted at progress \(progress): \(compactFrame) -> \(frame)")
+                    }
                 }
             }
         }
@@ -204,6 +360,151 @@ struct HubWindowBehaviorTests {
         }
     }
 
+    private static func testCoreRevealLabels() throws {
+        for collapsed in [false, true] {
+            for count in [1, 5, 120] {
+                let harness = Harness(position: .right, count: count, collapsed: collapsed)
+                let compact = harness.hub.debugSnapshot()
+                let countText = count > 99 ? "99+" : "\(count)"
+                try require(compact.coreTitle == countText,
+                            "Compact core must show only the count, got \(compact.coreTitle)")
+                try require(compact.coreHasIcon,
+                            "Compact core must keep the trailing chevron")
+
+                harness.hub.debugSetExpansionProgress(1)
+                let expanded = harness.hub.debugSnapshot()
+                let action = collapsed ? "Show" : "Hide"
+                try require(expanded.coreTitle == "\(countText) \(action)",
+                            "Expanded core label mismatch: \(expanded.coreTitle)")
+                try require(!expanded.coreTitle.lowercased().contains("screenshot"),
+                            "Visible core label must not contain screenshot wording")
+                try require(expanded.coreFrame.width > compact.coreFrame.width,
+                            "Expanded core button must grow to reveal \(action)")
+            }
+        }
+    }
+
+    private static func testExpandedCoreLabelFits() throws {
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            for collapsed in [false, true] {
+                for count in [1, 5, 10, 100] {
+                    let harness = Harness(position: position, count: count, collapsed: collapsed)
+                    harness.hub.debugSetExpansionProgress(1)
+                    let expanded = harness.hub.debugSnapshot()
+                    try require(expanded.revealedTextUsesCompleteNativeRender,
+                                "\(position) count \(count): expanded text must use the complete Native button render")
+                    try require(expanded.odometerHiddenAtRest,
+                                "\(position) count \(count): odometer must not replace static text")
+                }
+            }
+        }
+    }
+
+    private static func testCoreFadeAndStableWidth() throws {
+        let harness = Harness(position: .right, count: 5, collapsed: false)
+        let compact = harness.hub.debugSnapshot()
+        try require(compact.stableCoreContentAlpha == 1 && compact.revealedLabelAlpha == 0 &&
+                    compact.compactTextUsesCompleteNativeRender,
+                    "Compact state must show stable count and chevron without the action label")
+
+        harness.hub.debugSetExpansionProgress(0.3)
+        let transitioning = harness.hub.debugSnapshot()
+        try require(transitioning.stableCoreContentAlpha > 0.55 && transitioning.stableCoreContentAlpha <= 1.15,
+                    "Native core handoff must stay visible without a bright double exposure")
+        try require(transitioning.revealedLabelAlpha > 0 && transitioning.revealedLabelAlpha < 1,
+                    "Hide/Show label must fade in during expansion")
+
+        harness.hub.debugSetExpansionProgress(0.75)
+        let sharedElementHandoff = harness.hub.debugSnapshot()
+        try require(sharedElementHandoff.stableCoreContentAlpha > 0.8 &&
+                    sharedElementHandoff.revealedLabelAlpha > 0.8,
+                    "Expanded Native core must own the late handoff")
+
+        harness.hub.debugSetExpansionProgress(1)
+        let hideWidth = harness.hub.debugSnapshot().coreFrame.width
+        let showHarness = Harness(position: .right, count: 5, collapsed: true)
+        showHarness.hub.debugSetExpansionProgress(1)
+        let show = showHarness.hub.debugSnapshot()
+        try require(abs(show.stableCoreContentAlpha - 1) <= 0.001 && show.revealedLabelAlpha >= 0.999 &&
+                    show.revealedTextUsesCompleteNativeRender,
+                    "Expanded state must finish the label fade: combined=\(show.stableCoreContentAlpha) revealed=\(show.revealedLabelAlpha) complete=\(show.revealedTextUsesCompleteNativeRender)")
+        try require(abs(hideWidth - show.coreFrame.width) <= 0.001,
+                    "Hide and Show must reserve identical core width")
+    }
+
+    private static func testCoreSharedElementsNeverOverlap() throws {
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            for count in [1, 2, 120] {
+                let harness = Harness(position: position, count: count)
+                for progress: CGFloat in [0, 0.18, 0.33, 0.55, 0.78, 1] {
+                    harness.hub.debugSetExpansionProgress(progress)
+                    let snapshot = harness.hub.debugSnapshot()
+                    try require(snapshot.compactTextUsesCompleteNativeRender &&
+                                snapshot.revealedTextUsesCompleteNativeRender,
+                                "\(position) count \(count) progress \(progress): text fell back to a cropped render")
+                    try require(snapshot.stableCoreContentAlpha > 0.55 &&
+                                snapshot.stableCoreContentAlpha <= 1.15,
+                                "\(position) count \(count) progress \(progress): invalid content handoff opacity \(snapshot.stableCoreContentAlpha)")
+                }
+            }
+        }
+    }
+
+    private static func testChevronStaysFixedThroughHover() throws {
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            for collapsed in [false, true] {
+                let harness = Harness(position: position, count: 5, collapsed: collapsed)
+                let compactIconFrame = harness.hub.debugSnapshot().coreIconFrame
+                for progress: CGFloat in [0.18, 0.33, 0.55, 0.78, 1] {
+                    harness.hub.debugSetExpansionProgress(progress)
+                    let frame = harness.hub.debugSnapshot().coreIconFrame
+                    try require(rectsEqual(frame, compactIconFrame, tolerance: 0.001),
+                                "\(position) collapsed=\(collapsed): hover moved chevron at progress \(progress): \(compactIconFrame) -> \(frame)")
+                }
+            }
+        }
+    }
+
+    private static func testChevronRotation() throws {
+        let harness = Harness(position: .right, count: 2, collapsed: false)
+        let initial = harness.hub.debugSnapshot()
+        let fixedIconFrame = initial.coreIconFrame
+        try require(abs(initial.chevronRotation) <= 0.001,
+                    "Expanded tray must begin with the baseline chevron orientation")
+
+        harness.hub.setState(count: 2, collapsed: true)
+        let transitionStart = harness.hub.debugSnapshot()
+        try require(rectsEqual(transitionStart.coreIconFrame, fixedIconFrame, tolerance: 0.001),
+                    "Starting chevron rotation moved its fixed host frame")
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            try require(abs(transitionStart.chevronRotation - .pi) <= 0.001,
+                        "Reduce Motion must snap the chevron to its semantic state")
+        } else {
+            try require(abs(transitionStart.chevronRotation) <= 0.001,
+                        "Chevron state change must not replace the icon with a jumped frame")
+            try require(abs(transitionStart.chevronTargetRotation - .pi) <= 0.001,
+                        "Chevron rotation target must be 180 degrees")
+        }
+
+        harness.hub.debugSetChevronProgress(0.5)
+        let midpoint = harness.hub.debugSnapshot()
+        try require(abs(midpoint.chevronRotation - .pi / 2) <= 0.001,
+                    "Chevron must pass continuously through a 90-degree midpoint")
+        try require(rectsEqual(midpoint.coreIconFrame, fixedIconFrame, tolerance: 0.001),
+                    "90-degree chevron rotation moved its fixed host frame")
+        try require(midpoint.chevronHostTransformIsIdentity,
+                    "Chevron rotation must never transform the positioned host view")
+        try require(midpoint.chevronHostClips,
+                    "Chevron motion content must stay clipped to its fixed host")
+
+        harness.hub.debugSetChevronProgress(1)
+        let final = harness.hub.debugSnapshot()
+        try require(abs(final.chevronRotation - .pi) <= 0.001,
+                    "Collapsed tray must finish at the opposite chevron orientation")
+        try require(rectsEqual(final.coreIconFrame, fixedIconFrame, tolerance: 0.001),
+                    "Finished chevron rotation moved its fixed host frame")
+    }
+
     private static func testLayoutMetricsStayConsistent() throws {
         for position in [TrayPosition.right, .left, .bottom, .top] {
             for count in [1, 2, 120] {
@@ -217,9 +518,13 @@ struct HubWindowBehaviorTests {
                             "\(position) count \(count): core/action heights differ")
                 try require(abs(snapshot.coreFrame.height - 28) <= 0.5,
                             "\(position) count \(count): House small controls must stay 28pt high")
+                try require(rectsEqual(snapshot.coreBackgroundFrame, snapshot.coreFrame, tolerance: 0.001),
+                            "\(position) count \(count): persistent core background must match core geometry: \(snapshot.coreBackgroundFrame) vs \(snapshot.coreFrame)")
                 let expectedDuration: CFTimeInterval = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.12
                 try require(abs(snapshot.animationDuration - expectedDuration) <= 0.001,
                             "\(position) count \(count): reveal must use House fast motion token")
+                try require(abs(snapshot.contentFadeDuration - expectedDuration) <= 0.001,
+                            "\(position) count \(count): shell and content must share one motion duration")
                 try require(abs(snapshot.coreCornerRadius - snapshot.controlRadius) <= 0.5,
                             "\(position) count \(count): core radius must follow House 8pt control radius")
 
@@ -314,7 +619,7 @@ struct HubWindowBehaviorTests {
             var widths: [CGFloat] = []
             for progress: CGFloat in [0, 0.25, 0.5, 0.75, 0.88, 1] {
                 harness.hub.debugSetExpansionProgress(progress)
-                widths.append(harness.hub.view.frame.width)
+                widths.append(harness.hub.debugSnapshot().shellBounds.width)
             }
             for index in 1..<widths.count {
                 try require(widths[index] > widths[index - 1] + 0.5,
@@ -323,7 +628,7 @@ struct HubWindowBehaviorTests {
         }
     }
 
-    private static func testInterruptedRevealKeepsConstantSpeed() throws {
+    private static func testInterruptedRevealKeepsProportionalDeadline() throws {
         let harness = Harness(position: .right)
         harness.hub.debugSetExpansionProgress(0)
         let full = harness.hub.debugTransitionDuration(toExpanded: true)
@@ -333,6 +638,27 @@ struct HubWindowBehaviorTests {
         try require(abs(full - 0.12) <= 0.001, "Full House reveal must use the 120ms fast token")
         try require(abs(remainder - 0.024) <= 0.001,
                     "The last 20% must take 20% of the duration, not restart a full reveal: \(remainder)")
+    }
+
+    private static func testSpringRetargetPreservesVelocity() throws {
+        let omega: CGFloat = 7 / 0.12
+        let forward = nativeHubSpringStep(value: 0,
+                                          velocity: 0,
+                                          target: 1,
+                                          angularFrequency: omega,
+                                          deltaTime: 0.01)
+        try require(forward.value > 0 && forward.velocity > 0,
+                    "Critically damped reveal must respond immediately")
+
+        let reversed = nativeHubSpringStep(value: forward.value,
+                                           velocity: forward.velocity,
+                                           target: 0,
+                                           angularFrequency: omega,
+                                           deltaTime: 0.001)
+        try require(reversed.value >= forward.value,
+                    "Retarget must preserve forward presentation velocity before decelerating")
+        try require(reversed.velocity > 0 && reversed.velocity < forward.velocity,
+                    "Retarget must decelerate continuously instead of flipping velocity")
     }
 
     private static func testRepeatedHoverDoesNotRestartReveal() throws {
@@ -354,15 +680,35 @@ struct HubWindowBehaviorTests {
         harness.hub.debugRequestExpanded(true)
         harness.hub.debugSetExpansionProgress(0.2)
 
-        harness.hub.debugUpdateHover(at: NSPoint(x: harness.hub.view.frame.midX,
-                                                 y: harness.hub.view.frame.midY))
+        let visibleFrame = harness.visibleShellFrameInRoot()
+        harness.hub.debugUpdateHover(at: NSPoint(x: visibleFrame.midX,
+                                                 y: visibleFrame.midY))
         try require(harness.hub.debugSnapshot().expansionTarget == 1,
                     "Pointer inside the expanded footprint closed the bubble")
 
         harness.hub.debugUpdateHover(at: NSPoint(x: -1000, y: -1000))
-        let closed = harness.hub.debugSnapshot()
-        try require(closed.expansionTarget == 0 && closed.bubbleAlpha == 0,
-                    "Pointer outside the expanded footprint left the bubble visible")
+        let closing = harness.hub.debugSnapshot()
+        try require(closing.expansionTarget == 0,
+                    "Pointer outside the expanded footprint did not retarget the bubble")
+        try require(abs(closing.bubbleAlpha - closing.progress) <= 0.001,
+                    "Bubble content detached from the shared shell progress while closing")
+        harness.hub.debugSetExpansionProgress(0)
+        try require(harness.hub.debugSnapshot().bubbleAlpha == 0,
+                    "Closed shell did not finish transparent")
+    }
+
+    private static func testTrayHoverSessionHoldsHubOpen() throws {
+        let harness = Harness(position: .right)
+        harness.hub.debugRequestExpanded(true)
+        harness.hub.debugSetTrayHoverActive(true)
+        harness.hub.debugRequestExpanded(false)
+
+        try require(harness.hub.debugSnapshot().expansionTarget == 1,
+                    "Leaving the hub for a card collapsed the shared hover session")
+
+        harness.hub.debugSetTrayHoverActive(false)
+        try require(harness.hub.debugSnapshot().expansionTarget == 0,
+                    "The hub remained open after the complete tray hover session ended")
     }
 
     private static func testRevealReusesNativeRender() throws {
@@ -377,6 +723,19 @@ struct HubWindowBehaviorTests {
             let final = harness.hub.debugSnapshot().nativeRenderPassCount
             try require(final - initial <= 1,
                         "\(position): reveal rerendered Native SDK \(final - initial) times instead of clipping one expanded frame")
+        }
+    }
+
+    private static func testRevealKeepsStaticHostGeometry() throws {
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            let harness = Harness(position: position)
+            harness.hub.debugSetExpansionProgress(0)
+            let hostFrame = harness.hub.view.frame
+            for progress: CGFloat in [0.18, 0.33, 0.55, 0.78, 1] {
+                harness.hub.debugSetExpansionProgress(progress)
+                try require(rectsEqual(harness.hub.view.frame, hostFrame, tolerance: 0.001),
+                            "\(position): reveal resized the AppKit host at progress \(progress)")
+            }
         }
     }
 
@@ -417,7 +776,9 @@ struct HubWindowBehaviorTests {
             try require(snapshot.bubbleAlpha == 0,
                         "\(position): compact hub must not show the hover bubble")
             try require(snapshot.coreHasIcon,
-                        "\(position): compact hub must render as an icon+label command button")
+                        "\(position): compact hub must keep the trailing chevron")
+            try require(snapshot.coreTitle.allSatisfy { $0.isNumber || $0 == "+" },
+                        "\(position): compact hub must show only the screenshot count")
         }
     }
 
@@ -486,6 +847,12 @@ struct HubWindowBehaviorTests {
         abs(a.x - b.x) <= tolerance && abs(a.y - b.y) <= tolerance
     }
 
+    private static func rectsEqual(_ a: NSRect, _ b: NSRect, tolerance: CGFloat = 0.5) -> Bool {
+        pointsEqual(a.origin, b.origin, tolerance: tolerance)
+            && abs(a.width - b.width) <= tolerance
+            && abs(a.height - b.height) <= tolerance
+    }
+
     private static func rectContains(_ outer: NSRect, _ inner: NSRect, tolerance: CGFloat = 0.5) -> Bool {
         inner.minX >= outer.minX - tolerance
             && inner.minY >= outer.minY - tolerance
@@ -532,8 +899,10 @@ struct HubWindowBehaviorTests {
         var deleteCount = 0
         var saveAsCount = 0
         var copyAllCount = 0
+        private var heldHit: NSView?
+        private var heldPoint: NSPoint = .zero
 
-        init(position: TrayPosition, count: Int = 2) {
+        init(position: TrayPosition, count: Int = 2, collapsed: Bool = false) {
             TrayPosition.testCurrent = position
 
             window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 420),
@@ -549,7 +918,7 @@ struct HubWindowBehaviorTests {
             hub.onDelete = { [weak self] in self?.deleteCount += 1 }
             hub.onSaveAs = { [weak self] in self?.saveAsCount += 1 }
             hub.onCopyAll = { [weak self] in self?.copyAllCount += 1 }
-            hub.setState(count: count, collapsed: false)
+            hub.setState(count: count, collapsed: collapsed)
             root.addSubview(hub.view)
             hub.setOrigin(NSPoint(x: 300, y: 40))
             hub.show()
@@ -569,6 +938,24 @@ struct HubWindowBehaviorTests {
             }
             hit.mouseDown(with: event(.leftMouseDown, at: point))
             hit.mouseUp(with: event(.leftMouseUp, at: point))
+            root.layoutSubtreeIfNeeded()
+        }
+
+        func holdCorePress() throws {
+            let point = hub.center
+            let pointInHub = hub.view.convert(point, from: root)
+            guard let hit = hub.view.hitTest(pointInHub), hit !== hub.view else {
+                throw Failure("No interactive core view at \(point)")
+            }
+            heldHit = hit
+            heldPoint = point
+            hit.mouseDown(with: event(.leftMouseDown, at: point))
+        }
+
+        func releaseCorePress() throws {
+            guard let heldHit else { throw Failure("No held core press to release") }
+            heldHit.mouseUp(with: event(.leftMouseUp, at: heldPoint))
+            self.heldHit = nil
             root.layoutSubtreeIfNeeded()
         }
 
@@ -594,6 +981,14 @@ struct HubWindowBehaviorTests {
 
         func firstActionPoint() throws -> NSPoint {
             try actionPoint(title: "Delete")
+        }
+
+        func renderedCoreFrameInRoot() -> NSRect {
+            hub.view.convert(hub.debugSnapshot().coreFrame, to: root)
+        }
+
+        func visibleShellFrameInRoot() -> NSRect {
+            hub.view.convert(hub.debugSnapshot().shellBounds, to: root)
         }
 
         func actionPoint(title: String) throws -> NSPoint {
@@ -653,12 +1048,16 @@ struct HubWindowBehaviorTests {
             var ancestor = view.superview
 
             while let current = ancestor {
+                if current === hub.view {
+                    rect = rect.intersection(hub.debugSnapshot().shellBounds)
+                    if rect.isNull || rect.width <= 0 || rect.height <= 0 { return nil }
+                    break
+                }
                 if current.layer?.masksToBounds == true {
                     let clip = current.convert(current.bounds, to: hub.view)
                     rect = rect.intersection(clip)
                     if rect.isNull || rect.width <= 0 || rect.height <= 0 { return nil }
                 }
-                if current === hub.view { break }
                 ancestor = current.superview
             }
             return rect
