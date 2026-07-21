@@ -2,6 +2,7 @@ import AppKit
 
 /// Пункт в строке меню. NSStatusItem остается системной точкой входа, а раскрываемое
 /// меню отрисовано Native SDK surface-ом вместо системного AppKit-меню.
+@MainActor
 final class StatusItemController {
 
     private let statusItem: NSStatusItem
@@ -16,11 +17,15 @@ final class StatusItemController {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem.button {
+            WindowCaptureProtection.registerExternalWindow { [weak button] in button?.window }
             // Простой значок камеры.
             button.image = NSImage(systemSymbolName: "camera", accessibilityDescription: "QuickShot")
             button.image?.isTemplate = true
             button.target = self
             button.action = #selector(toggleMenu)
+            if let window = button.window {
+                WindowCaptureProtection.excludeFromScreenCapture(window)
+            }
         }
     }
 
@@ -63,6 +68,7 @@ final class StatusItemController {
         WindowCaptureProtection.excludeFromScreenCapture(panel)
 
         if let button = statusItem.button, let window = button.window {
+            WindowCaptureProtection.excludeFromScreenCapture(window)
             let buttonFrame = window.convertToScreen(button.frame)
             let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? buttonFrame
             panel.setFrameOrigin(StatusMenuLayout.origin(buttonFrame: buttonFrame,

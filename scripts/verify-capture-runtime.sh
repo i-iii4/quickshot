@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 
 APP="$PWD/QuickShot.app"
 BIN="$APP/Contents/MacOS/QuickShot"
-MAX_OVERLAY_MS="${MAX_OVERLAY_MS:-250}"
+MAX_OVERLAY_MS="${MAX_OVERLAY_MS:-120}"
 CAPTURE_REPEAT="${CAPTURE_REPEAT:-3}"
 
 if [ "${QUICKSHOT_ALLOW_SYNTHETIC_INPUT:-0}" != "1" ]; then
@@ -72,10 +72,17 @@ sleep 0.5
 logs="$(/usr/bin/log show --last 20s --info --debug --style compact --predicate "$predicate")"
 echo "$logs" | tail -80
 
-if echo "$logs" | rg -q "old frame accepted|cache frame accepted|source=responsive|source=validated|latest-active-stream|capture frozen ready"; then
-  echo "Runtime regression: stale or frozen-frame vocabulary appeared in the live-selection path." >&2
+if echo "$logs" | rg -q "old frame accepted|cache frame accepted|latest-active-stream|fresh region|system capture launched"; then
+  echo "Runtime regression: retired or stale capture vocabulary appeared." >&2
   exit 1
 fi
+
+for token in "capture direct batch ready" "capture frozen ready" "mode=frozen"; do
+  if ! echo "$logs" | rg -q "$token"; then
+    echo "Runtime regression: missing '$token'." >&2
+    exit 1
+  fi
+done
 
 if ! echo "$logs" | rg -q "capture overlay ready"; then
   echo "Runtime regression: overlay readiness was not observed." >&2

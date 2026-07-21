@@ -49,12 +49,9 @@ xcrun swiftc \
   -swift-version 5 \
   -O \
   -framework AppKit \
-  -framework ScreenCaptureKit \
   -framework Carbon \
   -framework CoreGraphics \
-  -framework CoreImage \
-  -framework CoreMedia \
-  -framework CoreVideo \
+  -framework ImageIO \
   -o "$BUNDLE/Contents/MacOS/$APP" \
   "$NATIVE_UI_LIB" \
   Sources/*.swift

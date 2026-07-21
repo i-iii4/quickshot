@@ -3,26 +3,35 @@
 This document defines the user experience. Implementation details can change,
 but any behavior that breaks this contract is a regression.
 
+The direct freeze-first implementation follows this contract. Automated gates
+cover structure, pixels, geometry, and lifecycle; cursor appearance and
+fullscreen behavior remain explicit runtime release checks.
+
 ## Capture Start
 
 1. `Command-Shift-4` starts exactly one selection session.
 2. Repeated triggers during an active session are ignored.
-3. Selection mode appears immediately enough that the user can press the hotkey
-   and start dragging without waiting.
-4. Before the user starts dragging, QuickShot does not show a dark overlay,
-   loading veil, frozen desktop image, spinner, or progress layer.
-5. QuickShot's own windows, hub, thumbnails, settings, and helper UI must not be
-   visible inside the final screenshot.
-6. QuickShot must not hide and re-show the screenshot tray to keep it out of the
-   final image; capture filtering must exclude QuickShot without a visible tray
-   flicker.
+3. Before QuickShot activates or presents a window, it captures one fresh,
+   immutable in-memory snapshot of every active display.
+4. The pixels correspond to the hotkey moment and preserve the visible hover,
+   tooltip, menu, and active appearance of the source application.
+5. Selection appears only after those pixels exist. It must not expose a dark
+   waiting layer, spinner, progressive backdrop installation, or stale frame.
+6. Hotkey-to-selector latency targets `120ms` at p95 on the development machine;
+   multi-second ScreenCaptureKit or system-tool waits are release blockers.
+7. QuickShot's own windows, hub, thumbnails, settings, and helper UI must not be
+   visible inside the frozen pixels or final crop.
+8. QuickShot must not hide, move, or fade the tray during capture. Window sharing
+   protection must exclude it without visible flicker.
 
 ## Before Drag
 
-1. The screen stays visually normal.
+1. The screen is frozen at the hotkey moment but remains visually unchanged.
 2. The only visible selection affordance is the custom QuickShot cursor.
 3. The system pointer is hidden; the user must not see two cursors.
 4. No selection frame or overlay is drawn until the drag starts.
+5. Cursor replacement is atomic: the frozen surface and custom crosshair cannot
+   be visible in the same frame as the source application's pointer.
 
 ## Drag Selection
 
@@ -48,14 +57,19 @@ but any behavior that breaks this contract is a regression.
 ## Completion
 
 1. Mouse-up finalizes the selected region.
-2. Any unavoidable capture or encoding delay happens after mouse-up.
+2. The result is cropped from the immutable hotkey snapshot. Mouse-up must not
+   start a second screen capture.
 3. A successful selection creates exactly one new thumbnail and copies the image
    to the clipboard.
-4. The screenshot must correspond to the completed selection and must not reuse
-   an old screenshot from a previous attempt.
-5. If a fresh result cannot be produced, QuickShot restores the UI and reports
-   failure instead of showing stale pixels.
-6. `Esc` cancels selection and restores all cursor/window state.
+4. No stream, warmed frame, previous screenshot, temporary PNG, or asynchronous
+   second capture may become the pixel source.
+5. If the initial snapshot cannot be produced, selection does not start and the
+   attempt fails cleanly.
+6. `Esc`, failure, shutdown, and successful completion restore the system cursor,
+   close every overlay, and return focus without leaking session state.
+7. Mouse-up-to-card latency targets `100ms` at p95.
+8. Teardown is atomic in reverse order: custom chrome and overlay windows vanish
+   before the system pointer is restored.
 
 ## Tray And Hub
 
@@ -113,35 +127,44 @@ but any behavior that breaks this contract is a regression.
 1. UI architecture changes must improve interaction consistency, state
    ownership, and testability, not only visual styling.
 2. A new UI framework or shell model must not weaken the capture contract:
-   immediate selection entry, fresh final pixels, capture exclusion, no tray
-   blink, no stale screenshots, and no duplicate cursor remain mandatory.
+   hotkey-time pixels, fast selection entry, capture exclusion, no tray blink,
+   no stale screenshots, and no duplicate cursor remain mandatory.
 3. Screenshot capture, global hotkeys, overlay windows, cursor ownership,
    capture exclusion, and clipboard writes are product-critical system
    integrations. They cannot be treated as replaceable styling details.
-4. Every visible command control on hub, thumbnail, pinned, settings, and
+4. Capture lifecycle is one explicit state machine:
+   `idle -> snapshotting -> selecting -> delivering -> idle`.
+5. The production pixel provider is an isolated direct CoreGraphics one-shot.
+   ScreenCaptureKit, `/usr/sbin/screencapture`, warmed streams, and frame caches
+   are prohibited from the primary path.
+6. Selection rendering reuses the established QuickShot cursor/frame geometry;
+   it must not be rebuilt as a visually approximate replacement.
+7. Every visible command control on hub, thumbnail, pinned, settings, and
    status-menu surfaces uses an official Native SDK primitive. Local AppKit
    control replicas and SDK-owned color/radius/state overrides are prohibited.
-5. AppKit owns window hosting, the system status item, traffic-light controls,
+8. AppKit owns window hosting, the system status item, traffic-light controls,
    image presentation, and resize/drag integration. Native SDK owns command
    geometry, tokens, hover, pressed state, hit testing, and typed dispatch.
-6. Swift reads control and motion metrics from the pinned House Dark token pack and
+9. Swift reads control and motion metrics from the pinned House Dark token pack and
    fitting geometry from runtime semantics. It must not maintain approximate
    duplicate widths or unexplained padding reserves.
-7. The visual scheme is fixed to House Dark. High Contrast and Reduce Motion
+10. The visual scheme is fixed to House Dark. High Contrast and Reduce Motion
    changes are forwarded from macOS into the embedded Native SDK runtime and
    must repaint the complete surface in one transition.
-8. Production and the default headless regression suite link a `ReleaseFast`
+11. Production and the default headless regression suite link a `ReleaseFast`
    Native UI library so timing gates exercise the shipped renderer path. Debug
    is reserved for explicit diagnostics.
-9. Native SDK `button-group` is reserved for model-owned exclusive choices.
+12. Native SDK `button-group` is reserved for model-owned exclusive choices.
    Independent commands use a `row`; House `button-group` provides the attached
    segmented treatment only for exclusive selection.
 
 ## Regression Gates
 
-1. Tests must cover immediate selection entry, cursor exclusivity, frame/cursor
-   geometry, inner-overlay behavior, tray clickability, hub action clickability,
-   thumbnail close clicks, and stale-result rejection.
+1. Tests must cover fresh session-owned snapshots, cursor exclusivity,
+   cursor-lease balance and ordering, frame/cursor geometry, inner-overlay
+   behavior, crop coordinates, teardown,
+   tray clickability, hub action clickability, thumbnail close clicks, and
+   stale-result rejection.
 2. Verification must include zero, one, and multiple existing screenshots in the
    tray.
 3. Runtime verification on the user's active machine should prefer log-only
@@ -152,3 +175,6 @@ but any behavior that breaks this contract is a regression.
 5. Live-window click tests remain opt-in through
    `QUICKSHOT_RUN_LIVE_UI_TESTS=1`; the default suite must not take over the
    user's screen.
+6. Release verification includes ten sequential captures, normal and fullscreen
+   applications, hover/tooltips, mixed-scale displays, negative display origins,
+   cancellation, and the two latency budgets.

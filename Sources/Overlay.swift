@@ -15,13 +15,26 @@ final class OverlayWindow: NSPanel {
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
-/// Прозрачный live-хром выделения. До drag он рисует только кастомный курсор.
+private final class BackdropView: NSView {
+    init(image: CGImage) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.contents = image
+        layer?.contentsGravity = .resize
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// Хром выделения поверх уже зафиксированного кадра. До drag он рисует только кастомный курсор.
 /// После начала выделения появляется лёгкая внутренняя заливка выбранной области
 /// и рамка; внешний экран не затемняется.
 final class SelectionView: NSView {
 
     var onComplete: ((NSRect, NSScreen) -> Void)?
     var onCancel: (() -> Void)?
+    var onPointerActivity: (() -> Void)?
     weak var screenRef: NSScreen?
 
     private var startPoint: NSPoint?
@@ -29,7 +42,6 @@ final class SelectionView: NSView {
     private var currentRect: NSRect = .zero
     private var cursorTracking: NSTrackingArea?
     private let crosshair = SelectionView.makeCrosshair()
-    private static let invisibleSystemCursor = SelectionView.makeInvisibleSystemCursor()
     private var inputLocked = false
     private var finished = false
     private var hasDrawableSelection: Bool {
@@ -108,24 +120,14 @@ final class SelectionView: NSView {
     // приходит сразу — выделение работает на любом экране независимо от key-статуса.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    // Системный курсор прячет OverlayController; перекрестье рисуем сами слоем и двигаем по
-    // событиям мыши. Так per-move сброс cursor rect активным приложением нас не касается.
+    // Системный курсор на всю сессию прячет один CursorLease. Здесь остаётся
+    // только отслеживание позиции для кастомного векторного перекрестья.
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let t = cursorTracking { removeTrackingArea(t) }
         let t = NSTrackingArea(rect: .zero, options: [.activeAlways, .inVisibleRect, .mouseMoved, .mouseEnteredAndExited],
                                owner: self, userInfo: nil)
         addTrackingArea(t); cursorTracking = t
-    }
-
-    override func resetCursorRects() {
-        super.resetCursorRects()
-        addCursorRect(bounds, cursor: Self.invisibleSystemCursor)
-    }
-
-    override func cursorUpdate(with event: NSEvent) {
-        Self.invisibleSystemCursor.set()
-        moveCrosshair(event)
     }
 
     override func mouseEntered(with event: NSEvent) { moveCrosshair(event) }
@@ -138,7 +140,7 @@ final class SelectionView: NSView {
 
     private func moveCrosshair(to p: NSPoint) {
         currentPoint = p
-        Self.invisibleSystemCursor.set()
+        onPointerActivity?()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         crosshair.position = p
@@ -172,27 +174,9 @@ final class SelectionView: NSView {
         return container
     }
 
-    private static func makeInvisibleSystemCursor() -> NSCursor {
-        let size = 16
-        let rep = NSBitmapImageRep(bitmapDataPlanes: nil,
-                                   pixelsWide: size,
-                                   pixelsHigh: size,
-                                   bitsPerSample: 8,
-                                   samplesPerPixel: 4,
-                                   hasAlpha: true,
-                                   isPlanar: false,
-                                   colorSpaceName: .deviceRGB,
-                                   bytesPerRow: 0,
-                                   bitsPerPixel: 0)!
-        let image = NSImage(size: NSSize(width: size, height: size))
-        image.addRepresentation(rep)
-        return NSCursor(image: image, hotSpot: NSPoint(x: size / 2, y: size / 2))
-    }
-
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         window?.makeFirstResponder(self)
-        window?.invalidateCursorRects(for: self)
         let scale = window?.backingScaleFactor ?? 2
         crosshair.contentsScale = scale
         crosshair.sublayers?.forEach { $0.contentsScale = scale }
@@ -290,6 +274,13 @@ final class SelectionView: NSView {
 
     func setInputLocked(_ locked: Bool) {
         inputLocked = locked
+    }
+
+    func hideCrosshair() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        crosshair.isHidden = true
+        CATransaction.commit()
     }
 
 #if TESTING
@@ -468,8 +459,8 @@ final class SelectionView: NSView {
     }
 }
 
-/// Создаёт и удерживает по одному live-оверлею на КАЖДЫЙ экран (origin и
-/// backingScaleFactor у дисплеев разные — одно окно на всё нельзя).
+/// Создаёт и удерживает по одному frozen-оверлею на каждый экран. Статический
+/// снимок и динамический selection chrome живут в разных слоях.
 final class OverlayController {
 
     private static let log = Logger(subsystem: "com.iiii.quickshot", category: "capture")
@@ -478,34 +469,37 @@ final class OverlayController {
     private var escMonitor: Any?
     private var spaceObserver: Any?
     private var globalDragMonitor: Any?
-    private var cursorSuppressionActive = false
-    private var cursorHideDepth = 0
-    private var deferredCursorHide: DispatchWorkItem?
+    private var activationObserver: Any?
+    private let cursorLease = CursorLease()
     private var onComplete: ((NSRect, NSScreen) -> Void)?
     private var onCancel: (() -> Void)?
     private var selectionViews: [SelectionView] = []
     private weak var activeGlobalSelection: SelectionView?
     private var completedSelection = false
+    private var isPresented = false
     private var isDismissed = false
 
     deinit {
         dismiss()
     }
 
-    /// Показать прозрачный live selection overlay. До начала drag визуально
-    /// остаётся только кастомный курсор; внутренняя заливка появляется уже на
-    /// активном selection rect.
-    func beginLiveSelection(screens: [NSScreen],
-                            initialMouseDownAt: NSPoint?,
-                            onComplete: @escaping (NSRect, NSScreen) -> Void,
-                            onCancel: @escaping () -> Void) {
+    func beginFrozenSelection(screens: [NSScreen],
+                              backdrops: [CGDirectDisplayID: CGImage],
+                              initialMouseDownAt: NSPoint?,
+                              onReady: @escaping () -> Void,
+                              onComplete: @escaping (NSRect, NSScreen) -> Void,
+                              onCancel: @escaping () -> Void) {
         begin(screens: screens,
+              backdrops: backdrops,
+              onReady: onReady,
               onComplete: onComplete,
               onCancel: onCancel,
               pendingMouseDownAt: initialMouseDownAt)
     }
 
     private func begin(screens: [NSScreen],
+                       backdrops: [CGDirectDisplayID: CGImage],
+                       onReady: @escaping () -> Void,
                        onComplete: @escaping (NSRect, NSScreen) -> Void,
                        onCancel: @escaping () -> Void,
                        pendingMouseDownAt: NSPoint?) {
@@ -513,6 +507,13 @@ final class OverlayController {
         self.onCancel = onCancel
 
         for screen in screens {
+            let displayID = CGDirectDisplayID(
+                (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
+            guard let backdrop = backdrops[displayID] else {
+                Self.log.error("overlay missing frozen backdrop display=\(displayID, privacy: .public)")
+                continue
+            }
+
             // БЕЗ параметра screen: — иначе contentRect трактуется относительно origin экрана, и на
             // дисплее с отрицательным origin смещение применяется дважды. contentRect глобальный.
             let w = OverlayWindow(contentRect: screen.frame, styleMask: [.borderless],
@@ -534,34 +535,50 @@ final class OverlayController {
             w.ignoresMouseEvents = false
             w.acceptsMouseMovedEvents = true
             w.animationBehavior = .none
+            w.alphaValue = 0
 
             let bounds = NSRect(origin: .zero, size: screen.frame.size)
+
+            let backdropView = BackdropView(image: backdrop)
+            backdropView.frame = bounds
+            backdropView.autoresizingMask = [.width, .height]
 
             let chrome = SelectionView(frame: bounds)
             chrome.autoresizingMask = [.width, .height]
             chrome.screenRef = screen
             chrome.onComplete = { [weak self] rect, scr in self?.completeOnce(rect, scr) }
             chrome.onCancel = { [weak self] in self?.onCancel?() }
+            chrome.onPointerActivity = { [weak self, weak chrome] in
+                guard let chrome else { return }
+                self?.activateCrosshair(chrome)
+            }
             selectionViews.append(chrome)
 
-            w.contentView = chrome
+            let container = NSView(frame: bounds)
+            container.addSubview(backdropView)
+            container.addSubview(chrome)
+            w.contentView = container
+            w.displayIfNeeded()
             windows.append(w)
         }
 
+        // Cursor ownership is acquired while the pre-rendered windows are still transparent.
+        // They are revealed only after QuickShot is active, so the source cursor and custom
+        // crosshair can never share a visible frame.
+        if cursorLease.acquire() {
+            Self.log.info("overlay cursor lease acquired")
+        }
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: NSApp,
+            queue: .main) { [weak self] _ in
+                self?.presentAfterActivation(pendingMouseDownAt: pendingMouseDownAt,
+                                             onReady: onReady)
+            }
         for w in windows { w.orderFrontRegardless() }
-        Self.log.info("overlay begin windows=\(self.windows.count, privacy: .public) mode=live")
-        hideSystemCursor()
-        selectionView(containing: NSEvent.mouseLocation)?.moveCrosshair(atGlobalPoint: NSEvent.mouseLocation)
-
-        globalDragMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .mouseMoved]) {
-            [weak self] e in self?.handleGlobalMouse(e)
-        }
-        if CGEventSource.buttonState(.combinedSessionState, button: .left) {
-            beginGlobalSelection(at: pendingMouseDownAt ?? NSEvent.mouseLocation)
-            activeGlobalSelection?.updateSelection(atGlobalPoint: NSEvent.mouseLocation)
-        } else {
-            selectionView(containing: NSEvent.mouseLocation)?.moveCrosshair(atGlobalPoint: NSEvent.mouseLocation)
-        }
+        windows.first?.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+        Self.log.info("overlay begin windows=\(self.windows.count, privacy: .public) mode=frozen")
 
         // Escape отменяет независимо от того, какое окно key (мульти-монитор).
         escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
@@ -575,57 +592,64 @@ final class OverlayController {
             self?.onCancel?()
         }
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self, !self.windows.isEmpty else { return }
-            self.windows.first?.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            Self.log.info("overlay activation completed")
-        }
-    }
-
-    private func hideSystemCursor() {
-        guard !cursorSuppressionActive else { return }
-        cursorSuppressionActive = true
-        hideSystemCursorOnce()
-
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.cursorSuppressionActive else { return }
-            self.hideSystemCursorOnce()
-        }
-        deferredCursorHide = work
-        DispatchQueue.main.async(execute: work)
-    }
-
-    private func showSystemCursor() {
-        deferredCursorHide?.cancel()
-        deferredCursorHide = nil
-        let restored = cursorHideDepth
-        while cursorHideDepth > 0 {
-            let result = CGDisplayShowCursor(CGMainDisplayID())
-            if result != .success {
-                NSLog("QuickShot: CGDisplayShowCursor failed: \(result.rawValue)")
-            }
-            cursorHideDepth -= 1
-        }
-        if restored > 0 {
-            Self.log.info("overlay cursor restored count=\(restored, privacy: .public)")
-        }
-        cursorSuppressionActive = false
-    }
-
-    private func hideSystemCursorOnce() {
-        let result = CGDisplayHideCursor(CGMainDisplayID())
-        if result == .success {
-            cursorHideDepth += 1
-            Self.log.info("overlay cursor hidden depth=\(self.cursorHideDepth, privacy: .public)")
+        if NSApp.isActive {
+            presentAfterActivation(pendingMouseDownAt: pendingMouseDownAt,
+                                   onReady: onReady)
         } else {
-            NSLog("QuickShot: CGDisplayHideCursor failed: \(result.rawValue)")
-            Self.log.error("overlay cursor hide failed code=\(result.rawValue, privacy: .public)")
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isDismissed else { return }
+                if NSApp.isActive {
+                    self.presentAfterActivation(pendingMouseDownAt: pendingMouseDownAt,
+                                                onReady: onReady)
+                } else {
+                    NSApp.activate()
+                }
+            }
         }
+    }
+
+    private func presentAfterActivation(pendingMouseDownAt: NSPoint?,
+                                        onReady: () -> Void) {
+        guard !isDismissed, !isPresented, NSApp.isActive else { return }
+        isPresented = true
+        if let activationObserver {
+            NotificationCenter.default.removeObserver(activationObserver)
+            self.activationObserver = nil
+        }
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            for window in windows {
+                window.alphaValue = 1
+                window.displayIfNeeded()
+            }
+        }
+
+        selectionView(containing: NSEvent.mouseLocation)?.moveCrosshair(atGlobalPoint: NSEvent.mouseLocation)
+        globalDragMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .mouseMoved]) {
+                [weak self] event in self?.handleGlobalMouse(event)
+            }
+        if CGEventSource.buttonState(.combinedSessionState, button: .left) {
+            beginGlobalSelection(at: pendingMouseDownAt ?? NSEvent.mouseLocation)
+            activeGlobalSelection?.updateSelection(atGlobalPoint: NSEvent.mouseLocation)
+        } else {
+            selectionView(containing: NSEvent.mouseLocation)?.moveCrosshair(atGlobalPoint: NSEvent.mouseLocation)
+        }
+
+        Self.log.info("overlay activation completed")
+        onReady()
     }
 
     private func selectionView(containing globalPoint: NSPoint) -> SelectionView? {
         selectionViews.first { $0.contains(globalPoint: globalPoint) }
+    }
+
+    private func activateCrosshair(_ active: SelectionView) {
+        for selection in selectionViews where selection !== active {
+            selection.hideCrosshair()
+        }
     }
 
     private func beginGlobalSelection(at globalPoint: NSPoint) {
@@ -668,14 +692,21 @@ final class OverlayController {
         guard !isDismissed else { return }
         isDismissed = true
         Self.log.info("overlay dismiss windows=\(self.windows.count, privacy: .public)")
-        showSystemCursor()
         if let escMonitor { NSEvent.removeMonitor(escMonitor); self.escMonitor = nil }
         if let spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver); self.spaceObserver = nil }
         if let globalDragMonitor { NSEvent.removeMonitor(globalDragMonitor); self.globalDragMonitor = nil }
+        if let activationObserver {
+            NotificationCenter.default.removeObserver(activationObserver)
+            self.activationObserver = nil
+        }
+        selectionViews.forEach { $0.hideCrosshair() }
         for w in windows {
             w.orderOut(nil)
             w.contentView = nil
             w.close()
+        }
+        if cursorLease.release() {
+            Self.log.info("overlay cursor lease released")
         }
         windows.removeAll()
         selectionViews.removeAll()

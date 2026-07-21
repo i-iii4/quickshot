@@ -7,16 +7,18 @@ hotkey and start selecting immediately.
 ## UX Contract
 
 1. Press `Command-Shift-4`.
-2. Selection mode starts immediately.
-3. Before the first drag, the screen remains visually unchanged. There is no
-   dark waiting layer and no frozen-preview transition.
-4. The only selection-mode chrome before drag is QuickShot's custom cursor.
-5. When the user starts dragging, the selection frame appears.
-6. The overlay is inverted from the old model: the lightweight overlay appears
+2. QuickShot captures the current displays before showing or activating any of
+   its own windows.
+3. Selection mode then appears over the frozen hotkey-time image. There is no
+   dark waiting layer, progressive backdrop installation, or stale frame.
+4. The only selection-mode chrome before drag is QuickShot's custom cursor; the
+   system pointer is not visible at the same time.
+5. When the user starts dragging, the established selection frame appears.
+6. The lightweight overlay appears
    inside the selected area, not outside it.
-7. The area outside the selection stays live-looking and undimmed.
-8. Releasing the mouse completes the selection. Any capture/encoding delay must
-   happen after mouse-up, not before the user can start selecting.
+7. The area outside the selection stays undimmed.
+8. Releasing the mouse crops the already captured image without a second screen
+   capture.
 9. A valid selection creates one thumbnail and copies the screenshot to the
    clipboard.
 10. `Esc` cancels selection and restores the normal cursor/UI state.
@@ -25,9 +27,8 @@ The captured image must never be an old cached screenshot. If QuickShot cannot
 produce a fresh result for the completed selection, the attempt should fail
 cleanly instead of showing stale pixels.
 
-QuickShot UI is excluded from the final screenshot through the ScreenCaptureKit
-capture filter. The tray should stay visually stable instead of blinking out and
-back in at capture time.
+QuickShot UI is excluded through window sharing protection. The tray stays
+visually stable instead of blinking out and back in at capture time.
 
 ## Selection Visuals
 
@@ -86,20 +87,21 @@ back in at capture time.
 
 Visual references are stored in `reference/screenshots/`.
 
-## Current Implementation
+## Capture Implementation Status
 
-The current capture flow follows this UX goal:
+QuickShot now uses a direct, session-owned CoreGraphics snapshot at the hotkey
+moment, then presents the established custom cursor and frame over immutable
+per-display backdrops. Mouse-up crops that same image; there is no stream cache,
+system capture subprocess, temporary PNG, or second screenshot.
 
-1. Make hotkey entry feel immediate.
-2. Keep the screen visually normal until the user starts selecting.
-3. Draw the lightweight overlay only inside the selected region.
-4. Complete capture from the released selection without using stale pixels.
-5. Exclude QuickShot UI from the captured pixels without hiding the tray.
-6. Preserve tray, hub, copy, close, collapse, and expand clickability.
-7. Verify the flow with zero, one, and multiple existing screenshots.
+The default suite verifies provider freshness, display geometry, crop behavior,
+session lifecycle, balanced single-owner cursor suppression, selection visuals,
+and absence of retired capture paths. The single-cursor lifecycle has also
+passed a manual runtime check; fullscreen Spaces and unusual multi-display
+layouts remain explicit release checks on applicable hardware.
 
-Implementation details are allowed to change freely as long as this UX contract
-does not regress.
+See `CAPTURE_ARCHITECTURE.md` for the component boundaries, migration plan, and
+definition of done.
 
 ## Native UI Design System
 
@@ -156,4 +158,5 @@ permission to the bundle.
 ## Documents
 
 - `PRODUCT_CONTRACT.md` - UX requirements that define regressions.
+- `CAPTURE_ARCHITECTURE.md` - capture decision, transition status, and plan.
 - `DEVLOG.md` - dated engineering notes.

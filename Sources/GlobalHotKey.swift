@@ -76,8 +76,8 @@ final class GlobalHotKey {
         onTrigger = nil
     }
 
-    fileprivate func fire(_ id: EventHotKeyID) {
-        guard id.signature == signature, id.id == keyID else { return }
+    fileprivate func fire(_ id: EventHotKeyID) -> Bool {
+        guard id.signature == signature, id.id == keyID else { return false }
         let receivedAt = CFAbsoluteTimeGetCurrent()
         Self.log.info("hotkey event received")
         if Thread.isMainThread {
@@ -85,6 +85,7 @@ final class GlobalHotKey {
         } else {
             DispatchQueue.main.async { [weak self] in self?.onTrigger?(receivedAt) }
         }
+        return true
     }
 
     deinit { unregister() }
@@ -108,6 +109,5 @@ private func hotKeyEventHandler(_ next: EventHandlerCallRef?,
     guard err == noErr else { return err }
 
     let manager = Unmanaged<GlobalHotKey>.fromOpaque(userData).takeUnretainedValue()
-    manager.fire(firedID)
-    return noErr
+    return manager.fire(firedID) ? noErr : OSStatus(eventNotHandledErr)
 }

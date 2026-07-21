@@ -1,42 +1,35 @@
-import AppKit
 import CoreGraphics
-
-/// Параметры захвата: что отдавать в ScreenCaptureKit.
-struct CaptureSpec {
-    /// sourceRect — ЛОКАЛЬНЫЙ для дисплея, начало координат СВЕРХУ-СЛЕВА, в ТОЧКАХ.
-    let sourceRect: CGRect
-    /// Размеры в ПИКСЕЛЯХ (точки × scale) — иначе Retina-снимок выйдет вдвое меньше и размытым.
-    let pixelWidth: Int
-    let pixelHeight: Int
-}
 
 enum CoordinateMath {
 
-    /// Главная и самая опасная часть. Здесь живут ДВА разных y-flip, и их нельзя путать:
-    ///
-    /// 1. AppKit: начало координат СНИЗУ-СЛЕВА, единицы — точки, глобальная система десктопа.
-    /// 2. SCStreamConfiguration.sourceRect: начало координат СВЕРХУ-СЛЕВА, единицы — точки,
-    ///    но ЛОКАЛЬНО для захватываемого дисплея (не глобально по десктопу).
-    ///
-    /// Поэтому: вычитаем frame.origin дисплея (убираем смещение мульти-монитора), затем
-    /// делаем flip по высоте ИМЕННО ЭТОГО дисплея. Высоту меню-бар-дисплея (H0) тут НЕ
-    /// используем — она нужна только для настоящих глобальных координат CGDisplayBounds.
-    ///
-    /// - Parameters:
-    ///   - sel: выделение в ГЛОБАЛЬНЫХ точках AppKit (начало снизу-слева).
-    ///   - df: frame дисплея в координатах AppKit (снизу-слева), на котором сделано выделение.
-    ///   - scale: pointPixelScale фильтра (== screen.backingScaleFactor, ~2.0 на Retina).
-    static func captureSpec(globalSelection sel: CGRect,
-                            displayFrame df: CGRect,
-                            scale: CGFloat) -> CaptureSpec {
-        let localX = sel.minX - df.minX
-        let localY = (df.minY + df.height) - (sel.minY + sel.height)   // flip по высоте дисплея -> сверху-слева
-        let src = CGRect(x: localX, y: localY, width: sel.width, height: sel.height)
+    /// Converts an AppKit-global selection into the actual pixel coordinates of
+    /// a captured display image. The image dimensions are authoritative: this
+    /// also handles scaled and rotated displays where an assumed 1x/2x factor is
+    /// not reliable.
+    static func pixelCropRect(globalSelection selection: CGRect,
+                              displayFrame: CGRect,
+                              imageSize: CGSize) -> CGRect {
+        guard displayFrame.width > 0, displayFrame.height > 0,
+              imageSize.width > 0, imageSize.height > 0 else {
+            return .null
+        }
 
-        let wPx = Int((src.width * scale).rounded())
-        let hPx = Int((src.height * scale).rounded())
-        return CaptureSpec(sourceRect: src,
-                           pixelWidth: max(1, wPx),
-                           pixelHeight: max(1, hPx))
+        let clamped = selection.intersection(displayFrame)
+        guard !clamped.isNull, !clamped.isEmpty else { return .null }
+
+        let scaleX = imageSize.width / displayFrame.width
+        let scaleY = imageSize.height / displayFrame.height
+        let localMinX = clamped.minX - displayFrame.minX
+        let localTopY = displayFrame.maxY - clamped.maxY
+
+        let minX = floor(localMinX * scaleX)
+        let minY = floor(localTopY * scaleY)
+        let maxX = ceil((localMinX + clamped.width) * scaleX)
+        let maxY = ceil((localTopY + clamped.height) * scaleY)
+        return CGRect(x: minX,
+                      y: minY,
+                      width: max(1, maxX - minX),
+                      height: max(1, maxY - minY))
     }
+
 }

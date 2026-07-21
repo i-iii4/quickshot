@@ -4,7 +4,8 @@ cd "$(dirname "$0")/.."
 
 APP="$PWD/QuickShot.app"
 BIN="$APP/Contents/MacOS/QuickShot"
-MAX_OVERLAY_MS="${MAX_OVERLAY_MS:-250}"
+MAX_OVERLAY_MS="${MAX_OVERLAY_MS:-120}"
+MAX_MOUSE_UP_TO_CARD_MS="${MAX_MOUSE_UP_TO_CARD_MS:-100}"
 
 if [ "${QUICKSHOT_ALLOW_SYNTHETIC_INPUT:-0}" != "1" ]; then
   cat >&2 <<'EOF'
@@ -218,15 +219,17 @@ sleep 0.5
 logs="$(/usr/bin/log show --last 20s --info --debug --style compact --predicate "$predicate" 2>/dev/null || true)"
 echo "$logs" | tail -100
 
-if echo "$logs" | rg -q "old frame accepted|cache frame accepted|source=responsive|source=validated|latest-active-stream|capture frozen ready"; then
-  echo "Selection output regression: stale or frozen-frame vocabulary appeared in the live-selection path." >&2
+if echo "$logs" | rg -q "old frame accepted|cache frame accepted|latest-active-stream|fresh region|system capture launched"; then
+  echo "Selection output regression: retired or stale capture vocabulary appeared." >&2
   exit 1
 fi
 
-if ! echo "$logs" | rg -q "capture fresh region ready width=[0-9]+ height=[0-9]+"; then
-  echo "Selection output regression: fresh region capture was not observed." >&2
-  exit 1
-fi
+for token in "capture direct batch ready" "capture frozen ready" "mode=frozen" "capture crop complete"; do
+  if ! echo "$logs" | rg -q "$token"; then
+    echo "Selection output regression: missing '$token'." >&2
+    exit 1
+  fi
+done
 
 if ! echo "$logs" | rg -q "capture clipboard copied width=[0-9]+ height=[0-9]+"; then
   echo "Selection output regression: clipboard copy was not observed." >&2
@@ -249,9 +252,14 @@ if ! echo "$logs" | rg -q "overlay cursor restored"; then
 fi
 
 overlay_ms="$(echo "$logs" | sed -n 's/.*capture overlay ready ms=\([0-9.]*\).*/\1/p' | tail -1)"
+mouse_up_ms="$(echo "$logs" | sed -n 's/.*mouseUpToCardMs=\([0-9.]*\).*/\1/p' | tail -1)"
 if ! awk -v ms="$overlay_ms" -v max="$MAX_OVERLAY_MS" 'BEGIN { exit !(ms <= max) }'; then
   echo "Selection output regression: overlay ready took ${overlay_ms}ms, max ${MAX_OVERLAY_MS}ms." >&2
   exit 1
 fi
+if ! awk -v ms="$mouse_up_ms" -v max="$MAX_MOUSE_UP_TO_CARD_MS" 'BEGIN { exit !(ms <= max) }'; then
+  echo "Selection output regression: mouse-up delivery took ${mouse_up_ms}ms, max ${MAX_MOUSE_UP_TO_CARD_MS}ms." >&2
+  exit 1
+fi
 
-echo "Capture selection output verification passed: overlay=${overlay_ms}ms pid=$pid"
+echo "Capture selection output verification passed: overlay=${overlay_ms}ms mouseUp=${mouse_up_ms}ms pid=$pid"

@@ -6,7 +6,7 @@ APP="$PWD/QuickShot.app"
 BIN="$APP/Contents/MacOS/QuickShot"
 COLD_HOTKEY_DELAY="${COLD_HOTKEY_DELAY:-0.05}"
 COLD_WAIT_SECONDS="${COLD_WAIT_SECONDS:-4.00}"
-MAX_COLD_OVERLAY_MS="${MAX_COLD_OVERLAY_MS:-250}"
+MAX_COLD_OVERLAY_MS="${MAX_COLD_OVERLAY_MS:-120}"
 
 if [ "${QUICKSHOT_ALLOW_SYNTHETIC_INPUT:-0}" != "1" ]; then
   cat >&2 <<'EOF'
@@ -109,10 +109,17 @@ if ! echo "$logs" | rg -q "capture trigger accepted"; then
   exit 1
 fi
 
-if echo "$logs" | rg -q "old frame accepted|cache frame accepted|source=responsive|source=validated|latest-active-stream|capture frozen ready"; then
-  echo "Cold-start regression: stale or frozen-frame vocabulary appeared in the live-selection path." >&2
+if echo "$logs" | rg -q "old frame accepted|cache frame accepted|latest-active-stream|fresh region|system capture launched"; then
+  echo "Cold-start regression: retired or stale capture vocabulary appeared." >&2
   exit 1
 fi
+
+for token in "capture direct batch ready" "capture frozen ready" "mode=frozen"; do
+  if ! echo "$logs" | rg -q "$token"; then
+    echo "Cold-start regression: missing '$token'." >&2
+    exit 1
+  fi
+done
 
 if ! echo "$logs" | rg -q "capture overlay ready"; then
   echo "Cold-start regression: overlay did not become ready." >&2
