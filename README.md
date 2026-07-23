@@ -94,11 +94,19 @@ moment, then presents the established custom cursor and frame over immutable
 per-display backdrops. Mouse-up crops that same image; there is no stream cache,
 system capture subprocess, temporary PNG, or second screenshot.
 
-The default suite verifies provider freshness, display geometry, crop behavior,
-session lifecycle, balanced single-owner cursor suppression, selection visuals,
-and absence of retired capture paths. The single-cursor lifecycle has also
-passed a manual runtime check; fullscreen Spaces and unusual multi-display
-layouts remain explicit release checks on applicable hardware.
+After frozen pixels are ready, the selector acquires foreground ownership and one
+session-owned AppKit cursor lease before revealing its custom crosshair. The
+excluded QuickShot tray stays visible between the frozen backdrop and selection
+chrome, but its full-screen host accepts pointer events only directly above visible
+controls. A finite scrollable viewport keeps every screenshot reachable; new
+captures always enter the visible range instead of creating overflow windows.
+
+The default suite verifies provider freshness, serialized full-resolution display
+capture, geometry, crop and session lifecycle, single-owner cursor suppression,
+protected window layering, deterministic tray overflow, selection visuals, and
+absence of retired capture paths. Manual runtime acceptance confirms one custom
+cursor and immediate desktop input after capture. Repeated capture latency,
+fullscreen Spaces, and unusual multi-display checks remain explicit runtime gates.
 
 See `CAPTURE_ARCHITECTURE.md` for the component boundaries, migration plan, and
 definition of done.

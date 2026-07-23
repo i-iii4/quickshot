@@ -7,6 +7,8 @@ struct ThumbnailLayoutTests {
         run("append preserves every existing slot", testAppendPreservesExistingSlots)
         run("newest card grows away from hub", testNewestGrowsAwayFromHub)
         run("overflow does not displace visible cards", testOverflowDoesNotDisplaceVisibleCards)
+        run("newest overflow advances a deterministic viewport", testNewestOverflowAdvancesViewport)
+        run("older screenshots remain addressable by viewport", testOlderScreenshotsRemainAddressable)
         print("ThumbnailLayoutTests: passed")
     }
 
@@ -58,6 +60,47 @@ struct ThumbnailLayoutTests {
         try require(after.visible == before.visible,
                     "Appending beyond capacity displaced visible cards")
         try require(after.hidden == [2], "Newest overflowing card must be hidden without reflow")
+    }
+
+    private static func testNewestOverflowAdvancesViewport() throws {
+        let frame = NSRect(x: 0, y: 0, width: 600, height: 360)
+        let viewport = thumbnailLayoutShowingNewest(screenFrame: frame,
+                                                    edge: .right,
+                                                    cardWidth: 240,
+                                                    cardHeights: [100, 100, 100],
+                                                    hubSize: hub,
+                                                    margin: 16,
+                                                    gap: 12)
+        try require(viewport.firstVisibleIndex == 1,
+                    "Viewport must advance only one slot to reveal the newest card")
+        try require(viewport.layout.visible.map(\.index) == [1, 2],
+                    "Newest viewport has wrong visible slice: \(viewport.layout.visible)")
+        try require(viewport.layout.hidden == [0],
+                    "Oldest card must become explicit overflow")
+    }
+
+    private static func testOlderScreenshotsRemainAddressable() throws {
+        let frame = NSRect(x: 0, y: 0, width: 600, height: 360)
+        let older = thumbnailLayout(screenFrame: frame,
+                                    edge: .right,
+                                    cardWidth: 240,
+                                    cardHeights: [100, 100, 100],
+                                    hubSize: hub,
+                                    margin: 16,
+                                    gap: 12,
+                                    firstVisibleIndex: 0)
+        let newer = thumbnailLayout(screenFrame: frame,
+                                    edge: .right,
+                                    cardWidth: 240,
+                                    cardHeights: [100, 100, 100],
+                                    hubSize: hub,
+                                    margin: 16,
+                                    gap: 12,
+                                    firstVisibleIndex: 1)
+        try require(older.visible.map(\.index) == [0, 1] && older.hidden == [2],
+                    "Older viewport is not stable")
+        try require(newer.visible.map(\.index) == [1, 2] && newer.hidden == [0],
+                    "Newer viewport is not stable")
     }
 
     private static func run(_ name: String, _ body: () throws -> Void) {

@@ -46,15 +46,15 @@ if echo "$logs" | rg -q "old frame accepted|cache frame accepted|latest-active-s
   exit 1
 fi
 
-if echo "$logs" | rg -q "overlay cursor hide failed"; then
-  echo "Observed capture verification: cursor suppression failed." >&2
+if echo "$logs" | rg -q "overlay (activation rejected|activation timed out|activation lost|cursor suppression failed)"; then
+  echo "Observed capture verification: selector presentation ownership failed." >&2
   exit 1
 fi
 
 if [ "$REQUIRE_COMPLETED_SELECTION" = "1" ]; then
   for token in "capture crop complete" "capture clipboard copied" \
                "capture delivery outcome=completed" "overlay dismiss" \
-               "overlay cursor restored" "capture end outcome=completed"; do
+               "overlay cursor lease released" "capture end outcome=completed"; do
     if ! echo "$logs" | rg -q "$token"; then
       echo "Observed capture verification: completed selection missing '$token'." >&2
       exit 1

@@ -191,6 +191,10 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         beginDragOut(with: event)
     }
 
+    override func scrollWheel(with event: NSEvent) {
+        manager?.scrollTray(with: event)
+    }
+
     // MARK: действия
 
     private func doCopy() { if let owner { manager?.copy(owner) } }

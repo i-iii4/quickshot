@@ -4,6 +4,106 @@
 
 ---
 
+## 23.07.2026 — foreground selector и pointer routing приняты
+
+После ручной проверки актуальной сборки приняты два блокирующих исправления
+из предыдущей записи: в режиме выделения отображается один кастомный crosshair,
+а после завершения снимка полноэкранный tray-host сразу возвращает ввод рабочему
+столу. Удаление всех карточек больше не требуется для освобождения экрана.
+
+Контракт закреплён автоматическими проверками
+`SelectionPresentationCoordinatorTests`, `CursorLeaseTests` и
+`TrayPointerRoutingTests`: presentation раскрывается только после foreground
+ownership, курсор имеет одного сбалансированного владельца, а прозрачная часть
+tray-host остаётся mouse-transparent. Видимые проверки fullscreen Spaces,
+необычных multi-display-конфигураций и временных порогов остаются отдельными
+release-gates.
+
+---
+
+## 22.07.2026 — отклонён nonactivating selector, устранён screen lock
+
+Ручная проверка опровергла nonactivating-архитектуру из предыдущей
+записи. Логи показывали `overlay cursor lease acquired`, но визуально
+системная стрелка оставалась рядом с кастомным crosshair. Официальная
+документация Apple уточняет, что display-аргумент `CGDisplayHideCursor`
+не имеет эффекта, а background-процессу в общем случае не гарантировано
+право менять cursor visibility. Успешный return code не являлся
+доказательством видимого результата.
+
+Второй регресс блокировал рабочий стол после снимка. Frozen overlay при
+этом закрывался нормально; блокировку создавал полноэкранный
+tray-host. После добавления карточки `showHost()` делал его key, и пустая
+прозрачная область оставалась mouse target до `Delete All`, когда всё окно
+скрывалось.
+
+Теперь frozen pixels по-прежнему создаются до смены focus, но presentation
+раскрывается только после подтверждённого foreground ownership и одного
+AppKit `CursorLease`. Activation rejection, loss или timeout за `500ms` закрывают
+сессию до reveal; teardown сначала скрывает presentation, затем возвращает
+курсор и фокус исходному приложению.
+
+Tray-host больше не становится key при обычном показе. Пара global/local
+mouse monitors переключает `ignoresMouseEvents`: окно интерактивно только
+над реальным hub/card content, а во всех остальных точках и во время capture
+полностью пропускает ввод. Добавлены state-machine и pointer-routing тесты;
+итог ручной runtime-проверки зафиксирован в записи 23.07.2026 выше.
+
+---
+
+## 21.07.2026 — nonactivating selector, защищённый трей и overflow viewport
+
+> История отклонённой попытки; актуальный вывод и замена описаны в записи 22.07.2026 выше.
+
+Повторная проверка в долгоживущем процессе QuickShot опровергла прежнее
+краткое runtime-acceptance. За четыре сессии direct snapshot занял `807ms`,
+`240ms`, `2079ms` и `33ms`, а ожидание `NSApp.activate()` после готовности кадра
+добавляло `1565ms`, `7ms`, `901ms` и `5705ms`. В этом окне selector
+оставался невидимым, ранний drag терялся, а `NSCursor.hide()` не гарантировал
+скрытие указателя активного исходного приложения. Отсюда первая
+задержка и двойной курсор.
+
+Активация удалена из selector path полностью. `OverlayWindow` теперь
+`.nonactivatingPanel`, не может стать key/main и не меняет active application.
+`SelectionPresentationCoordinator` владеет ровно одним `CursorLease`, а тот
+вызывает единственную пару `CGDisplayHideCursor` / `CGDisplayShowCursor`.
+После успешного acquire в одной транзакции включаются pointer input и frozen
+presentation. `Esc` принимает session-scoped Carbon hotkey, поэтому key-window
+для отмены не нужно.
+
+Frozen backdrop и selection chrome разнесены по двум окнам. Между ними
+находится исключённый из capture трей QuickShot: он остаётся видимым, но
+верхний chrome получает весь pointer input. При teardown сначала исчезают
+оба overlay-слоя и crosshair, затем возвращается system pointer.
+
+Отдельно устранён overflow-дефект трея. Layout скрывал карточки после
+первого не вместившегося слота, но `finishTrayMotion()` затем вызывал
+`finishTrayTransition` для всех items. Скрытые окна возвращались со старыми
+или default-координатами, часто около левого верхнего угла. Теперь трей
+имеет конечный viewport: новый снимок всегда видим, старые снимки доступны
+прокруткой, а animation completion завершает только текущие visible items.
+
+Два параллельных
+`CGWindowListCreateImage` конкурировали внутри одного WindowServer compositor.
+Теперь дисплеи снимаются последовательно с autorelease boundary на каждый
+full-resolution image. Один union-snapshot не используется: на mixed-DPI
+desktop он теряет Retina-разрешение. Startup preparation теперь вызывает
+тот же direct backend и ту же общую lane, но не сохраняет полученные пиксели.
+
+Исследование кандидатов не дало честного способа убрать OS-owned latency tail.
+Современный `SCScreenshotManager.captureImage(in:)` на этой машине показал
+`p95 970ms`, `max 1238ms`. Свежий helper-process добавил отдельный TCC/startup
+risk и один раз ждал около минуты. `CGDisplayCreateImage` и cold
+`CGDisplayStream` также дали выбросы. Сериализованный production provider в
+300-run burst показал `p95 50.24ms`, но один `max 7183ms`; paced probe тоже
+ловил системные выбросы. Поэтому `120ms p95` остаётся runtime release-gate
+и не объявляется выполненным по короткой удачной серии. Автоматические
+проверки закрывают cursor ownership, nonactivation, z-order, startup preparation,
+viewport geometry и скрытые terminal states; видимая runtime-проверка остаётся
+ручным release-gate и на момент этой записи ещё не принята.
+
+---
+
 ## 21.07.2026 — устранён недетерминированный двойной курсор
 
 После перехода на frozen overlay курсором одновременно управляли три
@@ -25,8 +125,9 @@
 Добавлены `CursorLeaseTests` и static gates на единственного владельца,
 баланс, порядок reveal/dismiss и запрет возврата CoreGraphics/transparent-
 cursor механизмов. Полный `scripts/test.sh` проходит.
-Актуальный signed bundle перезапущен; single-cursor lifecycle принят
-после ручной проверки в рабочей сессии.
+Краткая первичная проверка выглядела успешной, но повторная runtime-
+серия выявила activation race; актуальное продолжение зафиксировано
+в записи выше.
 
 ---
 

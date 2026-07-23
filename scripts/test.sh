@@ -26,6 +26,7 @@ NATIVE_UI_LIB="$PWD/NativeQuickShotUI/zig-out/lib/libquickshot-native-ui.a"
 OUT="$(mktemp -t quickshot-hub-tests)"
 SURFACE_OUT="$(mktemp -t quickshot-native-surface-tests)"
 STATUS_LAYOUT_OUT="$(mktemp -t quickshot-status-menu-layout-tests)"
+TRAY_POINTER_OUT="$(mktemp -t quickshot-tray-pointer-tests)"
 THUMBNAIL_LAYOUT_OUT="$(mktemp -t quickshot-thumbnail-layout-tests)"
 THUMBNAIL_MOTION_OUT="$(mktemp -t quickshot-thumbnail-motion-tests)"
 THUMBNAIL_COLLECTION_OUT="$(mktemp -t quickshot-thumbnail-collection-tests)"
@@ -33,9 +34,10 @@ HUB_LIVE_OUT="$(mktemp -t quickshot-hub-live-tests)"
 THUMBNAIL_LIVE_OUT="$(mktemp -t quickshot-thumbnail-live-tests)"
 SELECTION_OUT="$(mktemp -t quickshot-selection-tests)"
 CURSOR_LEASE_OUT="$(mktemp -t quickshot-cursor-lease-tests)"
+PRESENTATION_OUT="$(mktemp -t quickshot-selection-presentation-tests)"
 DIRECT_CAPTURE_OUT="$(mktemp -t quickshot-direct-capture-tests)"
 CAPTURE_HOT_PATH_OUT="$(mktemp -t quickshot-capture-hot-path-tests)"
-trap 'rm -f "$OUT" "$SURFACE_OUT" "$STATUS_LAYOUT_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT"' EXIT
+trap 'rm -f "$OUT" "$SURFACE_OUT" "$STATUS_LAYOUT_OUT" "$TRAY_POINTER_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT"' EXIT
 
 # Pixel timing is a product contract, so exercise the same optimized Native SDK
 # renderer that ships in QuickShot instead of measuring the debug reference path.
@@ -93,6 +95,17 @@ xcrun swiftc \
   -target "${ARCH}-apple-macos${DEPLOY}" \
   -swift-version 5 \
   -framework AppKit \
+  Sources/TrayHostContentView.swift \
+  Tests/TrayPointerRoutingTests.swift \
+  -o "$TRAY_POINTER_OUT"
+
+"$TRAY_POINTER_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 5 \
+  -framework AppKit \
   Sources/ThumbnailLayout.swift \
   Tests/ThumbnailLayoutTests.swift \
   -o "$THUMBNAIL_LAYOUT_OUT"
@@ -119,6 +132,7 @@ xcrun swiftc \
   -framework AppKit \
   -framework CoreGraphics \
   -framework QuartzCore \
+  Sources/CaptureWindowLevels.swift \
   Sources/WindowCaptureProtection.swift \
   Sources/Theme.swift \
   Sources/MotionCurves.swift \
@@ -167,6 +181,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   -framework AppKit \
   -framework CoreGraphics \
   -framework QuartzCore \
+  Sources/CaptureWindowLevels.swift \
   Sources/WindowCaptureProtection.swift \
   Sources/Theme.swift \
   Sources/MotionCurves.swift \
@@ -196,9 +211,13 @@ xcrun swiftc \
   -swift-version 5 \
   -D TESTING \
   -framework AppKit \
+  -framework Carbon \
   -framework CoreGraphics \
   Sources/WindowCaptureProtection.swift \
   Sources/CursorLease.swift \
+  Sources/SelectionPresentationCoordinator.swift \
+  Sources/CaptureWindowLevels.swift \
+  Sources/SessionEscapeHotKey.swift \
   Sources/Overlay.swift \
   Tests/SelectionToolBehaviorTests.swift \
   -o "$SELECTION_OUT"
@@ -210,11 +229,25 @@ xcrun swiftc \
   -target "${ARCH}-apple-macos${DEPLOY}" \
   -swift-version 5 \
   -framework AppKit \
+  -framework CoreGraphics \
   Sources/CursorLease.swift \
   Tests/CursorLeaseTests.swift \
   -o "$CURSOR_LEASE_OUT"
 
 "$CURSOR_LEASE_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 5 \
+  -framework AppKit \
+  -framework CoreGraphics \
+  Sources/CursorLease.swift \
+  Sources/SelectionPresentationCoordinator.swift \
+  Tests/SelectionPresentationCoordinatorTests.swift \
+  -o "$PRESENTATION_OUT"
+
+"$PRESENTATION_OUT"
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -258,12 +291,17 @@ if output="$(rg -n "import ScreenCaptureKit|SCScreenshotManager|SCStream\\(|/usr
 fi
 
 rg -F -q "CGWindowListCreateImage" Sources/DirectScreenSnapshotProvider.swift
-rg -F -q "withThrowingTaskGroup" Sources/DirectScreenSnapshotProvider.swift
+if rg -F -q "withThrowingTaskGroup" Sources/DirectScreenSnapshotProvider.swift; then
+  echo "Capture architecture regression: compositor requests must stay serialized." >&2
+  exit 1
+fi
+rg -F -q "for display in displays" Sources/DirectScreenSnapshotProvider.swift
+rg -F -q "Task.checkCancellation()" Sources/DirectScreenSnapshotProvider.swift
 rg -F -q "FrozenSnapshotBatch(sessionID: sessionID" Sources/DirectScreenSnapshotProvider.swift
 rg -F -q "beginFrozenSelection" Sources/CaptureController.swift
 rg -F -q "beginFrozenSelection" Sources/Overlay.swift
 rg -F -q "BackdropView" Sources/Overlay.swift
-rg -F -q "w.displayIfNeeded()" Sources/Overlay.swift
+rg -F -q "window.displayIfNeeded()" Sources/Overlay.swift
 rg -F -q "shot.crop(globalSelection: selection)" Sources/CaptureController.swift
 rg -F -q "capture direct snapshot pending" Sources/CaptureController.swift
 rg -F -q "capture frozen ready" Sources/CaptureController.swift
@@ -281,9 +319,26 @@ if output="$(rg -n "bounds\\.fill\\(\\)|black\\.withAlphaComponent\\(0\\.30\\)" 
   echo "Overlay regression: selection must not draw a full-screen outside dim." >&2
   exit 1
 fi
-rg -F -q "w.isReleasedWhenClosed = false" Sources/Overlay.swift
+rg -F -q "window.isReleasedWhenClosed = false" Sources/Overlay.swift
 rg -F -q "guard !isDismissed else { return }" Sources/Overlay.swift
-rg -F -q "w.close()" Sources/Overlay.swift
+rg -F -q "window.close()" Sources/Overlay.swift
+rg -F -q "styleMask: [.borderless]" Sources/Overlay.swift
+rg -F -q "override var canBecomeKey: Bool { true }" Sources/Overlay.swift
+rg -F -q "NSApp.activate(ignoringOtherApps: true)" Sources/SelectionPresentationCoordinator.swift
+rg -F -q "isApplicationActive()" Sources/SelectionPresentationCoordinator.swift
+rg -F -q "NSApp.yieldActivation(to: source)" Sources/Overlay.swift
+rg -F -q "NSCursor.hide()" Sources/CursorLease.swift
+rg -F -q "NSCursor.unhide()" Sources/CursorLease.swift
+if output="$(rg -n "NSCursor\.(hide|unhide)|CGDisplay(Hide|Show)Cursor" Sources/Overlay.swift Sources/SelectionPresentationCoordinator.swift)"; then
+  echo "$output"
+  echo "Cursor ownership regression: suppression escaped the single lease." >&2
+  exit 1
+fi
+rg -F -q "trayHostIgnoresMouseEvents" Sources/ThumbnailManager.swift
+rg -F -q "host.ignoresMouseEvents = ignores" Sources/ThumbnailManager.swift
+rg -F -q "NSEvent.addGlobalMonitorForEvents" Sources/ThumbnailManager.swift
+rg -F -q "NSEvent.addLocalMonitorForEvents" Sources/ThumbnailManager.swift
+rg -F -q "RegisterEventHotKey(UInt32(kVK_Escape)" Sources/SessionEscapeHotKey.swift
 rg -F -q "Task.detached(priority: .userInitiated)" Sources/CaptureController.swift
 rg -q "CaptureError.captureStackUnavailable" Sources/CaptureController.swift
 rg -q "capture stack unavailable" Sources/CaptureController.swift
@@ -306,6 +361,9 @@ if output="$(rg -n "copy\\(cgImage:|copyAll\\(cgImages:" Sources/Clipboard.swift
 fi
 rg -q "cachedClipboardPayload" Sources/ThumbnailManager.swift
 rg -F -q "thumbnailLayout(screenFrame:" Sources/ThumbnailManager.swift
+rg -F -q "thumbnailLayoutShowingNewest" Sources/ThumbnailManager.swift
+rg -F -q "func scrollTray(with event: NSEvent)" Sources/ThumbnailManager.swift
+rg -F -q "for item in hidden { item.hide() }" Sources/ThumbnailManager.swift
 rg -F -q "container.layer?.transform = transform" Sources/ThumbnailWindow.swift
 rg -F -q "TrayProgressAnimator(hostView: hostContent)" Sources/ThumbnailManager.swift
 rg -F -q "collectionAnimator = CollectionProgressAnimator(hostView: hostContent)" Sources/ThumbnailManager.swift
@@ -390,6 +448,9 @@ rg -F -q "private var prewarmTask: Task<Void, Never>?" Sources/CaptureController
 rg -F -q "private var prewarmID = UUID()" Sources/CaptureController.swift
 rg -F -q "prewarmTask?.cancel()" Sources/CaptureController.swift
 rg -F -q "prewarmTask = Task.detached" Sources/CaptureController.swift
+rg -F -q "provider.prepare(quartzBounds: preparationBounds)" Sources/CaptureController.swift
+rg -F -q "func prepare(quartzBounds: CGRect)" Sources/DirectScreenSnapshotProvider.swift
+rg -F -q "DirectCaptureLane.shared.sync" Sources/DirectScreenSnapshotProvider.swift
 rg -F -q "self.prewarmID == prewarmID" Sources/CaptureController.swift
 rg -F -q "prewarmTask = nil" Sources/CaptureController.swift
 rg -F -q "selectionSession?.shutdown()" Sources/CaptureController.swift
@@ -400,6 +461,9 @@ rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/Overlay.swift
 rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/ThumbnailManager.swift
 rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/PinnedWindow.swift
 rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/SettingsWindow.swift
+rg -F -q "thumbnails.beginCapturePresentation(sessionID: session.id)" Sources/CaptureController.swift
+rg -F -q "thumbnails.endCapturePresentation(sessionID: id)" Sources/CaptureController.swift
+rg -F -q "CaptureWindowLevels.protectedInterface" Sources/ThumbnailManager.swift
 if output="$(rg -n "ScreenFrameCache|CachedFrame|validatedAt|preparedFrozenScreens|capture cache old frame accepted" Sources README.md PRODUCT_CONTRACT.md)"; then
   echo "$output"
   echo "Capture architecture regression: old stale-cache vocabulary must not remain in active contracts or code." >&2

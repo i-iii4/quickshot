@@ -22,17 +22,33 @@ final class CaptureController {
         prewarmTask?.cancel()
         let prewarmID = UUID()
         self.prewarmID = prewarmID
+        let provider = snapshotProvider
+        let preparationBounds = (NSScreen.main ?? NSScreen.screens.first).map { screen in
+            let displayID = CGDirectDisplayID(
+                (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
+            return CGDisplayBounds(displayID)
+        }
         prewarmTask = Task.detached(priority: .utility) { [weak self] in
             let startedAt = CFAbsoluteTimeGetCurrent()
             let granted = CGPreflightScreenCaptureAccess()
-            let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
             let directAvailable = DirectScreenSnapshotProvider.isDirectCaptureAvailable
+            var preparationSucceeded = false
+            if granted, directAvailable, let preparationBounds, !Task.isCancelled {
+                do {
+                    try provider.prepare(quartzBounds: preparationBounds)
+                    preparationSucceeded = true
+                } catch {
+                    Self.log.error("capture prewarm prepare failed error=\(String(describing: error), privacy: .public)")
+                }
+            }
+            let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+            let didPrepare = preparationSucceeded
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
                 guard let self, self.prewarmID == prewarmID, !Task.isCancelled else { return }
                 self.hasScreenCaptureAccess = granted
                 UserDefaults.standard.set(granted, forKey: Self.permissionGrantedKey)
-                Self.log.info("capture prewarm permission=\(granted, privacy: .public) direct=\(directAvailable, privacy: .public) ms=\(elapsedMs, privacy: .public)")
+                Self.log.info("capture prewarm permission=\(granted, privacy: .public) direct=\(directAvailable, privacy: .public) prepared=\(didPrepare, privacy: .public) ms=\(elapsedMs, privacy: .public)")
             }
         }
     }
@@ -95,17 +111,20 @@ final class CaptureController {
             },
             startedAt: triggerStartedAt)
         selectionSession = session
+        thumbnails.beginCapturePresentation(sessionID: session.id)
         session.start()
     }
 
     private func releaseSelectionSession(id: UUID) {
         guard let session = selectionSession, session.id == id else { return }
+        thumbnails.endCapturePresentation(sessionID: id)
         finishingSessions[id] = session
         selectionSession = nil
         Self.log.info("capture selection released inFlight=\(self.finishingSessions.count, privacy: .public)")
     }
 
     private func removeSession(id: UUID) {
+        thumbnails.endCapturePresentation(sessionID: id)
         if selectionSession?.id == id { selectionSession = nil }
         finishingSessions.removeValue(forKey: id)
     }
@@ -205,9 +224,6 @@ private final class CaptureSession {
     private var cropTask: Task<Void, Never>?
     private var gestureSnapshot: CaptureGestureSnapshot?
     private var preOverlayMouseTracker: PreOverlayMouseTracker?
-    private var sourceApplication: NSRunningApplication?
-    private var didActivateOverlay = false
-    private var didRestoreSourceApplication = false
     private var didEnd = false
     private var endOutcome = "unknown"
 
@@ -226,7 +242,6 @@ private final class CaptureSession {
     }
 
     func start() {
-        sourceApplication = NSWorkspace.shared.frontmostApplication
         let gesture = CaptureGestureSnapshot()
         gestureSnapshot = gesture
         preOverlayMouseTracker = PreOverlayMouseTracker(
@@ -291,20 +306,19 @@ private final class CaptureSession {
     }
 
     private func beginOverlay(backdrops: [CGDirectDisplayID: CGImage]) {
-        let initialMouseDownAt = preOverlayMouseTracker?.mouseDownSeedPoint()
-        preOverlayMouseTracker?.stop()
-        preOverlayMouseTracker = nil
-
         let overlayStartedAt = CFAbsoluteTimeGetCurrent()
         let overlay = OverlayController()
         self.overlay = overlay
-        didActivateOverlay = true
         overlay.beginFrozenSelection(
             screens: screens,
             backdrops: backdrops,
-            initialMouseDownAt: initialMouseDownAt,
+            pendingMouseDownAt: { [weak self] in
+                self?.preOverlayMouseTracker?.mouseDownSeedPoint()
+            },
             onReady: { [weak self] in
                 guard let self else { return }
+                self.preOverlayMouseTracker?.stop()
+                self.preOverlayMouseTracker = nil
                 let overlayMs = (CFAbsoluteTimeGetCurrent() - overlayStartedAt) * 1000
                 Self.log.info("capture frozen overlay constructed ms=\(overlayMs, privacy: .public)")
                 Self.log.info("capture overlay ready ms=\(self.elapsedMs, privacy: .public)")
@@ -339,7 +353,6 @@ private final class CaptureSession {
         Self.log.info("capture selection completed display=\(displayID, privacy: .public) width=\(Int(clamped.width), privacy: .public) height=\(Int(clamped.height), privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
         overlay?.dismiss()
         overlay = nil
-        restoreSourceApplication()
         frozen.removeAll()
         onSelectionReleased(id)
         startCropTask(shot: shot,
@@ -420,21 +433,8 @@ private final class CaptureSession {
         overlay = nil
         frozen.removeAll()
         gestureSnapshot = nil
-        restoreSourceApplication()
         Self.log.info("capture end outcome=\(self.endOutcome, privacy: .public) phase=\(self.phase.rawValue, privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
         onEnd(id)
-    }
-
-    private func restoreSourceApplication() {
-        guard didActivateOverlay, !didRestoreSourceApplication else { return }
-        didRestoreSourceApplication = true
-        guard let sourceApplication,
-              !sourceApplication.isTerminated,
-              sourceApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
-            return
-        }
-        NSApp.yieldActivation(to: sourceApplication)
-        sourceApplication.activate(options: [])
     }
 
     private var elapsedMs: Double {

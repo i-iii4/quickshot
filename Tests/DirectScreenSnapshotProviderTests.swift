@@ -8,7 +8,9 @@ struct DirectScreenSnapshotProviderTests {
             try testDirectSymbolIsAvailable()
             try testPixelCropUsesActualImageSize()
             try testFrozenScreenCrop()
+            try await testPreparationDiscardsItsPixels()
             try await testProviderOwnsFreshImagesPerSession()
+            try await testProviderSerializesCompositorRequests()
             try await testProviderFailsAtomically()
             print("DirectScreenSnapshotProviderTests: passed")
         } catch {
@@ -71,6 +73,24 @@ struct DirectScreenSnapshotProviderTests {
                     "Provider reused a previous frame; calls=\(recorder.callCount)")
     }
 
+    private static func testPreparationDiscardsItsPixels() async throws {
+        let recorder = CaptureRecorder()
+        let provider = DirectScreenSnapshotProvider { bounds in
+            try recorder.capture(bounds: bounds)
+        }
+        try provider.prepare(quartzBounds: CGRect(x: 0, y: 0, width: 400, height: 300))
+        try require(recorder.callCount == 1, "Preparation did not exercise direct capture")
+
+        let display = CaptureDisplay(id: 21,
+                                     frame: CGRect(x: 0, y: 0, width: 400, height: 300),
+                                     quartzBounds: CGRect(x: 0, y: 0, width: 400, height: 300))
+        let batch = try await provider.capture(sessionID: UUID(), displays: [display])
+        try require(recorder.callCount == 2, "User capture reused preparation pixels")
+        try require(batch.screens.first?.image.width == 400
+                    && batch.screens.first?.image.height == 300,
+                    "Preparation probe escaped into the user batch")
+    }
+
     private static func testProviderFailsAtomically() async throws {
         let provider = DirectScreenSnapshotProvider { bounds in
             if bounds.minX < 0 {
@@ -92,6 +112,27 @@ struct DirectScreenSnapshotProviderTests {
         } catch CaptureError.snapshotUnavailable {
             return
         }
+    }
+
+    private static func testProviderSerializesCompositorRequests() async throws {
+        let recorder = CaptureConcurrencyRecorder()
+        let provider = DirectScreenSnapshotProvider { bounds in
+            try recorder.capture(bounds: bounds)
+        }
+        let displays = (0..<4).map { index in
+            CaptureDisplay(id: CGDirectDisplayID(index + 1),
+                           frame: CGRect(x: index * 20, y: 0, width: 20, height: 20),
+                           quartzBounds: CGRect(x: index * 20, y: 0, width: 20, height: 20))
+        }
+
+        async let first = provider.capture(sessionID: UUID(), displays: displays)
+        async let second = provider.capture(sessionID: UUID(), displays: displays)
+        let batches = try await [first, second]
+
+        try require(batches.allSatisfy { $0.screens.map(\.displayID) == displays.map(\.id) },
+                    "Serial provider changed display ordering")
+        try require(recorder.maximumInFlight == 1,
+                    "Compositor requests overlapped; max=\(recorder.maximumInFlight)")
     }
 
     private static func solidImage(width: Int, height: Int, red: CGFloat) throws -> CGImage {
@@ -116,6 +157,47 @@ struct DirectScreenSnapshotProviderTests {
     private static func require(_ condition: @autoclosure () -> Bool,
                                 _ message: @autoclosure () -> String) throws {
         if !condition() { throw TestFailure(message()) }
+    }
+}
+
+private final class CaptureConcurrencyRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var inFlight = 0
+    private var maximum = 0
+
+    var maximumInFlight: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return maximum
+    }
+
+    func capture(bounds: CGRect) throws -> CGImage {
+        lock.lock()
+        inFlight += 1
+        maximum = max(maximum, inFlight)
+        lock.unlock()
+
+        Thread.sleep(forTimeInterval: 0.005)
+
+        lock.lock()
+        inFlight -= 1
+        lock.unlock()
+        return try makeImage(width: max(1, Int(bounds.width)),
+                             height: max(1, Int(bounds.height)))
+    }
+
+    private func makeImage(width: Int, height: Int) throws -> CGImage {
+        guard let context = CGContext(data: nil,
+                                      width: width,
+                                      height: height,
+                                      bitsPerComponent: 8,
+                                      bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let image = context.makeImage() else {
+            throw TestFailure("Could not make concurrency-test image")
+        }
+        return image
     }
 }
 

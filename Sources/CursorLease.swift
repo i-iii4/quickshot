@@ -1,15 +1,23 @@
 import AppKit
 
-/// Owns exactly one balanced system-cursor suppression for one capture session.
-/// AppKit keeps the cursor hidden even when its shape changes, so no cursor rect
-/// or repeated hide call is needed while the lease is active.
+/// Owns exactly one balanced AppKit cursor suppression for one capture session.
+/// The lease may only be acquired after QuickShot becomes foreground; AppKit and
+/// CoreGraphics do not guarantee cursor replacement for a background process.
 final class CursorLease {
-    private let hideCursor: () -> Void
-    private let showCursor: () -> Void
+    typealias CursorOperation = () -> Bool
+
+    private let hideCursor: CursorOperation
+    private let showCursor: CursorOperation
     private(set) var isAcquired = false
 
-    init(hideCursor: @escaping () -> Void = { NSCursor.hide() },
-         showCursor: @escaping () -> Void = { NSCursor.unhide() }) {
+    init(hideCursor: @escaping CursorOperation = {
+             NSCursor.hide()
+             return true
+         },
+         showCursor: @escaping CursorOperation = {
+             NSCursor.unhide()
+             return true
+         }) {
         self.hideCursor = hideCursor
         self.showCursor = showCursor
     }
@@ -17,7 +25,7 @@ final class CursorLease {
     @discardableResult
     func acquire() -> Bool {
         guard !isAcquired else { return false }
-        hideCursor()
+        guard hideCursor() else { return false }
         isAcquired = true
         return true
     }
@@ -25,14 +33,14 @@ final class CursorLease {
     @discardableResult
     func release() -> Bool {
         guard isAcquired else { return false }
+        guard showCursor() else { return false }
         isAcquired = false
-        showCursor()
         return true
     }
 
     deinit {
         if isAcquired {
-            showCursor()
+            _ = showCursor()
         }
     }
 }

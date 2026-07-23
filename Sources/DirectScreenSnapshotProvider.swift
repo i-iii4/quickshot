@@ -24,6 +24,22 @@ struct DirectScreenSnapshotProvider: Sendable {
         LegacyWindowSnapshotBackend.isAvailable
     }
 
+    /// Pays the one-time WindowServer setup cost without retaining or publishing pixels.
+    /// The tiny probe shares the same compositor path as a real full-display request.
+    func prepare(quartzBounds: CGRect) throws {
+        guard quartzBounds.width > 0, quartzBounds.height > 0 else { return }
+        let probe = CGRect(x: quartzBounds.minX,
+                           y: quartzBounds.minY,
+                           width: min(64, quartzBounds.width),
+                           height: min(64, quartzBounds.height))
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        try DirectCaptureLane.shared.sync {
+            _ = try autoreleasepool { try captureImage(probe) }
+        }
+        let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+        Self.log.info("capture direct prepare complete ms=\(elapsedMs, privacy: .public)")
+    }
+
     func capture(sessionID: UUID,
                  displays: [CaptureDisplay]) async throws -> FrozenSnapshotBatch {
         guard !displays.isEmpty else { throw CaptureError.noDisplay }
@@ -33,28 +49,29 @@ struct DirectScreenSnapshotProvider: Sendable {
         }
 
         let startedAt = CFAbsoluteTimeGetCurrent()
-        let captureImage = self.captureImage
-        let screens = try await withThrowingTaskGroup(of: FrozenScreen.self) { group in
-            for display in displays {
-                group.addTask {
-                    let displayStartedAt = CFAbsoluteTimeGetCurrent()
-                    let image = try captureImage(display.quartzBounds)
-                    guard image.width > 0, image.height > 0 else {
-                        throw CaptureError.snapshotUnavailable(
-                            "Display \(display.id) returned an empty image")
-                    }
-                    let elapsedMs = (CFAbsoluteTimeGetCurrent() - displayStartedAt) * 1000
-                    Self.log.info("capture direct display ready display=\(display.id, privacy: .public) width=\(image.width, privacy: .public) height=\(image.height, privacy: .public) ms=\(elapsedMs, privacy: .public)")
-                    return FrozenScreen(displayID: display.id,
-                                        frame: display.frame,
-                                        image: image)
-                }
-            }
-
+        // CGWindowListCreateImage is a synchronous request to one WindowServer compositor.
+        // Concurrent calls do not provide parallel work there; on current macOS they can
+        // contend for the same capture proxy and turn a normally 20-30ms batch into a
+        // multi-second outlier. Keep one ordered request lane while preserving each display's
+        // native pixel resolution (a single union capture downscales mixed-DPI displays).
+        let screens = try DirectCaptureLane.shared.sync {
             var captured: [FrozenScreen] = []
             captured.reserveCapacity(displays.count)
-            for try await screen in group {
-                captured.append(screen)
+            for display in displays {
+                try Task.checkCancellation()
+                let displayStartedAt = CFAbsoluteTimeGetCurrent()
+                let image = try autoreleasepool {
+                    try captureImage(display.quartzBounds)
+                }
+                guard image.width > 0, image.height > 0 else {
+                    throw CaptureError.snapshotUnavailable(
+                        "Display \(display.id) returned an empty image")
+                }
+                let elapsedMs = (CFAbsoluteTimeGetCurrent() - displayStartedAt) * 1000
+                Self.log.info("capture direct display ready display=\(display.id, privacy: .public) width=\(image.width, privacy: .public) height=\(image.height, privacy: .public) ms=\(elapsedMs, privacy: .public)")
+                captured.append(FrozenScreen(displayID: display.id,
+                                             frame: display.frame,
+                                             image: image))
             }
             return captured
         }
@@ -66,6 +83,19 @@ struct DirectScreenSnapshotProvider: Sendable {
         let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
         Self.log.info("capture direct batch ready session=\(sessionID.uuidString, privacy: .public) displays=\(screens.count, privacy: .public) ms=\(elapsedMs, privacy: .public)")
         return FrozenSnapshotBatch(sessionID: sessionID, screens: screens)
+    }
+}
+
+/// Every direct request targets the same WindowServer compositor. One process-wide
+/// lane prevents startup preparation and user captures from contending with it.
+private final class DirectCaptureLane: @unchecked Sendable {
+    static let shared = DirectCaptureLane()
+    private let lock = NSLock()
+
+    func sync<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return try body()
     }
 }
 

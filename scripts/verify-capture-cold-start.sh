@@ -131,7 +131,7 @@ if ! echo "$logs" | rg -q "overlay dismiss"; then
   exit 1
 fi
 
-if ! echo "$logs" | rg -q "overlay cursor restored"; then
+if ! echo "$logs" | rg -q "overlay cursor lease released"; then
   echo "Cold-start regression: cursor restoration was not observed." >&2
   exit 1
 fi

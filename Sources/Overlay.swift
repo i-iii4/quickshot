@@ -2,9 +2,10 @@ import AppKit
 import CoreGraphics
 import OSLog
 
-/// Безрамочная панель поверх всего. Она принимает мышь сразу; приложение активируем при старте
-/// overlay, чтобы CoreGraphics стабильно скрывал системную стрелку, пока мы рисуем свой
-/// курсор-слой.
+/// Безрамочная selection-панель. Frozen-фон и selection chrome
+/// живут в разных окнах, чтобы исключённый из capture интерфейс
+/// QuickShot оставался виден между ними. Окна становятся key только
+/// после готовности frozen pixels и фактической активации QuickShot.
 final class OverlayWindow: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
@@ -115,9 +116,8 @@ final class SelectionView: NSView {
     override var isOpaque: Bool { false }
     override var acceptsFirstResponder: Bool { true }
 
-    // Без этого первый клик по оверлею экрана, который не key (на втором мониторе оверлеи кроме
-    // главного — не key), тратится на активацию окна и не доходит до вью. С true mouseDown
-    // приходит сразу — выделение работает на любом экране независимо от key-статуса.
+    // Nonactivating selector never becomes key. This lets its first click reach
+    // the view directly on every display without changing source-app activation.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     // Системный курсор на всю сессию прячет один CursorLease. Здесь остаётся
@@ -176,7 +176,6 @@ final class SelectionView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        window?.makeFirstResponder(self)
         let scale = window?.backingScaleFactor ?? 2
         crosshair.contentsScale = scale
         crosshair.sublayers?.forEach { $0.contentsScale = scale }
@@ -466,11 +465,13 @@ final class OverlayController {
     private static let log = Logger(subsystem: "com.iiii.quickshot", category: "capture")
 
     private(set) var windows: [OverlayWindow] = []
-    private var escMonitor: Any?
+    private var backdropWindows: [OverlayWindow] = []
+    private var localEscapeMonitor: Any?
+    private var globalEscapeMonitor: Any?
+    private let escapeHotKey = SessionEscapeHotKey()
     private var spaceObserver: Any?
     private var globalDragMonitor: Any?
-    private var activationObserver: Any?
-    private let cursorLease = CursorLease()
+    private let presentation = SelectionPresentationCoordinator()
     private var onComplete: ((NSRect, NSScreen) -> Void)?
     private var onCancel: (() -> Void)?
     private var selectionViews: [SelectionView] = []
@@ -485,7 +486,7 @@ final class OverlayController {
 
     func beginFrozenSelection(screens: [NSScreen],
                               backdrops: [CGDirectDisplayID: CGImage],
-                              initialMouseDownAt: NSPoint?,
+                              pendingMouseDownAt: @escaping () -> NSPoint?,
                               onReady: @escaping () -> Void,
                               onComplete: @escaping (NSRect, NSScreen) -> Void,
                               onCancel: @escaping () -> Void) {
@@ -494,7 +495,7 @@ final class OverlayController {
               onReady: onReady,
               onComplete: onComplete,
               onCancel: onCancel,
-              pendingMouseDownAt: initialMouseDownAt)
+              pendingMouseDownAt: pendingMouseDownAt)
     }
 
     private func begin(screens: [NSScreen],
@@ -502,9 +503,10 @@ final class OverlayController {
                        onReady: @escaping () -> Void,
                        onComplete: @escaping (NSRect, NSScreen) -> Void,
                        onCancel: @escaping () -> Void,
-                       pendingMouseDownAt: NSPoint?) {
+                       pendingMouseDownAt: @escaping () -> NSPoint?) {
         self.onComplete = onComplete
         self.onCancel = onCancel
+        let sourceApplication = NSWorkspace.shared.frontmostApplication
 
         for screen in screens {
             let displayID = CGDirectDisplayID(
@@ -514,34 +516,18 @@ final class OverlayController {
                 continue
             }
 
-            // БЕЗ параметра screen: — иначе contentRect трактуется относительно origin экрана, и на
-            // дисплее с отрицательным origin смещение применяется дважды. contentRect глобальный.
-            let w = OverlayWindow(contentRect: screen.frame, styleMask: [.borderless],
-                                  backing: .buffered, defer: false)
-            w.setFrame(screen.frame, display: false)
-            w.isOpaque = false
-            w.backgroundColor = .clear
-            w.hasShadow = false
-            w.isFloatingPanel = true
-            w.hidesOnDeactivate = false
-            w.becomesKeyOnlyIfNeeded = false
-            w.isReleasedWhenClosed = false
-            WindowCaptureProtection.excludeFromScreenCapture(w)
-            w.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))   // выше строки меню
-            // Без режима all-spaces: оверлей выделения привязан к своему Space (модальный момент),
-            // а не таскается за свайпом, показывая протухший замороженный кадр. Свайп Spaces —
-            // отменяем захват (наблюдатель ниже).
-            w.collectionBehavior = [.fullScreenAuxiliary, .stationary]
-            w.ignoresMouseEvents = false
-            w.acceptsMouseMovedEvents = true
-            w.animationBehavior = .none
-            w.alphaValue = 0
-
             let bounds = NSRect(origin: .zero, size: screen.frame.size)
 
             let backdropView = BackdropView(image: backdrop)
             backdropView.frame = bounds
             backdropView.autoresizingMask = [.width, .height]
+
+            let backdropWindow = makeWindow(for: screen,
+                                            level: CaptureWindowLevels.backdrop,
+                                            receivesPointer: false)
+            backdropWindow.contentView = backdropView
+            backdropWindow.displayIfNeeded()
+            backdropWindows.append(backdropWindow)
 
             let chrome = SelectionView(frame: bounds)
             chrome.autoresizingMask = [.width, .height]
@@ -554,36 +540,29 @@ final class OverlayController {
             }
             selectionViews.append(chrome)
 
-            let container = NSView(frame: bounds)
-            container.addSubview(backdropView)
-            container.addSubview(chrome)
-            w.contentView = container
-            w.displayIfNeeded()
-            windows.append(w)
+            let chromeWindow = makeWindow(for: screen,
+                                          level: CaptureWindowLevels.selectionChrome,
+                                          receivesPointer: true)
+            chromeWindow.contentView = chrome
+            chromeWindow.displayIfNeeded()
+            windows.append(chromeWindow)
         }
 
-        // Cursor ownership is acquired while the pre-rendered windows are still transparent.
-        // They are revealed only after QuickShot is active, so the source cursor and custom
-        // crosshair can never share a visible frame.
-        if cursorLease.acquire() {
-            Self.log.info("overlay cursor lease acquired")
-        }
-        activationObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didBecomeActiveNotification,
-            object: NSApp,
-            queue: .main) { [weak self] _ in
-                self?.presentAfterActivation(pendingMouseDownAt: pendingMouseDownAt,
-                                             onReady: onReady)
-            }
-        for w in windows { w.orderFrontRegardless() }
+        for window in backdropWindows { window.orderFrontRegardless() }
+        for window in windows { window.orderFrontRegardless() }
         windows.first?.makeKeyAndOrderFront(nil)
-        NSApp.activate()
-        Self.log.info("overlay begin windows=\(self.windows.count, privacy: .public) mode=frozen")
+        Self.log.info("overlay begin screens=\(self.windows.count, privacy: .public) mode=frozen-activating")
 
-        // Escape отменяет независимо от того, какое окно key (мульти-монитор).
-        escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+        // Carbon owns Escape while QuickShot intentionally remains inactive. The NSEvent
+        // monitors are fallback paths for environments that reject the Carbon registration.
+        let escapeRegistered = escapeHotKey.register { [weak self] in self?.onCancel?() }
+        if !escapeRegistered { Self.log.error("overlay escape hotkey registration failed") }
+        localEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             if e.keyCode == 53 { self?.onCancel?(); return nil }
             return e
+        }
+        globalEscapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            if e.keyCode == 53 { self?.onCancel?() }
         }
         // Свайп между Spaces во время выделения — отменяем захват (иначе застреваешь: после свайпа
         // оверлей теряет key, локальный Esc-монитор до него не доходит, и выйти можно только сняв кадр).
@@ -592,35 +571,74 @@ final class OverlayController {
             self?.onCancel?()
         }
 
-        if NSApp.isActive {
-            presentAfterActivation(pendingMouseDownAt: pendingMouseDownAt,
-                                   onReady: onReady)
-        } else {
-            DispatchQueue.main.async { [weak self] in
+        presentation.begin(
+            restoreActivation: Self.activationRestore(for: sourceApplication),
+            onAcquired: { [weak self] in
                 guard let self, !self.isDismissed else { return }
-                if NSApp.isActive {
-                    self.presentAfterActivation(pendingMouseDownAt: pendingMouseDownAt,
-                                                onReady: onReady)
-                } else {
-                    NSApp.activate()
+                Self.log.info("overlay cursor lease acquired")
+                self.presentAfterOwnership(pendingMouseDownAt: pendingMouseDownAt(),
+                                           onReady: onReady)
+            },
+            onFailure: { [weak self] failure in
+                guard let self, !self.isDismissed else { return }
+                switch failure {
+                case .activationRejected:
+                    Self.log.error("overlay activation rejected")
+                case .activationTimedOut:
+                    Self.log.error("overlay activation timed out")
+                case .activationLost:
+                    Self.log.error("overlay activation lost")
+                case .cursorSuppressionFailed:
+                    Self.log.error("overlay cursor suppression failed")
                 }
+                self.onCancel?()
             }
-        }
+        )
     }
 
-    private func presentAfterActivation(pendingMouseDownAt: NSPoint?,
-                                        onReady: () -> Void) {
-        guard !isDismissed, !isPresented, NSApp.isActive else { return }
-        isPresented = true
-        if let activationObserver {
-            NotificationCenter.default.removeObserver(activationObserver)
-            self.activationObserver = nil
-        }
+    private func makeWindow(for screen: NSScreen,
+                            level: NSWindow.Level,
+                            receivesPointer: Bool) -> OverlayWindow {
+        // Do not pass `screen:` here: the content rect is already in global coordinates.
+        let window = OverlayWindow(contentRect: screen.frame,
+                                   styleMask: [.borderless],
+                                   backing: .buffered,
+                                   defer: false)
+        window.setFrame(screen.frame, display: false)
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
+        window.isFloatingPanel = true
+        window.hidesOnDeactivate = false
+        window.becomesKeyOnlyIfNeeded = false
+        window.isReleasedWhenClosed = false
+        window.level = level
+        window.collectionBehavior = [.fullScreenAuxiliary, .stationary]
+        window.ignoresMouseEvents = true
+        window.acceptsMouseMovedEvents = receivesPointer
+        window.animationBehavior = .none
+        window.alphaValue = 0
+        WindowCaptureProtection.excludeFromScreenCapture(window)
+        return window
+    }
 
+    private func presentAfterOwnership(pendingMouseDownAt: NSPoint?,
+                                       onReady: () -> Void) {
+        guard !isDismissed, !isPresented, presentation.ownsCursor else { return }
+        isPresented = true
+        windows.first?.makeKey()
+        if let first = selectionViews.first {
+            windows.first?.makeFirstResponder(first)
+        }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0
             context.allowsImplicitAnimation = false
+            for window in backdropWindows {
+                window.alphaValue = 1
+                window.displayIfNeeded()
+            }
             for window in windows {
+                window.ignoresMouseEvents = false
                 window.alphaValue = 1
                 window.displayIfNeeded()
             }
@@ -640,6 +658,17 @@ final class OverlayController {
 
         Self.log.info("overlay activation completed")
         onReady()
+    }
+
+    private static func activationRestore(for source: NSRunningApplication?) -> () -> Void {
+        let quickShotPID = ProcessInfo.processInfo.processIdentifier
+        return {
+            guard let source,
+                  !source.isTerminated,
+                  source.processIdentifier != quickShotPID else { return }
+            NSApp.yieldActivation(to: source)
+            _ = source.activate(from: .current)
+        }
     }
 
     private func selectionView(containing globalPoint: NSPoint) -> SelectionView? {
@@ -691,24 +720,33 @@ final class OverlayController {
     func dismiss() {
         guard !isDismissed else { return }
         isDismissed = true
-        Self.log.info("overlay dismiss windows=\(self.windows.count, privacy: .public)")
-        if let escMonitor { NSEvent.removeMonitor(escMonitor); self.escMonitor = nil }
+        Self.log.info("overlay dismiss screens=\(self.windows.count, privacy: .public)")
+        escapeHotKey.unregister()
+        if let localEscapeMonitor {
+            NSEvent.removeMonitor(localEscapeMonitor)
+            self.localEscapeMonitor = nil
+        }
+        if let globalEscapeMonitor {
+            NSEvent.removeMonitor(globalEscapeMonitor)
+            self.globalEscapeMonitor = nil
+        }
         if let spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver); self.spaceObserver = nil }
         if let globalDragMonitor { NSEvent.removeMonitor(globalDragMonitor); self.globalDragMonitor = nil }
-        if let activationObserver {
-            NotificationCenter.default.removeObserver(activationObserver)
-            self.activationObserver = nil
+        let ownedCursor = presentation.ownsCursor
+        let cursorRestored = presentation.finish { [self] in
+            selectionViews.forEach { $0.hideCrosshair() }
+            for window in windows + backdropWindows {
+                window.orderOut(nil)
+                window.contentView = nil
+                window.close()
+            }
         }
-        selectionViews.forEach { $0.hideCrosshair() }
-        for w in windows {
-            w.orderOut(nil)
-            w.contentView = nil
-            w.close()
-        }
-        if cursorLease.release() {
-            Self.log.info("overlay cursor lease released")
+        if ownedCursor {
+            if cursorRestored { Self.log.info("overlay cursor lease released") }
+            else { Self.log.fault("overlay cursor lease restore failed") }
         }
         windows.removeAll()
+        backdropWindows.removeAll()
         selectionViews.removeAll()
         activeGlobalSelection = nil
         completedSelection = false

@@ -7,6 +7,10 @@ struct CaptureHotPathStaticTests {
             let capture = try source("Sources/CaptureController.swift")
             let provider = try source("Sources/DirectScreenSnapshotProvider.swift")
             let overlay = try source("Sources/Overlay.swift")
+            let presentation = try source("Sources/SelectionPresentationCoordinator.swift")
+            let cursorLease = try source("Sources/CursorLease.swift")
+            let windowLevels = try source("Sources/CaptureWindowLevels.swift")
+            let escapeHotKey = try source("Sources/SessionEscapeHotKey.swift")
             let types = try source("Sources/CaptureTypes.swift")
             let coordinates = try source("Sources/CoordinateMath.swift")
             let appDelegate = try source("Sources/AppDelegate.swift")
@@ -19,11 +23,19 @@ struct CaptureHotPathStaticTests {
 
             try testDirectSnapshotPrecedesOverlay(capture: capture, provider: provider)
             try testSessionOwnsImmutablePixels(provider: provider, types: types)
-            try testFrozenOverlayContract(overlay: overlay, protection: protection)
+            try testFrozenOverlayContract(overlay: overlay,
+                                          presentation: presentation,
+                                          cursorLease: cursorLease,
+                                          windowLevels: windowLevels,
+                                          escapeHotKey: escapeHotKey,
+                                          protection: protection)
             try testMouseUpOnlyCropsFrozenImage(capture)
             try testRepeatedCaptureAdmission(capture)
             try testCoordinateMappingUsesImageSize(coordinates)
             try testNoRetiredCapturePath(provider: provider, capture: capture)
+            try testProtectedTrayPresentation(capture: capture,
+                                              thumbnailManager: thumbnailManager,
+                                              windowLevels: windowLevels)
             try testObservableTimingAndDelivery(capture)
             try testClipboardPayloadPreparationIsCentralized(
                 clipboardSource: clipboard,
@@ -60,10 +72,24 @@ struct CaptureHotPathStaticTests {
         try require(completed.contains("beginOverlay(backdrops:"),
                     "Frozen overlay must start only from a complete snapshot batch")
 
+        let beginOverlay = try functionBody(named: "beginOverlay", in: capture,
+                                            after: "private final class CaptureSession")
+        try require(beginOverlay.contains("pendingMouseDownAt: { [weak self]")
+                    && beginOverlay.contains("self.preOverlayMouseTracker?.stop()"),
+                    "Pre-overlay gesture tracking must remain live until selector readiness")
+
         try require(provider.contains("CGWindowListCreateImage"),
                     "Direct provider must resolve the CoreGraphics one-shot symbol")
-        try require(provider.contains("withThrowingTaskGroup"),
-                    "Displays must be captured concurrently inside one batch")
+        try require(provider.contains("func prepare(quartzBounds:")
+                    && capture.contains("provider.prepare(quartzBounds: preparationBounds)"),
+                    "Startup preparation must exercise and discard the real direct capture path")
+        try require(provider.contains("DirectCaptureLane.shared.sync"),
+                    "Preparation and user capture must share one compositor lane")
+        try require(provider.contains("for display in displays")
+                    && provider.contains("Task.checkCancellation()"),
+                    "Displays must use one cancellable serial compositor lane")
+        try require(!provider.contains("withThrowingTaskGroup"),
+                    "Concurrent WindowServer capture requests must stay prohibited")
         try require(provider.contains("CGWindowImageOption.bestResolution"),
                     "Direct provider must request native display resolution")
     }
@@ -85,6 +111,10 @@ struct CaptureHotPathStaticTests {
     }
 
     private static func testFrozenOverlayContract(overlay: String,
+                                                  presentation: String,
+                                                  cursorLease: String,
+                                                  windowLevels: String,
+                                                  escapeHotKey: String,
                                                   protection: String) throws {
         try require(overlay.contains("func beginFrozenSelection"),
                     "Overlay must expose only the frozen selection entry point")
@@ -92,35 +122,73 @@ struct CaptureHotPathStaticTests {
                     "Live selection must not return to production")
         try require(overlay.contains("BackdropView"),
                     "Frozen pixels need a static backdrop layer")
-        try require(overlay.contains("container.addSubview(backdropView)"),
-                    "Backdrop must render below selection chrome")
-        try require(overlay.contains("container.addSubview(chrome)"),
-                    "Selection chrome must remain independent from the bitmap")
-        try require(overlay.contains("w.displayIfNeeded()"),
+        try require(overlay.contains("backdropWindow.contentView = backdropView")
+                    && overlay.contains("chromeWindow.contentView = chrome"),
+                    "Backdrop and selection chrome must use independent windows")
+        try require(overlay.contains("displayIfNeeded()"),
                     "Frozen overlay must render atomically before becoming visible")
-        try require(overlay.contains("private let cursorLease = CursorLease()"),
-                    "One session-owned lease must own system cursor suppression")
-        try require(overlay.contains("cursorLease.acquire()")
-                    && overlay.contains("cursorLease.release()"),
-                    "Frozen overlay must acquire and release one cursor lease")
-        for forbidden in ["CGDisplayHideCursor", "CGDisplayShowCursor",
-                          "makeInvisibleSystemCursor", "deferredCursorHide"] {
-            try require(!overlay.contains(forbidden),
-                        "Competing cursor suppression must stay removed: \(forbidden)")
-        }
-        guard let acquire = overlay.range(of: "cursorLease.acquire()"),
-              let orderFront = overlay.range(of: "w.orderFrontRegardless()"),
-              let orderOut = overlay.range(of: "w.orderOut(nil)"),
-              let release = overlay.range(of: "cursorLease.release()") else {
+        try require(overlay.contains("private let presentation = SelectionPresentationCoordinator()"),
+                    "Overlay must delegate activation and cursor ownership to one coordinator")
+        try require(presentation.contains("private let cursorLease: CursorLease")
+                    && presentation.contains("cursorLease.acquire()")
+                    && presentation.contains("cursorLease.release()"),
+                    "Presentation coordinator must own one balanced cursor lease")
+        try require(cursorLease.contains("NSCursor.hide()")
+                    && cursorLease.contains("NSCursor.unhide()"),
+                    "One foreground AppKit lease must own cursor suppression")
+        try require(!cursorLease.contains("CGDisplayHideCursor")
+                    && !cursorLease.contains("CGDisplayShowCursor")
+                    && !overlay.contains("NSCursor.hide")
+                    && !presentation.contains("NSCursor.hide"),
+                    "Cursor suppression must have exactly one implementation owner")
+        try require(presentation.contains("guard state == .idle || state == .awaitingActivation")
+                    && presentation.contains("isApplicationActive()")
+                    && presentation.contains("cursorLease.acquire()"),
+                    "Cursor ownership must be downstream of confirmed foreground activation")
+        let makeWindow = try functionBody(named: "makeWindow", in: overlay,
+                                          after: "final class OverlayController")
+        try require(makeWindow.contains("window.alphaValue = 0")
+                    && makeWindow.contains("window.ignoresMouseEvents = true"),
+                    "Prepared windows must remain transparent and pointer-passive")
+        guard let prepareBackdrop = overlay.range(of: "let backdropWindow = makeWindow"),
+              let orderFront = overlay.range(of: "window.orderFrontRegardless()"),
+              let beginOwnership = overlay.range(of: "presentation.begin("),
+              let reveal = overlay.range(of: "window.alphaValue = 1"),
+              let orderOut = overlay.range(of: "window.orderOut(nil)"),
+              let finishOwnership = overlay.range(of: "presentation.finish") else {
             throw Failure("Cursor lifecycle markers are missing")
         }
-        try require(acquire.lowerBound < orderFront.lowerBound,
-                    "Cursor must be hidden before frozen windows become visible")
-        try require(orderOut.lowerBound < release.lowerBound,
+        try require(prepareBackdrop.lowerBound < orderFront.lowerBound
+                    && orderFront.lowerBound < beginOwnership.lowerBound
+                    && beginOwnership.lowerBound < reveal.lowerBound,
+                    "Transparent windows must request ownership before reveal")
+        let present = try functionBody(named: "presentAfterOwnership", in: overlay,
+                                       after: "final class OverlayController")
+        try require(present.contains("for window in windows {\n                window.ignoresMouseEvents = false\n                window.alphaValue = 1"),
+                    "Selection chrome input and reveal must share one ownership transaction")
+        try require(finishOwnership.lowerBound < orderOut.lowerBound,
+                    "Window teardown must be passed through the presentation coordinator")
+        guard let hidePresentation = presentation.range(of: "hidePresentation()"),
+              let release = presentation.range(of: "cursorLease.release()") else {
+            throw Failure("Presentation ownership markers are missing")
+        }
+        try require(hidePresentation.lowerBound < release.lowerBound,
                     "Frozen windows must disappear before the system cursor returns")
-        try require(overlay.contains("NSApplication.didBecomeActiveNotification")
-                    && overlay.contains("guard !isDismissed, !isPresented, NSApp.isActive"),
-                    "Frozen windows must reveal only after deterministic activation")
+        try require(overlay.contains("makeKeyAndOrderFront")
+                    && presentation.contains("NSApp.activate(ignoringOtherApps: true)")
+                    && overlay.contains("override var canBecomeKey: Bool { true }")
+                    && !overlay.contains(".nonactivatingPanel")
+                    && overlay.contains("NSApp.yieldActivation(to: source)"),
+                    "Selector must explicitly acquire and restore foreground ownership")
+        try require(windowLevels.contains("static let backdrop")
+                    && windowLevels.contains("static let protectedInterface")
+                    && windowLevels.contains("static let selectionChrome")
+                    && overlay.contains("CaptureWindowLevels.backdrop")
+                    && overlay.contains("CaptureWindowLevels.selectionChrome"),
+                    "Backdrop, protected interface, and selection chrome need explicit z-order")
+        try require(escapeHotKey.contains("RegisterEventHotKey(UInt32(kVK_Escape)")
+                    && overlay.contains("escapeHotKey.register"),
+                    "Escape must remain session-scoped across selector windows")
         try require(overlay.contains("onPointerActivity")
                     && overlay.contains("selection !== active"),
                     "All displays must share one visible custom crosshair owner")
@@ -130,7 +198,7 @@ struct CaptureHotPathStaticTests {
                     && overlay.contains("currentRect.fill()")
                     && !overlay.contains("bounds.fill()"),
                     "Only the selected rectangle may receive the light overlay")
-        try require(overlay.contains("WindowCaptureProtection.excludeFromScreenCapture(w)"),
+        try require(overlay.contains("WindowCaptureProtection.excludeFromScreenCapture(window)"),
                     "Selection windows must be excluded from future captures")
         try require(protection.contains("window.sharingType = .none"),
                     "Window exclusion must remain centralized")
@@ -198,6 +266,26 @@ struct CaptureHotPathStaticTests {
         }
         try require(!capture.contains("HiddenAppWindows") && !capture.contains("orderOut(nil)"),
                     "QuickShot windows must be excluded, never hidden for capture")
+        try require(!capture.contains("restoreSourceApplication")
+                    && !capture.contains("sourceApplication.activate"),
+                    "Activation ownership must remain outside CaptureSession")
+    }
+
+    private static func testProtectedTrayPresentation(capture: String,
+                                                      thumbnailManager: String,
+                                                      windowLevels: String) throws {
+        try require(capture.contains("thumbnails.beginCapturePresentation(sessionID: session.id)")
+                    && capture.contains("thumbnails.endCapturePresentation(sessionID: id)"),
+                    "Every capture session must bracket protected tray presentation")
+        try require(thumbnailManager.contains("capturePresentationSessions: Set<UUID>")
+                    && thumbnailManager.contains("host.level = CaptureWindowLevels.protectedInterface")
+                    && thumbnailManager.contains("trayHostIgnoresMouseEvents(")
+                    && thumbnailManager.contains("captureActive: !capturePresentationSessions.isEmpty")
+                    && thumbnailManager.contains("host.ignoresMouseEvents = ignores")
+                    && thumbnailManager.contains("host.level = .statusBar"),
+                    "Tray presentation must be reference-counted, visible, and noninteractive during selection")
+        try require(windowLevels.contains("protectedInterface"),
+                    "Protected tray level is missing")
     }
 
     private static func testObservableTimingAndDelivery(_ capture: String) throws {
@@ -263,9 +351,15 @@ struct CaptureHotPathStaticTests {
                                    after: "private final class CaptureSession")
         try require(end.contains("snapshotTask?.cancel()")
                     && end.contains("cropTask?.cancel()")
+                    && end.contains("preOverlayMouseTracker?.stop()")
                     && end.contains("overlay?.dismiss()")
-                    && end.contains("restoreSourceApplication()"),
+                    && end.contains("frozen.removeAll()")
+                    && end.contains("onEnd(id)"),
                     "Every terminal path must restore all session-owned resources")
+        let remove = try functionBody(named: "removeSession", in: capture,
+                                      after: "final class CaptureController")
+        try require(remove.contains("thumbnails.endCapturePresentation(sessionID: id)"),
+                    "Every terminal path must restore protected tray presentation")
     }
 
     private static func source(_ path: String) throws -> String {

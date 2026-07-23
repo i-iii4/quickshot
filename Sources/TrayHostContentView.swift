@@ -1,5 +1,11 @@
 import AppKit
 
+func trayHostIgnoresMouseEvents(isVisible: Bool,
+                                captureActive: Bool,
+                                pointerOverContent: Bool) -> Bool {
+    !isVisible || captureActive || !pointerOverContent
+}
+
 /// Content view полноэкранного прозрачного tray-host окна.
 /// Обычный `NSView` может вернуть сам себя для пустой области, а это ломает
 /// прозрачный hit-testing: события не доходят до расширившегося хаба/карточек.

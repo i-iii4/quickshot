@@ -94,17 +94,17 @@ if ! echo "$logs" | rg -q "overlay begin"; then
   exit 1
 fi
 
-if ! echo "$logs" | rg -q "overlay cursor hidden"; then
+if ! echo "$logs" | rg -q "overlay cursor lease acquired"; then
   echo "Runtime regression: cursor suppression was not observed." >&2
   exit 1
 fi
 
-if ! echo "$logs" | rg -q "overlay cursor restored"; then
+if ! echo "$logs" | rg -q "overlay cursor lease released"; then
   echo "Runtime regression: cursor restoration was not observed." >&2
   exit 1
 fi
 
-if echo "$logs" | rg -q "overlay cursor hide failed"; then
+if echo "$logs" | rg -q "overlay cursor suppression failed"; then
   echo "Runtime regression: cursor suppression failed." >&2
   exit 1
 fi

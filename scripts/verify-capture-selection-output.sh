@@ -246,7 +246,7 @@ if ! echo "$logs" | rg -q "capture end outcome=completed"; then
   exit 1
 fi
 
-if ! echo "$logs" | rg -q "overlay cursor restored"; then
+if ! echo "$logs" | rg -q "overlay cursor lease released"; then
   echo "Selection output regression: cursor restoration was not observed." >&2
   exit 1
 fi

@@ -27,21 +27,29 @@ struct Probe {
                                   quartzBounds: CGDisplayBounds(id))
         }
         let repeatCount = max(1, Int(ProcessInfo.processInfo.environment["CAPTURE_REPEAT"] ?? "1") ?? 1)
+        let intervalMs = max(0, Int(ProcessInfo.processInfo.environment["CAPTURE_INTERVAL_MS"] ?? "0") ?? 0)
         var timings: [Double] = []
         var sizes = ""
-        for _ in 0..<repeatCount {
+        for index in 0..<repeatCount {
             let startedAt = CFAbsoluteTimeGetCurrent()
             do {
                 let batch = try await DirectScreenSnapshotProvider()
                     .capture(sessionID: UUID(), displays: displays)
-                timings.append((CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
+                let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+                timings.append(elapsedMs)
                 sizes = batch.screens
                     .sorted { $0.displayID < $1.displayID }
                     .map { "\($0.displayID):\($0.image.width)x\($0.image.height)" }
                     .joined(separator: ",")
+                if elapsedMs > 120 {
+                    print("directCaptureOutlier run=\(index + 1) ms=\(String(format: "%.2f", elapsedMs))")
+                }
             } catch {
                 fputs("directCapture=error \(error)\n", stderr)
                 exit(1)
+            }
+            if intervalMs > 0 && index + 1 < repeatCount {
+                try? await Task.sleep(nanoseconds: UInt64(intervalMs) * 1_000_000)
             }
         }
         let sorted = timings.sorted()
