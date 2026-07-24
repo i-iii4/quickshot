@@ -45,7 +45,11 @@ final class TrayHostPanel: NSPanel {
 @MainActor
 final class ThumbnailManager {
 
-    private var items: [ThumbnailWindow] = []
+    private var collectionModel = ThumbnailCollectionModel()
+    private var itemByID: [UUID: ThumbnailWindow] = [:]
+    private var items: [ThumbnailWindow] {
+        collectionModel.ids.compactMap { itemByID[$0] }
+    }
     private let artifactStore: CaptureArtifactStore
     private var collapsed = false
     private var anchorScreen: NSScreen?
@@ -64,13 +68,12 @@ final class ThumbnailManager {
     private weak var collapsedPeekItem: ThumbnailWindow?
     private var trayHoverActive = false
     private var capturePresentationSessions: Set<UUID> = []
-    private var firstVisibleIndex = 0
-    private var followsNewest = true
     private var viewportScrollAccumulator: CGFloat = 0
 
     private let defaults = UserDefaults.standard
     private let widthKey = "thumbnailCardWidth"
 
+    private var preferredCardWidth: CGFloat = ThumbStyle.defaultWidth
     private(set) var cardWidth: CGFloat = ThumbStyle.defaultWidth
 
     init(artifactStore: CaptureArtifactStore) {
@@ -93,7 +96,9 @@ final class ThumbnailManager {
 
         let saved = defaults.double(forKey: widthKey)
         if saved > 0 {
-            cardWidth = min(ThumbStyle.maxWidth, max(ThumbStyle.minWidth, CGFloat(saved)))
+            preferredCardWidth = min(ThumbStyle.maxWidth,
+                                     max(ThumbStyle.minWidth, CGFloat(saved)))
+            cardWidth = preferredCardWidth
         }
         hub.onClick = { [weak self] in self?.toggleCollapse() }
         hub.onDelete = { [weak self] in self?.deleteAll() }
@@ -184,12 +189,9 @@ final class ThumbnailManager {
     private func mouseOverTray() -> Bool {
         let m = NSEvent.mouseLocation
         let o = host.frame.origin
-        func globalFrame(_ v: NSView) -> NSRect {
-            NSRect(x: o.x + v.frame.minX, y: o.y + v.frame.minY, width: v.frame.width, height: v.frame.height)
-        }
         let localMouse = NSPoint(x: m.x - o.x, y: m.y - o.y)
         if !hub.view.isHidden, hub.contains(localMouse) { return true }
-        return items.contains { !$0.hostView.isHidden && globalFrame($0.hostView).contains(m) }
+        return hostContent.hitTest(localMouse) != nil
     }
 
     private var cardsAreCollapsed: Bool {
@@ -345,6 +347,7 @@ final class ThumbnailManager {
         let previousHostFrame = host.frame
         ensureHost(on: screen)
         if host.isVisible, previousHostFrame != screen.frame { layout() }
+        updateClampedCardWidth(on: screen)
         let previousVisible = Set(items.filter { !$0.hostView.isHidden }.map { ObjectIdentifier($0) })
         let oldFrames = Dictionary(uniqueKeysWithValues: items.map {
             (ObjectIdentifier($0), $0.layoutFrame)
@@ -355,12 +358,8 @@ final class ThumbnailManager {
             guard let self, let t else { return }
             self.thumbnailHoverChanged(t, entered: entered)
         }
-        let insertionIndex = captureInsertionIndex(
-            for: artifact.sequence,
-            in: items,
-            sequenceOf: { $0.artifact.sequence })
-        items.insert(t, at: insertionIndex)
-        followsNewest = true
+        collectionModel.insert(id: artifact.id, sequence: artifact.sequence)
+        itemByID[artifact.id] = t
         hostContent.addSubview(t.hostView, positioned: .below, relativeTo: hub.view)  // новейшая — поверх старых, под хабом
         for it in items { it.applyWidth(cardWidth, screenHeight: screen.frame.height) }
         showHost()
@@ -383,11 +382,15 @@ final class ThumbnailManager {
                                      completion: @escaping () -> Void) {
         collectionCompletion = completion
         collectionAnimator.run(duration: duration,
-                               onFrame: onFrame,
+                               onFrame: { [weak self] progress in
+            onFrame(progress)
+            self?.refreshHostPointerRouting()
+        },
                                onDone: { [weak self] in
             guard let self else { return }
             self.collectionCompletion = nil
             completion()
+            self.refreshHostPointerRouting()
         })
     }
 
@@ -399,6 +402,7 @@ final class ThumbnailManager {
         collectionCompletion = nil
         collectionAnimator.cancel()
         completion()
+        refreshHostPointerRouting()
     }
 
     private func animateInsertion(_ inserted: ThumbnailWindow,
@@ -550,14 +554,10 @@ final class ThumbnailManager {
         let removedIDs = Set(removed.map { ObjectIdentifier($0) })
         let oldVisibleIDs = Set(items.filter { !$0.hostView.isHidden }.map { ObjectIdentifier($0) })
         let oldFrames = Dictionary(uniqueKeysWithValues: items.map { (ObjectIdentifier($0), $0.layoutFrame) })
-        let removedBeforeViewport = items.enumerated().filter {
-            $0.offset < firstVisibleIndex && removedIDs.contains(ObjectIdentifier($0.element))
-        }.count
-        items.removeAll { removedIDs.contains(ObjectIdentifier($0)) }
-        firstVisibleIndex = max(0, firstVisibleIndex - removedBeforeViewport)
-        if items.isEmpty {
-            firstVisibleIndex = 0
-            followsNewest = true
+        let removedArtifactIDs = Set(removed.map { $0.artifact.id })
+        collectionModel.remove(ids: removedArtifactIDs)
+        for id in removedArtifactIDs {
+            itemByID.removeValue(forKey: id)
         }
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let animateCards = !cardsAreCollapsed || removesVisiblePeek
@@ -664,16 +664,13 @@ final class ThumbnailManager {
         guard let screen = anchorScreen ?? NSScreen.main, !items.isEmpty else { return }
 
         let maximumStart = newestViewportLayout(on: screen).firstVisibleIndex
-        let target = min(max(0, firstVisibleIndex + delta), maximumStart)
-        guard target != firstVisibleIndex else { return }
+        guard collectionModel.shiftViewport(by: delta, maximumStart: maximumStart) else { return }
 
         let oldVisible = items.filter { !$0.hostView.isHidden }
         let oldVisibleIDs = Set(oldVisible.map { ObjectIdentifier($0) })
         let oldFrames = Dictionary(uniqueKeysWithValues: oldVisible.map {
             (ObjectIdentifier($0), $0.layoutFrame)
         })
-        firstVisibleIndex = target
-        followsNewest = target == maximumStart
         animateViewportChange(on: screen,
                               oldVisibleIDs: oldVisibleIDs,
                               oldFrames: oldFrames)
@@ -817,7 +814,8 @@ final class ThumbnailManager {
         cancelCollapsedPeekDismiss()
         cancelHoverExit()
         for item in items { closeAndRelease(item) }
-        items.removeAll()
+        collectionModel.removeAll()
+        itemByID.removeAll()
         host.orderOut(nil)
         refreshHostPointerRouting()
     }
@@ -830,13 +828,18 @@ final class ThumbnailManager {
     // MARK: ресайз (общая ширина, сохраняется между сессиями)
 
     func updateWidthLive(_ w: CGFloat) {
-        cardWidth = min(ThumbStyle.maxWidth, max(ThumbStyle.minWidth, w))
+        preferredCardWidth = min(ThumbStyle.maxWidth, max(ThumbStyle.minWidth, w))
+        if let screen = anchorScreen ?? NSScreen.main {
+            updateClampedCardWidth(on: screen)
+        } else {
+            cardWidth = preferredCardWidth
+        }
         let h = anchorHeight
         for t in items { t.applyWidth(cardWidth, screenHeight: h) }
         layout()
     }
 
-    func persistWidth() { defaults.set(Double(cardWidth), forKey: widthKey) }
+    func persistWidth() { defaults.set(Double(preferredCardWidth), forKey: widthKey) }
 
     // MARK: сворачивание/разворачивание (растворение в хаб)
 
@@ -896,12 +899,14 @@ final class ThumbnailManager {
                                          reduceMotion: reduceMotion)
             }
             self.hub.setTrayCollapseProgress(progress)
+            self.refreshHostPointerRouting()
         }, onDone: { [weak self] in
             guard let self else { return }
             self.trayProgress = target
             let isCollapsed = target == 1
             for item in cards { item.finishTrayTransition(collapsed: isCollapsed) }
             self.hub.setTrayCollapseProgress(target)
+            self.refreshHostPointerRouting()
         })
     }
 
@@ -918,6 +923,7 @@ final class ThumbnailManager {
             }
         }
         hub.setTrayCollapseProgress(target)
+        refreshHostPointerRouting()
     }
 
     // MARK: раскладка (добавление/ресайз/смена положения)
@@ -932,7 +938,11 @@ final class ThumbnailManager {
         trayProgress = settledProgress
         ensureHost(on: screen)
         positionHub(on: screen, animateChevron: false)
+        updateClampedCardWidth(on: screen)
         hub.setTrayCollapseProgress(settledProgress)
+        for t in items {
+            t.applyWidth(cardWidth, screenHeight: screen.frame.height)
+        }
         let edgePos = TrayPosition.current
         for t in items { t.setCollapsed(settledProgress == 1); t.configureResize(for: edgePos) }
         let (visible, hidden) = cardLayout(on: screen)
@@ -945,6 +955,7 @@ final class ThumbnailManager {
                 pair.0.placeInstant(origin: localOrigin)
             }
         }
+        refreshHostPointerRouting()
     }
 
     private func positionHub(on screen: NSScreen,
@@ -956,6 +967,7 @@ final class ThumbnailManager {
                      animateCount: animateCount)   // сначала размер (ширина капсулы), потом позиция
         hub.setOrigin(toLocal(hubOrigin(on: screen)))
         if items.isEmpty { hub.hide() } else { hub.show() }      // счётчик виден при любом count >= 1
+        refreshHostPointerRouting()
     }
 
     private func hubOrigin(on screen: NSScreen) -> NSPoint {
@@ -985,18 +997,17 @@ final class ThumbnailManager {
 
     private func resolvedViewportLayout(on screen: NSScreen) -> ThumbnailLayoutResult {
         guard !items.isEmpty else {
-            firstVisibleIndex = 0
-            followsNewest = true
+            collectionModel.removeAll()
             return .init(visible: [], hidden: [])
         }
 
         let newest = newestViewportLayout(on: screen)
-        if followsNewest {
-            firstVisibleIndex = newest.firstVisibleIndex
+        let firstVisibleIndex = collectionModel.resolveFirstVisibleIndex(
+            maximumStart: newest.firstVisibleIndex)
+        if collectionModel.followsNewest {
             return newest.layout
         }
 
-        firstVisibleIndex = min(max(0, firstVisibleIndex), newest.firstVisibleIndex)
         return layout(on: screen, firstVisibleIndex: firstVisibleIndex)
     }
 
@@ -1035,5 +1046,19 @@ final class ThumbnailManager {
         return (ThumbnailLayoutEdge(rawValue: position.rawValue)!,
                 NSSize(width: hub.width, height: hub.height),
                 margin)
+    }
+
+    private func updateClampedCardWidth(on screen: NSScreen) {
+        let geometry = viewportGeometry(on: screen)
+        cardWidth = thumbnailClampedCardWidth(
+            requested: preferredCardWidth,
+            screenFrame: screen.frame,
+            edge: geometry.edge,
+            hubSize: geometry.hubSize,
+            margin: geometry.margin,
+            gap: ThumbStyle.gap,
+            resizeBand: ThumbStyle.resizeBand,
+            minimum: ThumbStyle.minWidth,
+            maximum: ThumbStyle.maxWidth)
     }
 }

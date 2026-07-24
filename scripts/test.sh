@@ -41,7 +41,8 @@ CAPTURE_GESTURE_OUT="$(mktemp -t quickshot-capture-gesture-tests)"
 CAPTURE_SEQUENCE_OUT="$(mktemp -t quickshot-capture-sequence-tests)"
 CAPTURE_ARTIFACT_OUT="$(mktemp -t quickshot-capture-artifact-tests)"
 WINDOW_PROTECTION_OUT="$(mktemp -t quickshot-window-protection-tests)"
-trap 'rm -f "$OUT" "$SURFACE_OUT" "$STATUS_LAYOUT_OUT" "$TRAY_POINTER_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT"' EXIT
+THUMBNAIL_MODEL_OUT="$(mktemp -t quickshot-thumbnail-model-tests)"
+trap 'rm -f "$OUT" "$SURFACE_OUT" "$STATUS_LAYOUT_OUT" "$TRAY_POINTER_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"' EXIT
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -87,6 +88,17 @@ xcrun swiftc \
   -o "$WINDOW_PROTECTION_OUT"
 
 "$WINDOW_PROTECTION_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 5 \
+  Sources/CaptureSequence.swift \
+  Sources/ThumbnailCollectionModel.swift \
+  Tests/ThumbnailCollectionModelTests.swift \
+  -o "$THUMBNAIL_MODEL_OUT"
+
+"$THUMBNAIL_MODEL_OUT"
 
 # Pixel timing is a product contract, so exercise the same optimized Native SDK
 # renderer that ships in QuickShot instead of measuring the debug reference path.
@@ -189,6 +201,7 @@ xcrun swiftc \
   Sources/NativeSDKBridge.swift \
   Sources/NativeHubView.swift \
   Sources/CaptureSequence.swift \
+  Sources/ThumbnailCollectionModel.swift \
   Sources/Clipboard.swift \
   Sources/CaptureArtifact.swift \
   Sources/CardSizing.swift \
@@ -241,6 +254,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/NativeSDKBridge.swift \
 	  Sources/NativeHubView.swift \
 	  Sources/CaptureSequence.swift \
+	  Sources/ThumbnailCollectionModel.swift \
 	  Sources/Clipboard.swift \
 	  Sources/CaptureArtifact.swift \
   Sources/CardSizing.swift \

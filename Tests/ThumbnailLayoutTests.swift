@@ -9,6 +9,7 @@ struct ThumbnailLayoutTests {
         run("overflow does not displace visible cards", testOverflowDoesNotDisplaceVisibleCards)
         run("newest overflow advances a deterministic viewport", testNewestOverflowAdvancesViewport)
         run("older screenshots remain addressable by viewport", testOlderScreenshotsRemainAddressable)
+        run("card width is clamped to each display", testCardWidthClamp)
         print("ThumbnailLayoutTests: passed")
     }
 
@@ -101,6 +102,45 @@ struct ThumbnailLayoutTests {
                     "Older viewport is not stable")
         try require(newer.visible.map(\.index) == [1, 2] && newer.hidden == [0],
                     "Newer viewport is not stable")
+    }
+
+    private static func testCardWidthClamp() throws {
+        let narrow = NSRect(x: -600, y: 0, width: 320, height: 700)
+        let vertical = thumbnailClampedCardWidth(requested: 640,
+                                                screenFrame: narrow,
+                                                edge: .right,
+                                                hubSize: hub,
+                                                margin: 16,
+                                                gap: 12,
+                                                resizeBand: 12,
+                                                minimum: 120,
+                                                maximum: 640)
+        try require(vertical == 288,
+                    "vertical card width escaped a narrow display: \(vertical)")
+
+        let horizontal = thumbnailClampedCardWidth(requested: 640,
+                                                  screenFrame: narrow,
+                                                  edge: .bottom,
+                                                  hubSize: hub,
+                                                  margin: 16,
+                                                  gap: 12,
+                                                  resizeBand: 12,
+                                                  minimum: 120,
+                                                  maximum: 640)
+        try require(horizontal == 132,
+                    "horizontal card did not reserve hub and resize geometry: \(horizontal)")
+
+        let tiny = thumbnailClampedCardWidth(requested: 240,
+                                            screenFrame: NSRect(x: 0, y: 0, width: 150, height: 300),
+                                            edge: .bottom,
+                                            hubSize: hub,
+                                            margin: 16,
+                                            gap: 12,
+                                            resizeBand: 12,
+                                            minimum: 120,
+                                            maximum: 640)
+        try require(tiny == 1,
+                    "impossibly small display must still produce bounded geometry")
     }
 
     private static func run(_ name: String, _ body: () throws -> Void) {

@@ -21,6 +21,27 @@ struct ThumbnailViewportResult: Equatable {
     let layout: ThumbnailLayoutResult
 }
 
+func thumbnailClampedCardWidth(requested: CGFloat,
+                               screenFrame: NSRect,
+                               edge: ThumbnailLayoutEdge,
+                               hubSize: NSSize,
+                               margin: CGFloat,
+                               gap: CGFloat,
+                               resizeBand: CGFloat,
+                               minimum: CGFloat,
+                               maximum: CGFloat) -> CGFloat {
+    let available: CGFloat
+    if edge.isVertical {
+        available = screenFrame.width - margin * 2
+    } else {
+        available = screenFrame.width - margin * 2 - hubSize.width - gap - resizeBand
+    }
+    let finiteAvailable = max(1, available.isFinite ? available : 1)
+    let upper = max(1, min(maximum, finiteAvailable))
+    let lower = min(minimum, upper)
+    return max(lower, min(requested, upper))
+}
+
 func thumbnailLayout(screenFrame: NSRect,
                      edge: ThumbnailLayoutEdge,
                      cardWidth: CGFloat,
