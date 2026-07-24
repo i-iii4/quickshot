@@ -45,6 +45,9 @@ jobs:
         with:
           version: 0.16.0
 
+      - name: Install test tools
+        run: brew install ripgrep
+
       - name: Run headless regression suite
         run: ./scripts/test.sh
 

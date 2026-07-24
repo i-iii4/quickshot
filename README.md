@@ -161,6 +161,8 @@ the previous valid app untouched.
 ./scripts/test.sh
 ```
 
+The headless suite requires `ripgrep`; CI provisions it explicitly.
+
 The default suite is headless and does not open windows over the active screen.
 The separate live-window click probes remain explicit:
 
