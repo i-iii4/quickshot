@@ -93,9 +93,10 @@ struct CaptureHotPathStaticTests {
 
         try require(provider.contains("CGWindowListCreateImage"),
                     "Direct provider must resolve the CoreGraphics one-shot symbol")
-        try require(provider.contains("func prepare(quartzBounds:")
-                    && capture.contains("provider.prepare(quartzBounds: preparationBounds)"),
-                    "Startup preparation must exercise and discard the real direct capture path")
+        try require(!provider.contains("func prepare(quartzBounds:")
+                    && !capture.contains("provider.prepare(")
+                    && capture.contains("pixels=false"),
+                    "Startup preparation must resolve availability without taking pixels")
         try require(provider.contains("DirectCaptureLane.shared.sync"),
                     "Preparation and user capture must share one compositor lane")
         try require(provider.contains("for display in displays")
@@ -115,6 +116,9 @@ struct CaptureHotPathStaticTests {
                     "Frozen batch must carry its owning session ID")
         try require(types.contains("struct FrozenScreen"),
                     "Frozen display pixels need an immutable value type")
+        try require(types.contains("let capturedAt: CFAbsoluteTime")
+                    && types.contains("let maximumDisplaySkew: TimeInterval"),
+                    "Frozen batches must expose per-display timing and batch skew")
         try require(provider.contains("FrozenSnapshotBatch(sessionID: sessionID"),
                     "Provider must return the caller's session ID")
         for forbidden in ["cache", "latestFrame", "previousFrame", "warmed"] {
@@ -217,6 +221,10 @@ struct CaptureHotPathStaticTests {
                     "Selection windows must be excluded from future captures")
         try require(protection.contains("window.sharingType = .none"),
                     "Window exclusion must remain centralized")
+        try require(protection.contains("case auditUnavailable")
+                    && protection.contains("throw WindowCaptureProtectionError.auditUnavailable")
+                    && capture.contains("try WindowCaptureProtection.auditOnScreenWindows()"),
+                    "Unknown WindowServer protection state must fail closed before capture")
     }
 
     private static func testMouseUpOnlyCropsFrozenImage(_ capture: String) throws {

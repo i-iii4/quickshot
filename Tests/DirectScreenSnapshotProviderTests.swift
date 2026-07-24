@@ -8,10 +8,13 @@ struct DirectScreenSnapshotProviderTests {
             try testDirectSymbolIsAvailable()
             try testPixelCropUsesActualImageSize()
             try testFrozenScreenCrop()
-            try await testPreparationDiscardsItsPixels()
+            try testAvailabilityCheckDoesNotCapturePixels()
             try await testProviderOwnsFreshImagesPerSession()
             try await testProviderSerializesCompositorRequests()
             try await testProviderFailsAtomically()
+            try await testProviderRejectsExcessiveDisplaySkew()
+            try await testCancellationDiscardsSynchronousResult()
+            try await testDuplicateDisplaysFailBeforeCapture()
             print("DirectScreenSnapshotProviderTests: passed")
         } catch {
             fputs("DirectScreenSnapshotProviderTests failed: \(error)\n", stderr)
@@ -73,22 +76,14 @@ struct DirectScreenSnapshotProviderTests {
                     "Provider reused a previous frame; calls=\(recorder.callCount)")
     }
 
-    private static func testPreparationDiscardsItsPixels() async throws {
+    private static func testAvailabilityCheckDoesNotCapturePixels() throws {
         let recorder = CaptureRecorder()
-        let provider = DirectScreenSnapshotProvider { bounds in
+        _ = DirectScreenSnapshotProvider { bounds in
             try recorder.capture(bounds: bounds)
         }
-        try provider.prepare(quartzBounds: CGRect(x: 0, y: 0, width: 400, height: 300))
-        try require(recorder.callCount == 1, "Preparation did not exercise direct capture")
-
-        let display = CaptureDisplay(id: 21,
-                                     frame: CGRect(x: 0, y: 0, width: 400, height: 300),
-                                     quartzBounds: CGRect(x: 0, y: 0, width: 400, height: 300))
-        let batch = try await provider.capture(sessionID: UUID(), displays: [display])
-        try require(recorder.callCount == 2, "User capture reused preparation pixels")
-        try require(batch.screens.first?.image.width == 400
-                    && batch.screens.first?.image.height == 300,
-                    "Preparation probe escaped into the user batch")
+        _ = DirectScreenSnapshotProvider.isDirectCaptureAvailable
+        try require(recorder.callCount == 0,
+                    "Backend availability must not perform a preparatory screenshot")
     }
 
     private static func testProviderFailsAtomically() async throws {
@@ -133,6 +128,73 @@ struct DirectScreenSnapshotProviderTests {
                     "Serial provider changed display ordering")
         try require(recorder.maximumInFlight == 1,
                     "Compositor requests overlapped; max=\(recorder.maximumInFlight)")
+        try require(batches.allSatisfy {
+            $0.captureCompletedAt >= $0.captureStartedAt
+                && $0.maximumDisplaySkew >= 0
+        }, "Provider did not report batch timing")
+    }
+
+    private static func testProviderRejectsExcessiveDisplaySkew() async throws {
+        let provider = DirectScreenSnapshotProvider(maximumAcceptedDisplaySkew: 0.001) { bounds in
+            Thread.sleep(forTimeInterval: 0.004)
+            return try solidImage(width: max(1, Int(bounds.width)),
+                                  height: max(1, Int(bounds.height)),
+                                  red: 0.2)
+        }
+        let displays = [
+            CaptureDisplay(id: 31,
+                           frame: CGRect(x: 0, y: 0, width: 20, height: 20),
+                           quartzBounds: CGRect(x: 0, y: 0, width: 20, height: 20)),
+            CaptureDisplay(id: 32,
+                           frame: CGRect(x: 20, y: 0, width: 20, height: 20),
+                           quartzBounds: CGRect(x: 20, y: 0, width: 20, height: 20))
+        ]
+        do {
+            _ = try await provider.capture(sessionID: UUID(), displays: displays)
+            throw TestFailure("Provider accepted an out-of-contract display skew")
+        } catch CaptureError.snapshotUnavailable {
+            return
+        }
+    }
+
+    private static func testCancellationDiscardsSynchronousResult() async throws {
+        let provider = DirectScreenSnapshotProvider { bounds in
+            Thread.sleep(forTimeInterval: 0.03)
+            return try solidImage(width: max(1, Int(bounds.width)),
+                                  height: max(1, Int(bounds.height)),
+                                  red: 0.3)
+        }
+        let display = CaptureDisplay(id: 41,
+                                     frame: CGRect(x: 0, y: 0, width: 20, height: 20),
+                                     quartzBounds: CGRect(x: 0, y: 0, width: 20, height: 20))
+        let task = Task {
+            try await provider.capture(sessionID: UUID(), displays: [display])
+        }
+        try await Task.sleep(for: .milliseconds(2))
+        task.cancel()
+        do {
+            _ = try await task.value
+            throw TestFailure("Cancelled capture published its synchronous result")
+        } catch is CancellationError {
+            return
+        }
+    }
+
+    private static func testDuplicateDisplaysFailBeforeCapture() async throws {
+        let recorder = CaptureRecorder()
+        let provider = DirectScreenSnapshotProvider { bounds in
+            try recorder.capture(bounds: bounds)
+        }
+        let display = CaptureDisplay(id: 51,
+                                     frame: CGRect(x: 0, y: 0, width: 20, height: 20),
+                                     quartzBounds: CGRect(x: 0, y: 0, width: 20, height: 20))
+        do {
+            _ = try await provider.capture(sessionID: UUID(), displays: [display, display])
+            throw TestFailure("Duplicate display identifiers were accepted")
+        } catch CaptureError.snapshotUnavailable {
+            try require(recorder.callCount == 0,
+                        "Duplicate display validation ran after pixel capture")
+        }
     }
 
     private static func solidImage(width: Int, height: Int, red: CGFloat) throws -> CGImage {

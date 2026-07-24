@@ -1,5 +1,19 @@
 import AppKit
 
+enum WindowCaptureProtectionError: Error, CustomStringConvertible {
+    case auditUnavailable
+    case unprotectedWindows([CGWindowID])
+
+    var description: String {
+        switch self {
+        case .auditUnavailable:
+            return "WindowServer protection audit is unavailable"
+        case .unprotectedWindows(let numbers):
+            return "Unprotected QuickShot windows: \(numbers)"
+        }
+    }
+}
+
 enum WindowCaptureProtection {
     @MainActor
     private static var externalWindowProviders: [() -> NSWindow?] = []
@@ -22,12 +36,16 @@ enum WindowCaptureProtection {
     }
 
     @MainActor
-    static func unprotectedOnScreenWindowNumbers() -> [CGWindowID]? {
-        guard let windowInfo = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
-            return nil
+    static func auditOnScreenWindows(
+        windowInfoProvider: () -> [[String: Any]]? = copyOnScreenWindowInfo
+    ) throws {
+        guard let windowInfo = windowInfoProvider() else {
+            throw WindowCaptureProtectionError.auditUnavailable
         }
-        return unprotectedWindowNumbers(in: windowInfo, ownerPID: getpid())
+        let unprotected = unprotectedWindowNumbers(in: windowInfo, ownerPID: getpid())
+        guard unprotected.isEmpty else {
+            throw WindowCaptureProtectionError.unprotectedWindows(unprotected)
+        }
     }
 
     static func unprotectedWindowNumbers(in windowInfo: [[String: Any]],
@@ -48,5 +66,11 @@ enum WindowCaptureProtection {
         return (NSApp.windows + externalWindowProviders.compactMap { $0() }).filter { window in
             seen.insert(ObjectIdentifier(window)).inserted
         }
+    }
+
+    private static func copyOnScreenWindowInfo() -> [[String: Any]]? {
+        CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID) as? [[String: Any]]
     }
 }

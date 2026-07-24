@@ -9,35 +9,23 @@ struct DirectScreenSnapshotProvider: Sendable {
     nonisolated private static let log = Logger(subsystem: "com.iiii.quickshot",
                                                 category: "capture")
     private let captureImage: CaptureImage
+    private let maximumAcceptedDisplaySkew: TimeInterval
 
     init() {
         captureImage = { bounds in
             try LegacyWindowSnapshotBackend.capture(bounds: bounds)
         }
+        maximumAcceptedDisplaySkew = 0.120
     }
 
-    init(captureImage: @escaping CaptureImage) {
+    init(maximumAcceptedDisplaySkew: TimeInterval = 0.120,
+         captureImage: @escaping CaptureImage) {
         self.captureImage = captureImage
+        self.maximumAcceptedDisplaySkew = maximumAcceptedDisplaySkew
     }
 
     static var isDirectCaptureAvailable: Bool {
         LegacyWindowSnapshotBackend.isAvailable
-    }
-
-    /// Pays the one-time WindowServer setup cost without retaining or publishing pixels.
-    /// The tiny probe shares the same compositor path as a real full-display request.
-    func prepare(quartzBounds: CGRect) throws {
-        guard quartzBounds.width > 0, quartzBounds.height > 0 else { return }
-        let probe = CGRect(x: quartzBounds.minX,
-                           y: quartzBounds.minY,
-                           width: min(64, quartzBounds.width),
-                           height: min(64, quartzBounds.height))
-        let startedAt = CFAbsoluteTimeGetCurrent()
-        try DirectCaptureLane.shared.sync {
-            _ = try autoreleasepool { try captureImage(probe) }
-        }
-        let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
-        Self.log.info("capture direct prepare complete ms=\(elapsedMs, privacy: .public)")
     }
 
     func capture(sessionID: UUID,
@@ -63,26 +51,43 @@ struct DirectScreenSnapshotProvider: Sendable {
                 let image = try autoreleasepool {
                     try captureImage(display.quartzBounds)
                 }
+                let displayCompletedAt = CFAbsoluteTimeGetCurrent()
                 guard image.width > 0, image.height > 0 else {
                     throw CaptureError.snapshotUnavailable(
                         "Display \(display.id) returned an empty image")
                 }
-                let elapsedMs = (CFAbsoluteTimeGetCurrent() - displayStartedAt) * 1000
+                let duration = displayCompletedAt - displayStartedAt
+                let elapsedMs = duration * 1000
                 Self.log.info("capture direct display ready display=\(display.id, privacy: .public) width=\(image.width, privacy: .public) height=\(image.height, privacy: .public) ms=\(elapsedMs, privacy: .public)")
                 captured.append(FrozenScreen(displayID: display.id,
                                              frame: display.frame,
-                                             image: image))
+                                             image: image,
+                                             capturedAt: displayStartedAt + duration / 2,
+                                             captureDuration: duration))
             }
             return captured
         }
+        try Task.checkCancellation()
 
         guard screens.count == displays.count else {
             throw CaptureError.snapshotUnavailable(
                 "Captured \(screens.count) of \(displays.count) displays")
         }
-        let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
-        Self.log.info("capture direct batch ready session=\(sessionID.uuidString, privacy: .public) displays=\(screens.count, privacy: .public) ms=\(elapsedMs, privacy: .public)")
-        return FrozenSnapshotBatch(sessionID: sessionID, screens: screens)
+        let completedAt = CFAbsoluteTimeGetCurrent()
+        let timestamps = screens.map(\.capturedAt)
+        let skew = (timestamps.max() ?? startedAt) - (timestamps.min() ?? startedAt)
+        guard skew <= maximumAcceptedDisplaySkew else {
+            throw CaptureError.snapshotUnavailable(
+                "Display batch skew \(Int(skew * 1000))ms exceeds "
+                    + "\(Int(maximumAcceptedDisplaySkew * 1000))ms")
+        }
+        let elapsedMs = (completedAt - startedAt) * 1000
+        Self.log.info("capture direct batch ready session=\(sessionID.uuidString, privacy: .public) displays=\(screens.count, privacy: .public) skewMs=\(skew * 1000, privacy: .public) ms=\(elapsedMs, privacy: .public)")
+        return FrozenSnapshotBatch(sessionID: sessionID,
+                                   screens: screens,
+                                   captureStartedAt: startedAt,
+                                   captureCompletedAt: completedAt,
+                                   maximumDisplaySkew: skew)
     }
 }
 

@@ -30,33 +30,17 @@ final class CaptureController {
         prewarmTask?.cancel()
         let prewarmID = UUID()
         self.prewarmID = prewarmID
-        let provider = snapshotProvider
-        let preparationBounds = (NSScreen.main ?? NSScreen.screens.first).map { screen in
-            let displayID = CGDirectDisplayID(
-                (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
-            return CGDisplayBounds(displayID)
-        }
         prewarmTask = Task.detached(priority: .utility) { [weak self] in
             let startedAt = CFAbsoluteTimeGetCurrent()
             let granted = CGPreflightScreenCaptureAccess()
             let directAvailable = DirectScreenSnapshotProvider.isDirectCaptureAvailable
-            var preparationSucceeded = false
-            if granted, directAvailable, let preparationBounds, !Task.isCancelled {
-                do {
-                    try provider.prepare(quartzBounds: preparationBounds)
-                    preparationSucceeded = true
-                } catch {
-                    Self.log.error("capture prewarm prepare failed error=\(String(describing: error), privacy: .public)")
-                }
-            }
             let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
-            let didPrepare = preparationSucceeded
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
                 guard let self, self.prewarmID == prewarmID, !Task.isCancelled else { return }
                 self.hasScreenCaptureAccess = granted
                 UserDefaults.standard.set(granted, forKey: Self.permissionGrantedKey)
-                Self.log.info("capture prewarm permission=\(granted, privacy: .public) direct=\(directAvailable, privacy: .public) prepared=\(didPrepare, privacy: .public) ms=\(elapsedMs, privacy: .public)")
+                Self.log.info("capture prewarm permission=\(granted, privacy: .public) direct=\(directAvailable, privacy: .public) pixels=false ms=\(elapsedMs, privacy: .public)")
             }
         }
     }
@@ -95,10 +79,11 @@ final class CaptureController {
         }
 
         let protectedCount = WindowCaptureProtection.protectAllApplicationWindows()
-        if let unprotected = WindowCaptureProtection.unprotectedOnScreenWindowNumbers(),
-           !unprotected.isEmpty {
+        do {
+            try WindowCaptureProtection.auditOnScreenWindows()
+        } catch {
             handleCaptureError(CaptureError.captureStackUnavailable(
-                "Unprotected QuickShot windows: \(unprotected)"))
+                String(describing: error)))
             return
         }
         Self.log.info("capture windows protected count=\(protectedCount, privacy: .public)")
@@ -326,9 +311,16 @@ private final class CaptureSession {
 
         let expectedIDs = Set(screens.map(Self.displayID))
         let receivedIDs = Set(batch.screens.map(\.displayID))
-        guard expectedIDs == receivedIDs else {
+        guard batch.screens.count == expectedIDs.count,
+              receivedIDs.count == batch.screens.count,
+              expectedIDs == receivedIDs else {
             fail(CaptureError.snapshotUnavailable(
                 "Display set mismatch expected=\(expectedIDs) received=\(receivedIDs)"))
+            return
+        }
+        guard batch.maximumDisplaySkew <= 0.120 else {
+            fail(CaptureError.snapshotUnavailable(
+                "Display batch skew exceeds the 120ms product bound"))
             return
         }
 

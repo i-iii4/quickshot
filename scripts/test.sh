@@ -40,7 +40,8 @@ CAPTURE_HOT_PATH_OUT="$(mktemp -t quickshot-capture-hot-path-tests)"
 CAPTURE_GESTURE_OUT="$(mktemp -t quickshot-capture-gesture-tests)"
 CAPTURE_SEQUENCE_OUT="$(mktemp -t quickshot-capture-sequence-tests)"
 CAPTURE_ARTIFACT_OUT="$(mktemp -t quickshot-capture-artifact-tests)"
-trap 'rm -f "$OUT" "$SURFACE_OUT" "$STATUS_LAYOUT_OUT" "$TRAY_POINTER_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT"' EXIT
+WINDOW_PROTECTION_OUT="$(mktemp -t quickshot-window-protection-tests)"
+trap 'rm -f "$OUT" "$SURFACE_OUT" "$STATUS_LAYOUT_OUT" "$TRAY_POINTER_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT"' EXIT
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -75,6 +76,17 @@ xcrun swiftc \
   -o "$CAPTURE_ARTIFACT_OUT"
 
 "$CAPTURE_ARTIFACT_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 5 \
+  -framework AppKit \
+  Sources/WindowCaptureProtection.swift \
+  Tests/WindowCaptureProtectionTests.swift \
+  -o "$WINDOW_PROTECTION_OUT"
+
+"$WINDOW_PROTECTION_OUT"
 
 # Pixel timing is a product contract, so exercise the same optimized Native SDK
 # renderer that ships in QuickShot instead of measuring the debug reference path.
@@ -492,8 +504,12 @@ rg -F -q "private var prewarmTask: Task<Void, Never>?" Sources/CaptureController
 rg -F -q "private var prewarmID = UUID()" Sources/CaptureController.swift
 rg -F -q "prewarmTask?.cancel()" Sources/CaptureController.swift
 rg -F -q "prewarmTask = Task.detached" Sources/CaptureController.swift
-rg -F -q "provider.prepare(quartzBounds: preparationBounds)" Sources/CaptureController.swift
-rg -F -q "func prepare(quartzBounds: CGRect)" Sources/DirectScreenSnapshotProvider.swift
+if output="$(rg -n "provider\\.prepare\\(|func prepare\\(quartzBounds:" Sources/CaptureController.swift Sources/DirectScreenSnapshotProvider.swift)"; then
+  echo "$output"
+  echo "Capture prewarm regression: availability checks must not capture pixels." >&2
+  exit 1
+fi
+rg -F -q "pixels=false" Sources/CaptureController.swift
 rg -F -q "DirectCaptureLane.shared.sync" Sources/DirectScreenSnapshotProvider.swift
 rg -F -q "self.prewarmID == prewarmID" Sources/CaptureController.swift
 rg -F -q "prewarmTask = nil" Sources/CaptureController.swift
@@ -501,6 +517,8 @@ rg -F -q "selectionSession?.shutdown()" Sources/CaptureController.swift
 rg -F -q "private var finishingSessions: [UUID: CaptureSession] = [:]" Sources/CaptureController.swift
 rg -F -q "finishingSessions[id] = session" Sources/CaptureController.swift
 rg -q "window.sharingType = .none" Sources/WindowCaptureProtection.swift
+rg -F -q "try WindowCaptureProtection.auditOnScreenWindows()" Sources/CaptureController.swift
+rg -F -q "throw WindowCaptureProtectionError.auditUnavailable" Sources/WindowCaptureProtection.swift
 rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/Overlay.swift
 rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/ThumbnailManager.swift
 rg -q "WindowCaptureProtection.excludeFromScreenCapture" Sources/PinnedWindow.swift
