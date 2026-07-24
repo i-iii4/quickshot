@@ -15,13 +15,15 @@ import UniformTypeIdentifiers
 /// Нельзя в одной транзакции мешать writeObjects([...]) и setData(...)/setString(...) — это
 /// портит содержимое буфера; поэтому всё через declareTypes + setData/setString.
 enum Clipboard {
-    struct PreparedImage {
+    struct PreparedImage: Sendable {
         let png: Data?
         let tiff: Data?
-        let fileURLString: String?
+        let fileURL: URL?
+
+        var fileURLString: String? { fileURL?.absoluteString }
 
         var isEmpty: Bool {
-            png == nil && tiff == nil && fileURLString == nil
+            png == nil && tiff == nil && fileURL == nil
         }
     }
 
@@ -29,18 +31,21 @@ enum Clipboard {
         imageData(cgImage: cgImage, type: .png)
     }
 
-    static func prepareImage(cgImage: CGImage) -> PreparedImage {
+    static func prepareImage(cgImage: CGImage, fileURL: URL? = nil) -> PreparedImage {
         let png = pngData(cgImage: cgImage)
         let tiff = imageData(cgImage: cgImage, type: .tiff)
 
-        var fileURLString: String?
-        if let png {
-            let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("QuickShot-\(UUID().uuidString.prefix(8)).png")
-            if (try? png.write(to: url)) != nil { fileURLString = url.absoluteString }
+        var writtenURL: URL?
+        if let png, let fileURL {
+            do {
+                try png.write(to: fileURL, options: .atomic)
+                writtenURL = fileURL
+            } catch {
+                writtenURL = nil
+            }
         }
 
-        return PreparedImage(png: png, tiff: tiff, fileURLString: fileURLString)
+        return PreparedImage(png: png, tiff: tiff, fileURL: writtenURL)
     }
 
     static func copy(preparedImage prepared: PreparedImage) {
@@ -51,7 +56,9 @@ enum Clipboard {
 
         if let png = prepared.png { pb.setData(png, forType: .png) }
         if let tiff = prepared.tiff { pb.setData(tiff, forType: .tiff) }
-        if let fileURLString = prepared.fileURLString { pb.setString(fileURLString, forType: .fileURL) }
+        if let fileURLString = prepared.fileURLString {
+            pb.setString(fileURLString, forType: .fileURL)
+        }
     }
 
     static func prepareImages(cgImages: [CGImage]) -> [PreparedImage] {
@@ -102,7 +109,9 @@ enum Clipboard {
         let item = NSPasteboardItem()
         if let png = prepared.png { item.setData(png, forType: .png) }
         if let tiff = prepared.tiff { item.setData(tiff, forType: .tiff) }
-        if let fileURLString = prepared.fileURLString { item.setString(fileURLString, forType: .fileURL) }
+        if let fileURLString = prepared.fileURLString {
+            item.setString(fileURLString, forType: .fileURL)
+        }
         return item
     }
 
@@ -125,7 +134,7 @@ enum Clipboard {
         var types: [NSPasteboard.PasteboardType] = []
         if prepared.png != nil { types.append(.png) }
         if prepared.tiff != nil { types.append(.tiff) }
-        if prepared.fileURLString != nil { types.append(.fileURL) }
+        if prepared.fileURL != nil { types.append(.fileURL) }
         return types
     }
 }

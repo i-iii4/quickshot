@@ -18,6 +18,7 @@ struct CaptureHotPathStaticTests {
             let hotKey = try source("Sources/GlobalHotKey.swift")
             let protection = try source("Sources/WindowCaptureProtection.swift")
             let clipboard = try source("Sources/Clipboard.swift")
+            let artifact = try source("Sources/CaptureArtifact.swift")
             let thumbnailManager = try source("Sources/ThumbnailManager.swift")
             let thumbnailWindow = try source("Sources/ThumbnailWindow.swift")
             let pinnedWindow = try source("Sources/PinnedWindow.swift")
@@ -40,9 +41,11 @@ struct CaptureHotPathStaticTests {
             try testProtectedTrayPresentation(capture: capture,
                                               thumbnailManager: thumbnailManager,
                                               windowLevels: windowLevels)
-            try testObservableTimingAndDelivery(capture)
+            try testObservableTimingAndDelivery(capture: capture, artifact: artifact)
             try testClipboardPayloadPreparationIsCentralized(
                 clipboardSource: clipboard,
+                artifactSource: artifact,
+                captureSource: capture,
                 thumbnailManagerSource: thumbnailManager,
                 thumbnailWindowSource: thumbnailWindow,
                 pinnedWindowSource: pinnedWindow)
@@ -300,7 +303,8 @@ struct CaptureHotPathStaticTests {
                     "Protected tray level is missing")
     }
 
-    private static func testObservableTimingAndDelivery(_ capture: String) throws {
+    private static func testObservableTimingAndDelivery(capture: String,
+                                                        artifact: String) throws {
         for token in ["capture direct snapshot pending", "capture frozen ready",
                       "capture overlay ready", "mouseUpToCardMs", "capture end outcome="] {
             try require(capture.contains(token), "Missing capture timing token: \(token)")
@@ -309,14 +313,17 @@ struct CaptureHotPathStaticTests {
                                         after: "final class CaptureController")
         try require(delivery.contains("capture thumbnail added"),
                     "Thumbnail delivery must remain observable")
-        try require(delivery.contains("Clipboard.prepareImage(cgImage: image)"),
-                    "Clipboard encoding must remain centralized")
-        try require(delivery.contains("capture delivery outcome=completed"),
-                    "Successful delivery needs an explicit outcome")
+        try require(delivery.contains("artifactStore.admit(sequence: sequence, image: image)")
+                    && delivery.contains("thumbnails.add(artifact: artifact"),
+                    "Delivery must create one reusable artifact before mounting a card")
+        try require(artifact.contains("capture delivery outcome=completed"),
+                    "Successful artifact delivery needs an explicit outcome")
     }
 
     private static func testClipboardPayloadPreparationIsCentralized(
         clipboardSource: String,
+        artifactSource: String,
+        captureSource: String,
         thumbnailManagerSource: String,
         thumbnailWindowSource: String,
         pinnedWindowSource: String
@@ -325,13 +332,19 @@ struct CaptureHotPathStaticTests {
                     && clipboardSource.contains("struct PreparedImage")
                     && clipboardSource.contains("prepareImages(cgImages: [CGImage])"),
                     "Clipboard must own off-main prepared image payloads")
-        for (name, source) in [("ThumbnailManager", thumbnailManagerSource),
+        try require(artifactSource.contains("final class CaptureArtifact")
+                    && artifactSource.contains("preparedImageIfReady")
+                    && artifactSource.contains("preparationTask"),
+                    "One capture artifact must own and coalesce encoded representations")
+        for (name, source) in [("CaptureController", captureSource),
+                               ("ThumbnailManager", thumbnailManagerSource),
                                ("ThumbnailWindow", thumbnailWindowSource),
                                ("PinnedWindow", pinnedWindowSource)] {
             try require(!source.contains("NSBitmapImageRep(cgImage:")
                         && !source.contains("tiffRepresentation")
+                        && !source.contains("Clipboard.prepareImage(cgImage:")
                         && !source.contains("Clipboard.copy(cgImage:"),
-                        "\(name) must not encode copy payloads synchronously")
+                        "\(name) must reuse CaptureArtifact instead of encoding")
         }
     }
 
@@ -366,7 +379,7 @@ struct CaptureHotPathStaticTests {
                     && end.contains("inputTracker?.stop()")
                     && end.contains("overlay?.dismiss()")
                     && end.contains("frozen.removeAll()")
-                    && end.contains("onEnd(id)"),
+                    && end.contains("onEnd(id, sequence, endOutcome)"),
                     "Every terminal path must restore all session-owned resources")
         let remove = try functionBody(named: "removeSession", in: capture,
                                       after: "final class CaptureController")

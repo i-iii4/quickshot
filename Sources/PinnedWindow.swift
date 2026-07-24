@@ -3,18 +3,21 @@ import AppKit
 /// Содержимое пиннованного окна: полный кадр + Native SDK-кнопка Copy из того же
 /// House Dark-регистра, что и контролы карточек/хаба. Закрытие — системными «светофорами» окна и Esc;
 /// отдельный крестик не плодим (он дублировал бы traffic-light close). Копирование — ⌘C.
+@MainActor
 private final class PinnedContentView: NSView {
 
-    private let image: CGImage
+    private let artifact: CaptureArtifact
+    private let artifactStore: CaptureArtifactStore
     private let imageView = NSImageView()
     private let copyButton = NativePinnedCopyButtonView(frame: .zero)
     private var trackingArea: NSTrackingArea?
-    private var preparedClipboardImage: Clipboard.PreparedImage?
     var onClose: (() -> Void)?
     private var titleResetWork: DispatchWorkItem?
 
-    init(image: CGImage) {
-        self.image = image
+    init(artifact: CaptureArtifact, artifactStore: CaptureArtifactStore) {
+        self.artifact = artifact
+        self.artifactStore = artifactStore
+        let image = artifact.fullImage() ?? artifact.previewImage
         super.init(frame: .zero)
         wantsLayer = true
 
@@ -27,7 +30,6 @@ private final class PinnedContentView: NSView {
         copyButton.toolTip = "Скопировать (⌘C)"
         copyButton.isHidden = true
         addSubview(copyButton)
-        prepareClipboardPayload()
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -72,20 +74,12 @@ private final class PinnedContentView: NSView {
 
     private func doCopy() {
         copyButton.isHidden = false
-        if let preparedClipboardImage {
-            publishCopy(preparedClipboardImage)
-            return
-        }
-
-        let image = image
-        Clipboard.prepareImage(cgImage: image) { [weak self] prepared in
-            self?.preparedClipboardImage = prepared
-            self?.publishCopy(prepared)
+        artifactStore.copy(artifact) { [weak self] in
+            self?.publishCopyFeedback()
         }
     }
 
-    private func publishCopy(_ prepared: Clipboard.PreparedImage) {
-        Clipboard.copy(preparedImage: prepared)
+    private func publishCopyFeedback() {
         copyButton.isHidden = false
         copyButton.showCheck(true)
         titleResetWork?.cancel()
@@ -94,28 +88,30 @@ private final class PinnedContentView: NSView {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
     }
 
-    private func prepareClipboardPayload() {
-        let image = image
-        Clipboard.prepareImage(cgImage: image, qos: .utility) { [weak self] prepared in
-            self?.preparedClipboardImage = prepared
-        }
-    }
 }
 
 /// Полноразмерный кадр в отдельном ресайзибельном always-on-top окне (аналог Pin в
 /// CleanShot/Shottr). Открывается даблкликом или кнопкой «развернуть». Удерживает себя сам.
+@MainActor
 final class PinnedWindowController: NSObject, NSWindowDelegate {
 
     private static var live = Set<PinnedWindowController>()
     private var window: NSWindow?
+    private var artifact: CaptureArtifact?
+    private var artifactStore: CaptureArtifactStore?
 
-    static func show(image: CGImage, on screen: NSScreen) {
+    static func show(artifact: CaptureArtifact,
+                     on screen: NSScreen,
+                     artifactStore: CaptureArtifactStore) {
         let c = PinnedWindowController()
-        c.build(image: image, on: screen)
+        c.build(artifact: artifact, on: screen, artifactStore: artifactStore)
         live.insert(c)
     }
 
-    private func build(image: CGImage, on screen: NSScreen) {
+    private func build(artifact: CaptureArtifact,
+                       on screen: NSScreen,
+                       artifactStore: CaptureArtifactStore) {
+        let image = artifact.fullImage() ?? artifact.previewImage
         let scale = max(1, screen.backingScaleFactor)
         let ptW = CGFloat(image.width) / scale
         let ptH = CGFloat(image.height) / scale
@@ -134,7 +130,7 @@ final class PinnedWindowController: NSObject, NSWindowDelegate {
         win.delegate = self
         WindowCaptureProtection.excludeFromScreenCapture(win)
 
-        let content = PinnedContentView(image: image)
+        let content = PinnedContentView(artifact: artifact, artifactStore: artifactStore)
         content.onClose = { [weak win] in win?.performClose(nil) }
         win.contentView = content
 
@@ -143,10 +139,17 @@ final class PinnedWindowController: NSObject, NSWindowDelegate {
         win.makeFirstResponder(content)            // Esc/⌘C доходят до контента
         NSApp.activate(ignoringOtherApps: true)
         window = win
+        self.artifact = artifact
+        self.artifactStore = artifactStore
     }
 
     func windowWillClose(_ notification: Notification) {
         window = nil
+        if let artifact {
+            artifactStore?.releasePin(artifact)
+        }
+        artifact = nil
+        artifactStore = nil
         Self.live.remove(self)
     }
 }

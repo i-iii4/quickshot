@@ -8,8 +8,10 @@ final class CaptureController {
                                                 category: "capture")
     private static let permissionGrantedKey = "screenCaptureAccessGranted"
 
-    private let thumbnails = ThumbnailManager()
+    private let artifactStore: CaptureArtifactStore
+    private let thumbnails: ThumbnailManager
     private let snapshotProvider = DirectScreenSnapshotProvider()
+    private var sequenceGenerator = CaptureSequenceGenerator()
     private var selectionSession: CaptureSession?
     private var finishingSessions: [UUID: CaptureSession] = [:]
     private var prewarmTask: Task<Void, Never>?
@@ -17,6 +19,12 @@ final class CaptureController {
     private var hasScreenCaptureAccess: Bool? = UserDefaults.standard
         .bool(forKey: permissionGrantedKey) ? true : nil
     private var didNotifyCaptureStackFailure = false
+
+    init() {
+        let artifactStore = CaptureArtifactStore()
+        self.artifactStore = artifactStore
+        self.thumbnails = ThumbnailManager(artifactStore: artifactStore)
+    }
 
     func prewarmCapturePipeline() {
         prewarmTask?.cancel()
@@ -95,19 +103,25 @@ final class CaptureController {
         }
         Self.log.info("capture windows protected count=\(protectedCount, privacy: .public)")
 
+        let sequence = sequenceGenerator.next()
+        artifactStore.registerCapture(sequence)
         let session = CaptureSession(
+            sequence: sequence,
             snapshotProvider: snapshotProvider,
             onSelectionReleased: { [weak self] id in
                 self?.releaseSelectionSession(id: id)
             },
-            onImage: { [weak self] image, screen, mouseUpAt in
-                self?.deliverCapturedImage(image, on: screen, mouseUpAt: mouseUpAt)
+            onImage: { [weak self] sequence, image, screen, mouseUpAt in
+                self?.deliverCapturedImage(sequence: sequence,
+                                           image,
+                                           on: screen,
+                                           mouseUpAt: mouseUpAt)
             },
             onError: { [weak self] error in
                 self?.handleCaptureError(error)
             },
-            onEnd: { [weak self] id in
-                self?.removeSession(id: id)
+            onEnd: { [weak self] id, sequence, outcome in
+                self?.removeSession(id: id, sequence: sequence, outcome: outcome)
             },
             startedAt: triggerStartedAt)
         selectionSession = session
@@ -123,25 +137,30 @@ final class CaptureController {
         Self.log.info("capture selection released inFlight=\(self.finishingSessions.count, privacy: .public)")
     }
 
-    private func removeSession(id: UUID) {
+    private func removeSession(id: UUID,
+                               sequence: CaptureSequence,
+                               outcome: CaptureSessionOutcome) {
         thumbnails.endCapturePresentation(sessionID: id)
         if selectionSession?.id == id { selectionSession = nil }
         finishingSessions.removeValue(forKey: id)
+        if outcome != .completed {
+            artifactStore.markCaptureFailed(sequence)
+        }
     }
 
-    private func deliverCapturedImage(_ image: CGImage,
+    private func deliverCapturedImage(sequence: CaptureSequence,
+                                      _ image: CGImage,
                                       on screen: NSScreen,
                                       mouseUpAt: CFAbsoluteTime) {
-        thumbnails.add(image: image, on: screen)
-        let mouseUpToCardMs = (CFAbsoluteTimeGetCurrent() - mouseUpAt) * 1000
-        Self.log.info("capture thumbnail added width=\(image.width, privacy: .public) height=\(image.height, privacy: .public) mouseUpToCardMs=\(mouseUpToCardMs, privacy: .public)")
-
-        let startedAt = CFAbsoluteTimeGetCurrent()
-        Clipboard.prepareImage(cgImage: image) { prepared in
-            let prepareMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
-            Clipboard.copy(preparedImage: prepared)
-            Self.log.info("capture clipboard copied width=\(image.width, privacy: .public) height=\(image.height, privacy: .public) prepareMs=\(prepareMs, privacy: .public)")
-            Self.log.info("capture delivery outcome=completed width=\(image.width, privacy: .public) height=\(image.height, privacy: .public) prepareMs=\(prepareMs, privacy: .public)")
+        do {
+            let artifact = try artifactStore.admit(sequence: sequence, image: image)
+            thumbnails.add(artifact: artifact, on: screen)
+            let mouseUpToCardMs = (CFAbsoluteTimeGetCurrent() - mouseUpAt) * 1000
+            Self.log.info("capture thumbnail added sequence=\(sequence.rawValue, privacy: .public) width=\(image.width, privacy: .public) height=\(image.height, privacy: .public) mouseUpToCardMs=\(mouseUpToCardMs, privacy: .public)")
+        } catch {
+            artifactStore.markCaptureFailed(sequence)
+            NSApp.requestUserAttention(.criticalRequest)
+            Self.log.error("capture artifact rejected sequence=\(sequence.rawValue, privacy: .public) error=\(String(describing: error), privacy: .public)")
         }
     }
 
@@ -154,6 +173,8 @@ final class CaptureController {
         for session in finishing { session.shutdown() }
         selectionSession = nil
         finishingSessions.removeAll()
+        thumbnails.shutdown()
+        artifactStore.shutdown()
     }
 
     private func handleCaptureError(_ error: Error) {
@@ -194,6 +215,15 @@ final class CaptureController {
     }
 }
 
+private enum CaptureSessionOutcome: String {
+    case unknown
+    case completed
+    case cancelled
+    case failed
+    case shutdown
+    case ignoredSmallSelection
+}
+
 @MainActor
 private final class CaptureSession {
     nonisolated private static let log = Logger(subsystem: "com.iiii.quickshot",
@@ -208,12 +238,13 @@ private final class CaptureSession {
     }
 
     let id = UUID()
+    let sequence: CaptureSequence
 
     private let snapshotProvider: DirectScreenSnapshotProvider
     private let onSelectionReleased: (UUID) -> Void
-    private let onImage: (CGImage, NSScreen, CFAbsoluteTime) -> Void
+    private let onImage: (CaptureSequence, CGImage, NSScreen, CFAbsoluteTime) -> Void
     private let onError: (Error) -> Void
-    private let onEnd: (UUID) -> Void
+    private let onEnd: (UUID, CaptureSequence, CaptureSessionOutcome) -> Void
     private let startedAt: CFAbsoluteTime
 
     private var phase: Phase = .snapshotting
@@ -224,14 +255,16 @@ private final class CaptureSession {
     private var cropTask: Task<Void, Never>?
     private var inputTracker: CaptureInputTracker?
     private var didEnd = false
-    private var endOutcome = "unknown"
+    private var endOutcome: CaptureSessionOutcome = .unknown
 
-    init(snapshotProvider: DirectScreenSnapshotProvider,
+    init(sequence: CaptureSequence,
+         snapshotProvider: DirectScreenSnapshotProvider,
          onSelectionReleased: @escaping (UUID) -> Void,
-         onImage: @escaping (CGImage, NSScreen, CFAbsoluteTime) -> Void,
+         onImage: @escaping (CaptureSequence, CGImage, NSScreen, CFAbsoluteTime) -> Void,
          onError: @escaping (Error) -> Void,
-         onEnd: @escaping (UUID) -> Void,
+         onEnd: @escaping (UUID, CaptureSequence, CaptureSessionOutcome) -> Void,
          startedAt: CFAbsoluteTime) {
+        self.sequence = sequence
         self.snapshotProvider = snapshotProvider
         self.onSelectionReleased = onSelectionReleased
         self.onImage = onImage
@@ -359,7 +392,7 @@ private final class CaptureSession {
         guard phase == .selecting, !didEnd else { return }
         let clamped = globalRect.intersection(screen.frame)
         guard clamped.width >= 3, clamped.height >= 3 else {
-            endOutcome = "ignored-small-selection"
+            endOutcome = .ignoredSmallSelection
             phase = .finished
             end()
             return
@@ -398,14 +431,14 @@ private final class CaptureSession {
             await MainActor.run { [weak self] in
                 guard let self, self.phase == .delivering, !self.didEnd else { return }
                 guard let cropped else {
-                    self.endOutcome = "crop-failed"
+                    self.endOutcome = .failed
                     self.onError(CaptureError.snapshotUnavailable("Frozen image crop failed"))
                     self.end()
                     return
                 }
                 guard let screen = Self.screen(forDisplayID: deliveryDisplayID)
                         ?? NSScreen.main ?? NSScreen.screens.first else {
-                    self.endOutcome = "handoff-failed"
+                    self.endOutcome = .failed
                     self.onError(CaptureError.noDisplay)
                     self.end()
                     return
@@ -414,8 +447,8 @@ private final class CaptureSession {
                 let mouseUpToHandoffMs = (CFAbsoluteTimeGetCurrent() - mouseUpAt) * 1000
                 Self.log.info("capture crop complete width=\(cropped.width, privacy: .public) height=\(cropped.height, privacy: .public) cropMs=\(cropMs, privacy: .public) mouseUpToHandoffMs=\(mouseUpToHandoffMs, privacy: .public)")
                 Self.log.info("capture image handoff started width=\(cropped.width, privacy: .public) height=\(cropped.height, privacy: .public)")
-                deliver(cropped, screen, mouseUpAt)
-                self.endOutcome = "completed"
+                deliver(self.sequence, cropped, screen, mouseUpAt)
+                self.endOutcome = .completed
                 self.phase = .finished
                 self.end()
             }
@@ -425,7 +458,7 @@ private final class CaptureSession {
     private func fail(_ error: Error) {
         guard !didEnd else { return }
         phase = .cancelled
-        endOutcome = "failed"
+        endOutcome = .failed
         end()
         onError(error)
     }
@@ -433,14 +466,14 @@ private final class CaptureSession {
     private func cancel() {
         guard !didEnd else { return }
         phase = .cancelled
-        endOutcome = "cancelled"
+        endOutcome = .cancelled
         end()
     }
 
     func shutdown() {
         guard !didEnd else { return }
         phase = .cancelled
-        endOutcome = "shutdown"
+        endOutcome = .shutdown
         end()
     }
 
@@ -456,8 +489,8 @@ private final class CaptureSession {
         overlay?.dismiss()
         overlay = nil
         frozen.removeAll()
-        Self.log.info("capture end outcome=\(self.endOutcome, privacy: .public) phase=\(self.phase.rawValue, privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
-        onEnd(id)
+        Self.log.info("capture end outcome=\(self.endOutcome.rawValue, privacy: .public) phase=\(self.phase.rawValue, privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
+        onEnd(id, sequence, endOutcome)
     }
 
     private var elapsedMs: Double {

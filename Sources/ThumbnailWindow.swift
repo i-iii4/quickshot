@@ -1,6 +1,7 @@
 import AppKit
 import QuartzCore
 
+@MainActor
 private final class PassthroughImageView: NSImageView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
@@ -12,6 +13,7 @@ private final class PassthroughImageView: NSImageView {
 /// Курсор НЕ трогаем намеренно: фоновому приложению macOS менять курсор над своим окном не даёт
 /// (подтверждено Apple DevForums), любой `set/push` система перебивает стрелкой. Поэтому
 /// findability обеспечивает не вид курсора, а сама крупная предсказуемая зона вдоль всего края.
+@MainActor
 private final class EdgeHandle: NSView {
     enum Edge { case left, right, top, bottom }
     var edge: Edge = .left
@@ -48,6 +50,7 @@ private final class EdgeHandle: NSView {
 /// Тело карточки: сам скриншот (скруглённый) и Native SDK-контролы
 /// [Copy] [Dismiss] в верхнем ряду, появляются/исчезают плавным fade. Ресайз — НЕ здесь
 /// (краевая ручка `EdgeHandle`); тело отвечает за drag-out и даблклик. Курсор не трогаем.
+@MainActor
 private final class ThumbnailView: NSView, NSDraggingSource {
 
     static let feedbackHold: TimeInterval = 1.2     // сколько держать галочку «Скопировано»
@@ -57,20 +60,21 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     weak var manager: ThumbnailManager?
     var collapsed = false { didSet { if collapsed { setControlsVisible(false, animated: false) } } }
 
-    private let image: CGImage
+    private let artifact: CaptureArtifact
+    private var image: CGImage { artifact.previewImage }
     private let nsImage: NSImage
     private var displayNSImage: NSImage
     private let displayView = PassthroughImageView()
     private let controls = NativeThumbnailControlsView(frame: .zero)
-    private var preparedClipboardImage: Clipboard.PreparedImage?
     private var trackingArea: NSTrackingArea?
 
     private var startMouse: NSPoint = .zero
     private var movedFar = false
     private var titleResetWork: DispatchWorkItem?
 
-    init(image: CGImage) {
-        self.image = image
+    init(artifact: CaptureArtifact) {
+        self.artifact = artifact
+        let image = artifact.previewImage
         self.nsImage = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
         self.displayNSImage = nsImage
         super.init(frame: .zero)
@@ -93,7 +97,6 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         controls.alphaValue = 0
         controls.isHidden = true
         addSubview(controls)
-        prepareClipboardPayload()
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -199,13 +202,9 @@ private final class ThumbnailView: NSView, NSDraggingSource {
 
     private func doCopy() { if let owner { manager?.copy(owner) } }
 
-    func cachedClipboardPayload() -> Clipboard.PreparedImage? {
-        preparedClipboardImage
-    }
-
     private func openFull() {
-        guard let screen = owner?.screen ?? NSScreen.main else { return }
-        PinnedWindowController.show(image: image, on: screen)
+        guard let owner else { return }
+        manager?.pin(owner)
     }
 
     func flashCopied() {
@@ -257,28 +256,28 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     // MARK: drag-out
 
     private func beginDragOut(with event: NSEvent) {
-        let prepared = preparedClipboardImage ?? Clipboard.prepareImage(cgImage: image)
-        if preparedClipboardImage == nil { preparedClipboardImage = prepared }
-        guard let item = Clipboard.pasteboardItem(preparedImage: prepared) else { return }
+        guard let owner,
+              let item = manager?.preparedDragItem(for: owner) else { return }
         let dragItem = NSDraggingItem(pasteboardWriter: item)
         dragItem.setDraggingFrame(displayView.frame, contents: displayNSImage)
         beginDraggingSession(with: [dragItem], event: event, source: self)
     }
 
-    private func prepareClipboardPayload() {
-        let image = image
-        Clipboard.prepareImage(cgImage: image, qos: .utility) { [weak self] prepared in
-            self?.preparedClipboardImage = prepared
-        }
-    }
-
     func draggingSession(_ session: NSDraggingSession,
                          sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
+
+    func draggingSession(_ session: NSDraggingSession,
+                         endedAt screenPoint: NSPoint,
+                         operation: NSDragOperation) {
+        guard let owner else { return }
+        manager?.finishDrag(owner)
+    }
 }
 
 /// Контейнер карточки: больше карточки на `resizeBand` с каждой стороны (поле под краевую ручку,
 /// которая центрирована на крае и слегка выходит наружу). Несёт тень слоем. Пустые поля
 /// (не ручка, не карточка) пропускают клики сквозь — иначе поля стали бы мёртвой зоной.
+@MainActor
 private final class CardContainer: NSView {
     var interactionsEnabled = true
     var onHoverChanged: ((Bool) -> Void)?
@@ -311,6 +310,7 @@ private final class CardContainer: NSView {
 /// Обёртка над одной карточкой — САБВЬЮ общего окна-хоста трея. `hostView` (контейнер) на
 /// `resizeBand` больше карточки с каждой стороны; вдоль внутренней стороны сидит одна краевая
 /// ручка ресайза. Motion держит layout-frame неподвижным и меняет только transform/opacity.
+@MainActor
 final class ThumbnailWindow {
 
     private struct VisualState {
@@ -325,7 +325,8 @@ final class ThumbnailWindow {
                                          shadowOpacity: TrayAnim.restingShadowOpacity)
     }
 
-    let image: CGImage
+    let artifact: CaptureArtifact
+    var image: CGImage { artifact.previewImage }
     let screen: NSScreen
     private(set) var cardWidth: CGFloat
     private(set) var cardHeight: CGFloat = 0
@@ -347,12 +348,16 @@ final class ThumbnailWindow {
         set { container.onHoverChanged = newValue }
     }
 
-    init(image: CGImage, screen: NSScreen, manager: ThumbnailManager, width: CGFloat, screenHeight: CGFloat) {
-        self.image = image
+    init(artifact: CaptureArtifact,
+         screen: NSScreen,
+         manager: ThumbnailManager,
+         width: CGFloat,
+         screenHeight: CGFloat) {
+        self.artifact = artifact
         self.screen = screen
         self.cardWidth = width
 
-        view = ThumbnailView(image: image)
+        view = ThumbnailView(artifact: artifact)
 
         container.wantsLayer = true
         if let l = container.layer {
@@ -428,8 +433,6 @@ final class ThumbnailWindow {
 
     func setCollapsed(_ b: Bool) { view.collapsed = b }
     func flashCopied() { view.flashCopied() }
-    func cachedClipboardPayload() -> Clipboard.PreparedImage? { view.cachedClipboardPayload() }
-
 #if TESTING
     struct CollectionDebugSnapshot {
         let isHidden: Bool

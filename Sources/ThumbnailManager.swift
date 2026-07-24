@@ -42,9 +42,11 @@ final class TrayHostPanel: NSPanel {
 /// (сворачивание) или проявляет обратно (разворачивание). Новый снимок в свёрнутом трее
 /// показывается как короткое подтверждение, не меняя состояние трея.
 /// Общая ширина карточки сохраняется между сессиями.
+@MainActor
 final class ThumbnailManager {
 
     private var items: [ThumbnailWindow] = []
+    private let artifactStore: CaptureArtifactStore
     private var collapsed = false
     private var anchorScreen: NSScreen?
     private let hub = HubWindow()
@@ -71,7 +73,8 @@ final class ThumbnailManager {
 
     private(set) var cardWidth: CGFloat = ThumbStyle.defaultWidth
 
-    init() {
+    init(artifactStore: CaptureArtifactStore) {
+        self.artifactStore = artifactStore
         host = TrayHostPanel(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         host.isOpaque = false
@@ -334,7 +337,7 @@ final class ThumbnailManager {
 
     // MARK: добавление/удаление
 
-    func add(image: CGImage, on screen: NSScreen) {
+    func add(artifact: CaptureArtifact, on screen: NSScreen) {
         finishCollectionMotion()
         finishTrayMotion()
         cancelCollapsedPeekDismiss()
@@ -346,13 +349,17 @@ final class ThumbnailManager {
         let oldFrames = Dictionary(uniqueKeysWithValues: items.map {
             (ObjectIdentifier($0), $0.layoutFrame)
         })
-        let t = ThumbnailWindow(image: image, screen: screen, manager: self,
+        let t = ThumbnailWindow(artifact: artifact, screen: screen, manager: self,
                                 width: cardWidth, screenHeight: screen.frame.height)
         t.onHoverChanged = { [weak self, weak t] entered in
             guard let self, let t else { return }
             self.thumbnailHoverChanged(t, entered: entered)
         }
-        items.append(t)
+        let insertionIndex = captureInsertionIndex(
+            for: artifact.sequence,
+            in: items,
+            sequenceOf: { $0.artifact.sequence })
+        items.insert(t, at: insertionIndex)
         followsNewest = true
         hostContent.addSubview(t.hostView, positioned: .below, relativeTo: hub.view)  // новейшая — поверх старых, под хабом
         for it in items { it.applyWidth(cardWidth, screenHeight: screen.frame.height) }
@@ -591,7 +598,7 @@ final class ThumbnailManager {
         let immediateRemoved = removed.filter { candidate in
             !animatedRemoved.contains(where: { $0 === candidate })
         }
-        for item in immediateRemoved { item.close() }
+        for item in immediateRemoved { closeAndRelease(item) }
         if animateCards {
             for item in animatedRemoved {
                 item.prepareRemoval(toward: collectionDirectionalOffset(), reduceMotion: reduceMotion)
@@ -612,7 +619,7 @@ final class ThumbnailManager {
             guard let self else { return }
             for (item, _) in reflowing { item.finishCollectionMotion() }
             for item in entering { item.finishCollectionMotion() }
-            for item in animatedRemoved { item.close() }
+            for item in animatedRemoved { self.closeAndRelease(item) }
             self.hub.setCountTransitionProgress(1)
             if self.items.isEmpty {
                 self.collapsed = false
@@ -723,27 +730,14 @@ final class ThumbnailManager {
 
     /// Копирование НЕ закрывает карточку — только короткий фидбэк.
     func copy(_ t: ThumbnailWindow) {
-        if let prepared = t.cachedClipboardPayload() {
-            Clipboard.copy(preparedImage: prepared)
-            t.flashCopied()
-            return
-        }
-
-        let image = t.image
-        Clipboard.prepareImage(cgImage: image) { [weak t] prepared in
-            Clipboard.copy(preparedImage: prepared)
-            t?.flashCopied()
-        }
+        artifactStore.copy(t.artifact) { [weak t] in t?.flashCopied() }
     }
 
     func copyAll() {
-        let images = items.map(\.image)
-        guard !images.isEmpty else { return }
+        let artifacts = items.map(\.artifact)
+        guard !artifacts.isEmpty else { return }
         let last = items.last
-        Clipboard.prepareImages(cgImages: images) { [weak last] prepared in
-            Clipboard.copy(preparedImages: prepared)
-            last?.flashCopied()
-        }
+        artifactStore.copyAll(artifacts) { [weak last] in last?.flashCopied() }
     }
 
     func deleteAll() {
@@ -763,7 +757,7 @@ final class ThumbnailManager {
             panel.allowedContentTypes = [.png]
             panel.canCreateDirectories = true
             guard panel.runModal() == .OK, let url = panel.url else { return }
-            writePNG(items[0].image, to: url)
+            writeArtifact(items[0].artifact, to: url)
             return
         }
 
@@ -779,7 +773,7 @@ final class ThumbnailManager {
 
         for (index, item) in items.enumerated() {
             let url = folder.appendingPathComponent(defaultFileName(index: index + 1))
-            writePNG(item.image, to: url)
+            writeArtifact(item.artifact, to: url)
         }
     }
 
@@ -790,13 +784,47 @@ final class ThumbnailManager {
         return "QuickShot-\(formatter.string(from: Date()))\(suffix).png"
     }
 
-    private func writePNG(_ image: CGImage, to url: URL) {
-        guard let data = Clipboard.pngData(cgImage: image) else { return }
-        do {
-            try data.write(to: url, options: .atomic)
-        } catch {
-            NSLog("QuickShot: save failed: \(error)")
+    private func writeArtifact(_ artifact: CaptureArtifact, to url: URL) {
+        Task { @MainActor in
+            let prepared = await artifact.preparedImage()
+            guard let data = prepared.png else { return }
+            do {
+                try data.write(to: url, options: .atomic)
+            } catch {
+                NSLog("QuickShot: save failed: \(error)")
+            }
         }
+    }
+
+    func pin(_ t: ThumbnailWindow) {
+        artifactStore.retainPin(t.artifact)
+        PinnedWindowController.show(artifact: t.artifact,
+                                    on: t.screen,
+                                    artifactStore: artifactStore)
+    }
+
+    func preparedDragItem(for t: ThumbnailWindow) -> NSPasteboardItem? {
+        artifactStore.preparedPasteboardItem(for: t.artifact)
+    }
+
+    func finishDrag(_ t: ThumbnailWindow) {
+        artifactStore.finishDrag(of: t.artifact)
+    }
+
+    func shutdown() {
+        finishCollectionMotion()
+        finishTrayMotion()
+        cancelCollapsedPeekDismiss()
+        cancelHoverExit()
+        for item in items { closeAndRelease(item) }
+        items.removeAll()
+        host.orderOut(nil)
+        refreshHostPointerRouting()
+    }
+
+    private func closeAndRelease(_ item: ThumbnailWindow) {
+        item.close()
+        artifactStore.releaseCard(item.artifact)
     }
 
     // MARK: ресайз (общая ширина, сохраняется между сессиями)

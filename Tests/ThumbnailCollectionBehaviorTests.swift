@@ -93,9 +93,17 @@ struct ThumbnailCollectionBehaviorTests {
               let image = context.makeImage() else {
             throw Failure("Could not create test image")
         }
-        return ThumbnailWindow(image: image,
+        let sequence = CaptureSequence(rawValue: UInt64.random(in: 1...UInt64.max))
+        let store = CaptureArtifactStore(
+            rootURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("QuickShotThumbnailTests-\(UUID().uuidString)"),
+            currentPasteboardFiles: { Set<URL>() },
+            publishClipboard: { _ in })
+        store.registerCapture(sequence)
+        let artifact = try store.admit(sequence: sequence, image: image)
+        return ThumbnailWindow(artifact: artifact,
                                screen: screen,
-                               manager: ThumbnailManager(),
+                               manager: ThumbnailManager(artifactStore: store),
                                width: 240,
                                screenHeight: screen.frame.height)
     }

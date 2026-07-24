@@ -38,7 +38,9 @@ PRESENTATION_OUT="$(mktemp -t quickshot-selection-presentation-tests)"
 DIRECT_CAPTURE_OUT="$(mktemp -t quickshot-direct-capture-tests)"
 CAPTURE_HOT_PATH_OUT="$(mktemp -t quickshot-capture-hot-path-tests)"
 CAPTURE_GESTURE_OUT="$(mktemp -t quickshot-capture-gesture-tests)"
-trap 'rm -f "$OUT" "$SURFACE_OUT" "$STATUS_LAYOUT_OUT" "$TRAY_POINTER_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT"' EXIT
+CAPTURE_SEQUENCE_OUT="$(mktemp -t quickshot-capture-sequence-tests)"
+CAPTURE_ARTIFACT_OUT="$(mktemp -t quickshot-capture-artifact-tests)"
+trap 'rm -f "$OUT" "$SURFACE_OUT" "$STATUS_LAYOUT_OUT" "$TRAY_POINTER_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT"' EXIT
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -49,6 +51,30 @@ xcrun swiftc \
   -o "$CAPTURE_GESTURE_OUT"
 
 "$CAPTURE_GESTURE_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 5 \
+  Sources/CaptureSequence.swift \
+  Tests/CaptureSequenceTests.swift \
+  -o "$CAPTURE_SEQUENCE_OUT"
+
+"$CAPTURE_SEQUENCE_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 5 \
+  -framework AppKit \
+  -framework ImageIO \
+  Sources/CaptureSequence.swift \
+  Sources/Clipboard.swift \
+  Sources/CaptureArtifact.swift \
+  Tests/CaptureArtifactTests.swift \
+  -o "$CAPTURE_ARTIFACT_OUT"
+
+"$CAPTURE_ARTIFACT_OUT"
 
 # Pixel timing is a product contract, so exercise the same optimized Native SDK
 # renderer that ships in QuickShot instead of measuring the debug reference path.
@@ -142,6 +168,7 @@ xcrun swiftc \
   -D TESTING \
   -framework AppKit \
   -framework CoreGraphics \
+  -framework ImageIO \
   -framework QuartzCore \
   Sources/CaptureWindowLevels.swift \
   Sources/WindowCaptureProtection.swift \
@@ -149,7 +176,9 @@ xcrun swiftc \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
   Sources/NativeHubView.swift \
+  Sources/CaptureSequence.swift \
   Sources/Clipboard.swift \
+  Sources/CaptureArtifact.swift \
   Sources/CardSizing.swift \
   Sources/TrayHostContentView.swift \
   Sources/HubWindow.swift \
@@ -170,9 +199,10 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   -target "${ARCH}-apple-macos${DEPLOY}" \
   -swift-version 5 \
   -D TESTING \
-  -framework AppKit \
-  -framework CoreGraphics \
-  -framework QuartzCore \
+	  -framework AppKit \
+	  -framework CoreGraphics \
+	  -framework ImageIO \
+	  -framework QuartzCore \
   Sources/TrayHostContentView.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
@@ -197,8 +227,10 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/Theme.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
-  Sources/NativeHubView.swift \
-  Sources/Clipboard.swift \
+	  Sources/NativeHubView.swift \
+	  Sources/CaptureSequence.swift \
+	  Sources/Clipboard.swift \
+	  Sources/CaptureArtifact.swift \
   Sources/CardSizing.swift \
   Sources/TrayHostContentView.swift \
   Sources/HubWindow.swift \
@@ -358,10 +390,11 @@ rg -q "presentCaptureStackFailureNotice" Sources/CaptureController.swift
 rg -q "didNotifyCaptureStackFailure" Sources/CaptureController.swift
 rg -F -q "NSApp.requestUserAttention(.informationalRequest)" Sources/CaptureController.swift
 rg -F -q "captureStackUnavailable(String)" Sources/CaptureTypes.swift
-rg -q "capture clipboard copied" Sources/CaptureController.swift
+rg -q "capture clipboard copied" Sources/CaptureArtifact.swift
 rg -q "capture image handoff started" Sources/CaptureController.swift
-rg -q "capture delivery outcome=completed" Sources/CaptureController.swift
-rg -F -q "Clipboard.prepareImage(cgImage: image)" Sources/CaptureController.swift
+rg -q "capture delivery outcome=completed" Sources/CaptureArtifact.swift
+rg -F -q "artifactStore.admit(sequence: sequence, image: image)" Sources/CaptureController.swift
+rg -F -q "preparationTask" Sources/CaptureArtifact.swift
 rg -q "struct PreparedImage" Sources/Clipboard.swift
 rg -q "import ImageIO" Sources/Clipboard.swift
 rg -F -q "prepareImages(cgImages: [CGImage])" Sources/Clipboard.swift
@@ -371,7 +404,7 @@ if output="$(rg -n "copy\\(cgImage:|copyAll\\(cgImages:" Sources/Clipboard.swift
   echo "Clipboard architecture regression: Clipboard must not expose synchronous image-copy convenience APIs." >&2
   exit 1
 fi
-rg -q "cachedClipboardPayload" Sources/ThumbnailManager.swift
+rg -F -q "artifactStore.copy(t.artifact)" Sources/ThumbnailManager.swift
 rg -F -q "thumbnailLayout(screenFrame:" Sources/ThumbnailManager.swift
 rg -F -q "thumbnailLayoutShowingNewest" Sources/ThumbnailManager.swift
 rg -F -q "func scrollTray(with event: NSEvent)" Sources/ThumbnailManager.swift
@@ -405,7 +438,7 @@ if ! rg -U -q 'if hidden \{\n\s*container\.interactionsEnabled = false\n\s*conta
   echo "Thumbnail regression: hidden collection completion must terminate before restoring resting alpha." >&2
   exit 1
 fi
-if output="$(awk 'index($0, "func add(image:") { active = 1 } active { print } index($0, "func remove(") { exit }' Sources/ThumbnailManager.swift | rg -n "\bexpand\(\)")"; then
+if output="$(awk 'index($0, "func add(artifact:") { active = 1 } active { print } index($0, "func remove(") { exit }' Sources/ThumbnailManager.swift | rg -n "\bexpand\(\)")"; then
   echo "$output"
   echo "Collapsed capture regression: adding a screenshot must not auto-expand the tray." >&2
   exit 1
@@ -431,9 +464,8 @@ if output="$(rg -n "items\.reversed\(\)" Sources/ThumbnailManager.swift)"; then
   echo "Thumbnail layout regression: newest screenshots must append into free slots without reflowing existing cards." >&2
   exit 1
 fi
-rg -q "prepareClipboardPayload" Sources/ThumbnailWindow.swift
-rg -q "prepareClipboardPayload" Sources/PinnedWindow.swift
-if output="$(rg -n "NSBitmapImageRep\\(cgImage:|tiffRepresentation|Clipboard\\.copy\\(cgImage:" Sources/ThumbnailManager.swift Sources/ThumbnailWindow.swift Sources/PinnedWindow.swift)"; then
+rg -q "preparedImageIfReady" Sources/CaptureArtifact.swift
+if output="$(rg -n "NSBitmapImageRep\\(cgImage:|tiffRepresentation|Clipboard\\.(copy|prepareImage)\\(cgImage:" Sources/CaptureController.swift Sources/ThumbnailManager.swift Sources/ThumbnailWindow.swift Sources/PinnedWindow.swift)"; then
   echo "$output"
   echo "Clipboard architecture regression: card and pinned copy/drag paths must use prepared Clipboard payloads." >&2
   exit 1
@@ -450,10 +482,10 @@ if output="$(awk 'index($0, "private func selectionCompleted(") { in_body = 1 } 
   echo "Capture completion regression: mouse-up must only hand off the frozen image." >&2
   exit 1
 fi
-rg -q "endOutcome = \"completed\"" Sources/CaptureController.swift
-rg -q "endOutcome = \"cancelled\"" Sources/CaptureController.swift
-rg -q "endOutcome = \"shutdown\"" Sources/CaptureController.swift
-rg -q "endOutcome = \"ignored-small-selection\"" Sources/CaptureController.swift
+rg -q "endOutcome = \\.completed" Sources/CaptureController.swift
+rg -q "endOutcome = \\.cancelled" Sources/CaptureController.swift
+rg -q "endOutcome = \\.shutdown" Sources/CaptureController.swift
+rg -q "endOutcome = \\.ignoredSmallSelection" Sources/CaptureController.swift
 rg -F -q "capture.shutdown()" Sources/AppDelegate.swift
 rg -F -q "func shutdown()" Sources/CaptureController.swift
 rg -F -q "private var prewarmTask: Task<Void, Never>?" Sources/CaptureController.swift
