@@ -1,7 +1,8 @@
 # QuickShot Capture Architecture
 
-Status: remediation implemented; automated release gates pass locally. The
-manual runtime and latency gate remains pending for the exact release build.
+Status: remediation implemented; automated release gates pass locally and in
+CI. The manual runtime and latency gate remains pending for the exact release
+build.
 
 Audited baseline: `d54b267`.
 
@@ -38,6 +39,9 @@ and the remaining release gates.
   failure tests prove that the previous valid app remains unchanged.
 - The default headless suite includes 100 randomized delivery lifecycles, 100
   fake-backend lifecycles, and a 100-artifact resource and cleanup stress test.
+- GitHub Actions run `30113252125` passed the complete clean-runner matrix on
+  `macos-26`: pinned dependency resolution, headless tests, production
+  build/signature, and failed-build preservation.
 
 The remaining release evidence is intentionally manual: cursor appearance,
 fullscreen Spaces, source hover preservation, physical display combinations,

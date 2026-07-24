@@ -68,6 +68,10 @@ Motion, а направление обычного roll независимо з�
 - production Swift 6 build и `codesign --verify --deep --strict`;
 - atomic replacement и три failure-preservation сценария.
 
+GitHub Actions run `30113252125` повторил полный набор на чистом `macos-26` и
+завершился успешно: dependency lock, headless suite, production build/signature
+и failure-preservation подтверждены вне локального окружения.
+
 Ручные проверки cursor appearance, fullscreen Spaces, реальных конфигураций
 дисплеев и p50/p95 latency намеренно не запускались автоматически: они
 перехватывают ввод и показывают capture UI на активном экране. Они остаются
