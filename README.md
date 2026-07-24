@@ -89,10 +89,12 @@ Visual references are stored in `reference/screenshots/`.
 
 ## Capture Implementation Status
 
-QuickShot now uses a direct, session-owned CoreGraphics snapshot at the hotkey
+QuickShot uses a direct, session-owned CoreGraphics snapshot at the hotkey
 moment, then presents the established custom cursor and frame over immutable
 per-display backdrops. Mouse-up crops that same image; there is no stream cache,
-system capture subprocess, temporary PNG, or second screenshot.
+system capture subprocess, temporary PNG pixel source, or second screenshot.
+Post-crop clipboard files are delivery artifacts and are covered by the cleanup
+and ownership work in the remediation plan.
 
 After frozen pixels are ready, the selector acquires foreground ownership and one
 session-owned AppKit cursor lease before revealing its custom crosshair. The
@@ -101,12 +103,13 @@ chrome, but its full-screen host accepts pointer events only directly above visi
 controls. A finite scrollable viewport keeps every screenshot reachable; new
 captures always enter the visible range instead of creating overflow windows.
 
-The default suite verifies provider freshness, serialized full-resolution display
-capture, geometry, crop and session lifecycle, single-owner cursor suppression,
-protected window layering, deterministic tray overflow, selection visuals, and
-absence of retired capture paths. Manual runtime acceptance confirms one custom
-cursor and immediate desktop input after capture. Repeated capture latency,
-fullscreen Spaces, and unusual multi-display checks remain explicit runtime gates.
+The current default suite and production build pass, but the 24 July 2026
+architecture audit found release blockers in early gesture replay, concurrent
+delivery ordering, and artifact cleanup, plus structural gaps in protection,
+multi-display timing, concurrency enforcement, and build reproducibility.
+Passing the current suite is therefore not release evidence. The staged
+remediation and its Definition of Done are recorded in
+`CAPTURE_ARCHITECTURE.md`.
 
 See `CAPTURE_ARCHITECTURE.md` for the component boundaries, migration plan, and
 definition of done.
@@ -120,12 +123,14 @@ catalog, and reusable markup contracts live in the sibling project:
 /Users/i_iii/Проекты/native-ui-design-system
 ```
 
-`build.sh` and `scripts/test.sh` call that project's `scripts/check.sh` before
-compiling QuickShot UI. Override its location with `NATIVE_DESIGN_SYSTEM_DIR`.
-QuickShot does not keep a private copy of the catalog or composition validator.
-Production builds and the default regression suite link the Native UI library
-in `ReleaseFast`, so motion and render budgets exercise the shipped path. Debug
-builds remain available for explicit diagnostics.
+`build.sh` and `scripts/test.sh` currently call that project's `scripts/check.sh`
+before compiling QuickShot UI. The current sibling-path integration is not yet
+reproducibly pinned; remediation will use one resolved dependency input and a
+locked design-system revision. QuickShot does not keep a private copy of the
+catalog or composition validator. Production builds and the default regression
+suite link the Native UI library in `ReleaseFast`, so motion and render budgets
+exercise the shipped path. Debug builds remain available for explicit
+diagnostics.
 
 ## Build
 

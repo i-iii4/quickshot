@@ -86,10 +86,11 @@ fullscreen behavior remain explicit runtime release checks.
    `130ms` exit. Hover holds it until pointer exit plus the normal grace period.
 6. Hub action buttons are clickable and do not accidentally toggle collapse.
 7. Per-thumbnail `Copy`, close, resize, and card interactions remain clickable.
-8. Thumbnail geometry is append-only: adding a screenshot never changes any
-   existing card origin. The new screenshot takes the next free slot away from
-   the hub (above the stack for the current bottom-anchored vertical layout;
-   below it when that anchor direction is mirrored).
+8. While a free visible slot exists, thumbnail geometry is append-only: the new
+   screenshot takes the next slot away from the hub and existing cards keep
+   their origins. Once the finite viewport is full, it advances
+   deterministically toward the newest screenshot; older cards remain ordered
+   and scroll-reachable, and no card may appear at a stale/default coordinate.
 9. The tray/hub position is based on full screen frames and may overlap Dock or
    menu bar.
 10. The hub is a compact Vercel/Native-inspired icon+label command surface
@@ -132,8 +133,11 @@ fullscreen behavior remain explicit runtime release checks.
 3. Screenshot capture, global hotkeys, overlay windows, cursor ownership,
    capture exclusion, and clipboard writes are product-critical system
    integrations. They cannot be treated as replaceable styling details.
-4. Capture lifecycle is one explicit state machine:
-   `idle -> snapshotting -> selecting -> delivering -> idle`.
+4. Capture admission is one explicit main-actor state machine:
+   `idle -> snapshotting -> selecting -> released -> idle`. Released captures
+   may finish independently, but all observable delivery is sequence-owned:
+   cards remain in capture order and an older completion cannot overwrite a
+   newer clipboard result.
 5. The production pixel provider is an isolated direct CoreGraphics one-shot.
    ScreenCaptureKit, `/usr/sbin/screencapture`, warmed streams, and frame caches
    are prohibited from the primary path.
@@ -178,3 +182,12 @@ fullscreen behavior remain explicit runtime release checks.
 6. Release verification includes ten sequential captures, normal and fullscreen
    applications, hover/tooltips, mixed-scale displays, negative display origins,
    cancellation, and the two latency budgets.
+7. Headless lifecycle tests include a complete mouse-down/drag/mouse-up before
+   snapshot readiness, `Esc` in every phase, randomized crop/encode completion
+   order, stale callback rejection, and fail-closed protection-audit failure.
+8. Resource gates prove one reusable artifact per screenshot, cleanup after
+   card removal/pasteboard replacement/shutdown/crash recovery, and bounded
+   memory plus temporary-file use across 100 sequential captures.
+9. Release compilation uses Swift 6 complete strict concurrency with zero
+   warnings. The Native UI dependency is revision-pinned, and a failed build or
+   signing step leaves the previous valid application untouched.

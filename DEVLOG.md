@@ -4,6 +4,56 @@
 
 ---
 
+## 24.07.2026 — архитектурный аудит и полный план стабилизации
+
+Проведён полный read-only аудит baseline `d54b267`: capture lifecycle,
+ранний ввод, cursor/focus ownership, window protection, параллельная доставка,
+clipboard/artifact lifecycle, tray overflow и pointer routing, concurrency,
+тестовая стратегия, Native SDK dependency и production build.
+
+Текущий `scripts/test.sh`, production-сборка и проверка подписи проходят, но это
+не является release-доказательством. Аудит обнаружил три блокирующих дефекта:
+
+- завершённый до готовности backdrop жест теряется;
+- карточка и автоматический clipboard независимо кодируют один снимок, а
+  временные PNG не имеют владельца и cleanup lifecycle;
+- параллельные finishing sessions не имеют общего sequence contract, поэтому
+  старый результат может завершиться после нового и перезаписать порядок или
+  clipboard.
+
+Дополнительно подтверждены ненадёжный ранний `Esc`, конкуренция pixel-producing
+prewarm с пользовательским capture, fail-open окно в protection audit,
+неразрешённая атомарность multi-display batch, конфликт абсолютного append-only
+контракта с конечным viewport, отсутствие screen-width clamp, потенциально
+устаревающий pointer routing, 538 strict-concurrency warnings, source-scanning
+вместо lifecycle-тестов, неприкреплённая sibling-зависимость Native UI и
+неатомарная сборка.
+
+`CAPTURE_ARCHITECTURE.md` переведён из статуса «реализация принята» в честный
+remediation status. Зафиксирован поэтапный план:
+
+1. сначала воспроизвести P0-дефекты детерминированными headless-тестами;
+2. ввести полноценный gesture buffer и ранний session-scoped Carbon Escape;
+3. добавить монотонный capture sequence, delivery coordinator и единый
+   artifact store с cleanup и ресурсным бюджетом;
+4. убрать pixel-producing prewarm, сделать protection fail-closed и закрыть
+   multi-display decision gate;
+5. вынести tray order/viewport в чистую модель и закрепить pointer pass-through;
+6. перейти на Swift 6 strict concurrency, pin Native UI revision, сделать
+   атомарную сборку и CI;
+7. пройти полный headless stress и отдельный ручной runtime/latency gate.
+
+`PRODUCT_CONTRACT.md` уточняет поведение заполненного viewport: существующие
+карточки не двигаются, пока есть свободный слот; после заполнения viewport
+детерминированно следует к новому снимку, сохраняя старые элементы доступными
+прокруткой. Также добавлены обязательные regression gates для раннего жеста,
+порядка delivery, cleanup, resource bounds, strict concurrency и воспроизводимой
+сборки.
+
+Production-код в рамках аудита и документирования не изменялся.
+
+---
+
 ## 23.07.2026 — foreground selector и pointer routing приняты
 
 После ручной проверки актуальной сборки приняты два блокирующих исправления

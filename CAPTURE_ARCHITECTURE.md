@@ -1,171 +1,473 @@
 # QuickShot Capture Architecture
 
-Status: direct snapshot engine, frozen custom selection, foreground-gated cursor
-ownership, protected tray layering, and finite tray overflow are implemented.
-Headless gates pass. The foreground single-cursor lifecycle and tray pointer
-routing have passed manual runtime acceptance. Repeated latency, fullscreen
-Spaces, and unusual multi-display layouts remain runtime release gates.
+Status: remediation required after the 24 July 2026 architecture audit.
 
-## Decision
+Audited baseline: `d54b267`.
 
-QuickShot returns to its established custom selector and adopts a CleanShot-like
-freeze-first pipeline:
+The application builds, signs, and passes the current headless suite, but it is
+not release-ready. The audit found three release-blocking correctness defects,
+several unbounded resource and ordering risks, and test/build gaps that allow
+those defects to remain green. This document defines the retained product
+decision, the target architecture, the complete remediation order, and the gates
+required before release.
+
+## Product Decision
+
+QuickShot keeps the freeze-first user experience:
 
 ```text
 hotkey
-  -> direct CoreGraphics snapshots before QuickShot activation
-  -> immutable per-display frozen backdrops
-  -> bounded foreground ownership and one cursor lease
-  -> custom QuickShot cursor and selection frame
-  -> in-memory crop on mouse-up
-  -> thumbnail and clipboard
+  -> fresh pixels before QuickShot activation
+  -> immutable frozen backdrop
+  -> one custom cursor and selection frame
+  -> crop the same frozen image on mouse-up
+  -> thumbnail and clipboard delivery
 ```
 
-The screenshot represents the hotkey moment. The source application's visible
-hover state is captured before QuickShot owns focus or pointer input. Selection
-then happens over that frozen image.
+The following product properties remain non-negotiable:
 
-The previous `/usr/sbin/screencapture` migration is retired because completion
-latency was controlled by the system process and varied by several seconds.
-The earlier ScreenCaptureKit stream and one-shot paths remain retired because
-they produced delayed or stale frames.
+- pixels preserve the source hover, tooltip, menu, and active appearance;
+- the selector never uses a cached frame or a second mouse-up capture;
+- exactly one custom cursor is visible;
+- QuickShot UI is excluded without blinking or moving;
+- an early drag is accepted instead of discarded;
+- repeated captures remain ordered and never expose an older result as newest;
+- failure, cancellation, and shutdown restore cursor, windows, input, and focus.
 
-## Implemented Visual Layer
+The direct CoreGraphics adapter remains the production baseline during
+remediation. It is isolated because the current macOS SDK marks its underlying
+symbol obsolete. No replacement may enter production unless it independently
+passes the complete freshness, latency, cursor, fullscreen, and multi-display
+contract. There is no silent fallback to a stale stream or system subprocess.
 
-The rollback restores the existing, tested visual implementation instead of
-redrawing it:
+## Current Boundaries
 
-- `SelectionView` and `OverlayController`;
-- the fixed vector crosshair and matching selection outline;
-- lightweight fill inside the selected area;
-- `CaptureTypes` and `CoordinateMath`;
-- behavior and visual-matrix tests for all drag directions and small regions.
+- `CaptureController` admits captures and owns active and finishing sessions.
+- `CaptureSession` captures frozen displays, presents selection, crops, and
+  initiates delivery.
+- `DirectScreenSnapshotProvider` owns the direct WindowServer snapshot adapter.
+- `OverlayController`, `SelectionPresentationCoordinator`, and `CursorLease`
+  own selection windows, foreground acquisition, and cursor replacement.
+- `WindowCaptureProtection` applies and audits `sharingType = .none`.
+- `ThumbnailManager` owns card order, viewport state, hover, and tray routing.
+- `Clipboard` prepares pasteboard data and temporary file URLs.
+- `NativeQuickShotUI` renders Native SDK command surfaces.
 
-`FreshRegionCapture` and the system capture session have been removed. The
-restored visuals now consume only session-owned direct snapshots.
+These boundaries are retained where possible. The remediation introduces explicit
+ownership and sequencing inside them rather than another wholesale capture
+rewrite.
 
-## Implemented Components
+## Audit Findings
 
-### DirectScreenSnapshotProvider
+### Release Blockers
 
-Owns one direct, in-memory CoreGraphics capture for each active display. It runs
-before any QuickShot window is shown or application focus changes. Every session
-receives new immutable images; providers cannot expose a previous frame or cache.
+1. A complete mouse-down/drag/mouse-up gesture can finish before the frozen
+   backdrop is ready. `PreOverlayMouseTracker` then returns no seed because the
+   button is no longer held, and the user's selection is lost.
+2. Every card prepares a clipboard payload while automatic clipboard delivery
+   prepares another. Temporary PNG files have no owner or cleanup policy, and
+   decoded images plus PNG/TIFF payloads grow without a resource budget.
+3. Finishing sessions run concurrently without a monotonic delivery contract.
+   An older crop or encode can finish after a newer capture, insert out of order,
+   or overwrite the clipboard with the older image.
 
-All display requests use one ordered compositor lane. Parallel
-`CGWindowListCreateImage` calls were measured contending inside the same
-WindowServer capture proxy and are prohibited. A single union image is also
-prohibited because mixed-DPI desktops are flattened at one scale and lose native
-Retina pixels. Each display therefore remains a full-resolution image while the
-batch itself is serialized.
+### High-Risk Gaps
 
-The deprecated CoreGraphics dependency is isolated behind this provider so it
-can be replaced without changing selection UI, session lifecycle, crop logic, or
-delivery.
+- `Esc` before overlay construction relies on a global key monitor that is not
+  reliable without Accessibility permission.
+- startup preparation and a user capture share one non-preemptible direct
+  capture lane;
+- per-display snapshots are serialized, so exact cross-display simultaneity is
+  not currently proven;
+- a failed WindowServer protection audit returns `nil` and capture proceeds;
+- tray follow-newest behavior contradicts the absolute append-only wording;
+- card width is not clamped to the current display's available geometry;
+- fullscreen host pointer routing can become stale after layout/removal until
+  the next pointer event;
+- AppKit isolation is conventional rather than compiler-enforced;
+- source-scanning tests verify tokens in files instead of complete lifecycle
+  behavior;
+- the Native UI dependency is an unpinned sibling path;
+- the build deletes the previous app before a new artifact is valid and ignores
+  an ad-hoc signing failure.
 
-### CaptureSession
+## Target Ownership Model
 
-Owns one explicit lifecycle:
+### Capture Request
+
+Every accepted hotkey receives a monotonic `CaptureSequence` and one immutable
+request record:
 
 ```text
-idle -> snapshotting -> selecting -> delivering -> idle
+CaptureRequest
+  sequence
+  sessionID
+  hotkeyTimestamp
+  pointerLocation
+  displaySet
+  gestureBuffer
 ```
 
-Only an active selector blocks another trigger. Once mouse-up releases selection,
-crop and delivery retain their own session and no longer block the next hotkey.
-Success, cancellation, failure, and shutdown share one idempotent cleanup path.
+The sequence is the source of truth for thumbnail order and clipboard freshness.
+UUIDs continue to identify ownership, but UUID order is never used as chronology.
 
-### FrozenSelectionController
+### Selection Lifecycle
 
-Builds one overlay per display only after all required snapshots are ready. A
-static backdrop layer holds the frozen image; the existing lightweight selection
-chrome is rendered above it. The source hover state is already immutable at this
-point. QuickShot then becomes foreground and one AppKit cursor lease replaces the
-system pointer with the custom crosshair.
+The main-actor admission state is:
 
-Mouse-up crops the session-owned backdrop. It never initiates another screen
-capture.
+```text
+idle
+  -> snapshotting(request)
+  -> waitingForPresentation(request, snapshot)
+  -> selecting(request, snapshot)
+  -> released
+  -> idle
+```
 
-### SelectionPresentationCoordinator
+Mouse-up releases admission immediately so the next capture can begin. Crop and
+delivery continue as sequence-owned work outside the selection state. Every
+terminal transition is idempotent.
 
-Owns the complete foreground and cursor transaction. Prepared windows remain
-alpha-zero and pointer-passive while activation is pending. Cursor suppression is
-forbidden until `didBecomeActive`; only after successful activation and one AppKit
-cursor lease does a zero-duration transaction enable input and reveal the frozen
-presentation. Rejection, loss, or a `500ms` timeout cancels without revealing UI.
+### Gesture Buffer
 
-The public forced-activation compatibility call is isolated in this coordinator.
-It is needed because arbitrary source applications do not participate in the
-modern cooperative yield protocol, while Apple documents that background cursor
-suppression is not guaranteed. Teardown removes all overlay content before
-restoring the pointer, then yields activation back to the captured source app.
+A session-scoped gesture buffer starts at hotkey acceptance and records:
 
-### WindowCaptureProtection
+- first mouse-down position and timestamp;
+- latest drag position;
+- mouse-up position and timestamp;
+- cancellation;
+- the display containing the gesture.
 
-Every QuickShot-owned window remains `sharingType = .none`, including tray,
-cards, settings, status-menu surfaces, and selection windows. Protection is
-reapplied before capture; the tray is never hidden, moved, or faded.
+When frozen pixels become ready:
 
-During selection the frozen backdrop, protected QuickShot interface, and
-selection chrome occupy three explicit window levels in that order. The tray
-therefore stays visible above the frozen pixels while the transparent selection
-chrome remains pointer owner above the tray.
+- no mouse-down means normal selector presentation;
+- a held mouse-down seeds the visible selection at the original position;
+- a completed valid gesture crops immediately from the frozen snapshot;
+- a completed tiny gesture follows the normal ignored-selection contract;
+- `Esc` invalidates the buffer and all later mouse events are ignored.
 
-### ThumbnailViewport
+The completed gesture is never inferred only from current button state.
 
-The tray has a finite viewport rather than an unbounded list of windows. When it
-fills, the viewport follows the newest screenshot and animates the oldest visible
-card out; older screenshots remain retained and can be reached by scrolling over
-the tray. Manual scrolling disables follow-newest until the viewport returns to
-its newest boundary or another screenshot is captured.
+### Delivery Coordinator
 
-Hidden cards remain hidden through tray, insertion, removal, and interrupted
-animation completion. No completion path may restore every card indiscriminately
-or expose an overflow card at a stale/default coordinate.
+Crop tasks may execute outside the main actor, but all observable commits pass
+through one sequence-aware coordinator:
 
-## Implementation Result
+- cards are stored and rendered in `CaptureSequence` order;
+- failed/cancelled sequences release any pending ordering barrier;
+- automatic clipboard work carries its sequence;
+- a completion may update the clipboard only if no newer accepted capture owns
+  clipboard intent;
+- shutdown invalidates every uncommitted generation;
+- stale callbacks cannot mutate tray or clipboard state.
 
-1. The established selection geometry is reused without visual approximation.
-2. `DirectScreenSnapshotProvider` resolves the runtime CoreGraphics symbol and
-   captures full-resolution displays through one serial compositor lane without
-   retaining a cache.
-3. `CaptureSession` owns the explicit freeze-first lifecycle and validates the
-   session ID plus the complete display set before showing UI.
-4. Frozen bitmaps and selection chrome render as separate layers.
-   `SelectionPresentationCoordinator` exclusively owns foreground activation and
-   one balanced AppKit cursor lease; overlay code cannot alter cursor state.
-5. Prepared windows do not accept pointer input. Confirmed activation, cursor
-   replacement, input, and reveal form one ordered transaction. All display overlays
-   share one visible custom-crosshair owner, so neither the source pointer nor a
-   crosshair from another display can remain beside the active crosshair.
-6. Mouse-up crops only the initial image. ScreenCaptureKit, the system capture
-   process, temporary PNGs, and second capture paths are absent from production.
-7. The protected tray remains visible between backdrop and selection chrome.
-8. Overflow is a deterministic scrollable viewport that always reveals the newly
-   captured item and never remounts hidden windows at stale coordinates.
-9. Headless geometry, provider, cursor-lease, lifecycle, overflow, stale-path, and
-   UI regression gates run by default. Visible runtime probes remain opt-in.
+### Capture Artifact Store
+
+One `CaptureArtifact` owns all representations of one screenshot:
+
+- the final crop produced from the immutable snapshot;
+- one display-sized thumbnail;
+- one encoded original payload;
+- at most one temporary file URL;
+- active pasteboard/drag leases;
+- cleanup state.
+
+Encoding is performed once and reused by automatic copy, per-card copy, drag,
+save, pin, and Copy All. A clipboard temporary PNG is a post-crop delivery
+representation; it is never a pixel source for the screenshot.
+
+Cleanup rules:
+
+- superseded pasteboard files are removed after their pasteboard lease ends;
+- card removal releases card-owned artifacts;
+- active drag leases keep their file alive until drag completion;
+- shutdown removes every unleased artifact;
+- startup removes stale QuickShot artifacts left by a crash;
+- hidden cards do not retain full decoded images when a thumbnail and encoded
+  original are sufficient.
+
+The implementation must define and enforce a session resource budget. The first
+target is 100 cards or 1 GiB of owned artifacts, whichever is reached first.
+QuickShot must reject a new capture with visible feedback rather than silently
+delete user data or continue unbounded.
+
+### Snapshot Provider
+
+`DirectScreenSnapshotProvider` remains behind a protocol so tests can provide
+deterministic snapshots and delays.
+
+The production adapter must:
+
+- resolve backend availability without taking a preparatory screenshot;
+- give user capture priority over all background preparation;
+- never cache pixels between sessions;
+- report one capture timestamp per display and the maximum batch skew;
+- reject incomplete or mismatched display sets;
+- discard cancelled results even when the synchronous OS call returns later;
+- expose structured latency and failure metrics.
+
+Exact multi-display simultaneity is an explicit architecture decision gate. The
+current serialized per-display backend cannot truthfully guarantee one identical
+timestamp. Before release, one of these outcomes must be selected and documented:
+
+1. an atomic full-resolution batch passes mixed-DPI pixel-fidelity tests; or
+2. selection is contractually limited to the hotkey display; or
+3. the product explicitly accepts and bounds measured per-display skew.
+
+The documentation must not claim exact all-display hotkey simultaneity until
+this gate is closed.
+
+### Window And Pointer Ownership
+
+Window capture protection is fail-closed:
+
+- every QuickShot window is protected at creation;
+- the registry is reapplied before every snapshot;
+- an unavailable WindowServer audit is a capture failure;
+- any visible unprotected QuickShot surface is a capture failure;
+- failure presents no selector and never hides the tray as a workaround.
+
+The tray host remains mouse-transparent by default. Pointer ownership is
+recomputed after every layout, insertion, removal, collapse, viewport move,
+animation completion, capture transition, screen change, and pointer event.
+Changing routing during a mouse-down must not consume the user's first click.
+
+### Tray Model
+
+Card identity and order live in a model independent of views. The resolved tray
+contract is:
+
+- while a free visible slot exists, a new card occupies that slot and no existing
+  card changes origin;
+- once the viewport is full, it advances deterministically toward the newest
+  card;
+- overflow cards remain ordered and scroll-reachable;
+- no hidden card is mounted at a default or stale coordinate;
+- resizing is clamped to the current display and recomputed after display changes.
+
+### Concurrency Model
+
+- all AppKit windows, views, controllers, and callbacks are `@MainActor`;
+- snapshot and encoding data crossing actors is explicitly `Sendable`;
+- artifact I/O is owned by an actor;
+- direct capture serialization is owned by an actor or equivalent typed boundary;
+- Carbon callbacks perform the minimum C bridge and dispatch to the main actor;
+- no concurrency warning is suppressed to make the build green.
+
+The target compiler gate is Swift 6 with complete strict concurrency and zero
+warnings.
+
+## Remediation Program
+
+Each phase lands as a separate reviewable commit. A phase cannot start until the
+previous phase's exit criteria are green.
+
+### Phase 0 - Freeze The Baseline
+
+Scope:
+
+- preserve `d54b267` as the audited behavior baseline;
+- add deterministic fakes for snapshot, clock, event input, clipboard, and
+  artifact storage;
+- convert each P0 finding into a failing behavioral test;
+- keep all runtime UI automation opt-in.
+
+Exit criteria:
+
+- tests reproduce completed early-drag loss, stale clipboard completion, and
+  artifact leakage before production behavior changes;
+- the default suite remains headless;
+- no source-string assertion is accepted as the sole proof of a lifecycle rule.
+
+### Phase 1 - Repair Input And Session Lifecycle
+
+Scope:
+
+- replace `PreOverlayMouseTracker` with the typed gesture buffer;
+- register session-scoped Carbon Escape immediately at capture acceptance;
+- replay held and completed gestures from stored coordinates;
+- make cancel/failure/shutdown invalidate all pending callbacks;
+- centralize selection state transitions on `@MainActor`.
+
+Required tests:
+
+- down/drag/up completes before snapshot readiness;
+- mouse remains held when presentation becomes ready;
+- Escape during snapshot, activation wait, selection, and delivery;
+- snapshot completion after cancellation is ignored;
+- duplicate finish/cancel calls are idempotent;
+- activation rejection/loss restores input and focus exactly once.
+
+Exit criteria:
+
+- no accepted gesture is lost;
+- exactly one cursor lease exists;
+- every terminal path leaves zero overlay windows and a balanced cursor.
+
+### Phase 2 - Order Delivery And Bound Resources
+
+Scope:
+
+- introduce `CaptureSequence` and the delivery coordinator;
+- replace repeated `Clipboard.prepareImage` calls with one artifact;
+- add pasteboard and drag leases;
+- clean superseded, removed, shutdown, and crash-leftover files;
+- release full decoded images after thumbnail/artifact preparation;
+- enforce the resource budget without silent eviction.
+
+Required tests:
+
+- older crop finishes after newer crop;
+- older encode finishes after newer encode;
+- newer capture remains the clipboard result;
+- card order follows capture order;
+- copy, drag, pin, save, and Copy All reuse the same artifact;
+- delete one, Delete All, pasteboard replacement, shutdown, and startup cleanup;
+- 100 sequential captures produce bounded memory and no unleased temp files.
+
+Exit criteria:
+
+- one encode and at most one temporary file per screenshot;
+- zero stale callbacks after shutdown;
+- repeated captures cannot reorder the tray or clipboard;
+- resource use reaches a stable bound during the stress test.
+
+### Phase 3 - Harden Snapshot And Protection
+
+Scope:
+
+- remove pixel-producing prewarm work;
+- separate backend availability/permission checks from screen capture;
+- give accepted user requests exclusive capture priority;
+- make protection audit failures fail-closed;
+- record display timestamps, batch skew, and stage latency;
+- close the multi-display decision gate;
+- retain an explicit unsupported-backend error when the direct symbol is absent.
+
+Required tests:
+
+- user capture cannot queue behind preparation;
+- cancellation while the OS call is running discards its result;
+- missing, duplicate, and mismatched displays fail;
+- `nil` protection audit and an unprotected window fail before snapshot;
+- mixed-scale, negative-origin, and reordered displays;
+- backend-unavailable startup and runtime behavior.
+
+Exit criteria:
+
+- no background task can delay an accepted capture;
+- QuickShot never captures while its exclusion state is unknown;
+- the multi-display contract states and tests one truthful behavior.
+
+### Phase 4 - Make Tray State Deterministic
+
+Scope:
+
+- move card ordering and viewport state into a pure model;
+- implement the clarified free-slot and overflow behavior;
+- clamp width and layout to every current screen geometry;
+- refresh pointer routing after every state and geometry commit;
+- make animations projections of model state rather than owners of state.
+
+Required tests:
+
+- zero, one, and many cards on every tray edge;
+- insertion before and after viewport capacity;
+- scrolling away from and back to newest;
+- removal of visible and hidden cards;
+- interrupted insertion/removal/collapse animations;
+- small displays, mixed displays, negative origins, and persisted maximum width;
+- first click after card removal or tray movement reaches the underlying app.
+
+Exit criteria:
+
+- no card appears outside a valid slot;
+- overflow is deterministic and newest is discoverable;
+- empty host pixels never consume a click;
+- animation completion cannot resurrect hidden views.
+
+### Phase 5 - Enforce Concurrency And Reproducible Builds
+
+Scope:
+
+- annotate AppKit ownership with `@MainActor`;
+- make cross-actor payloads explicitly safe;
+- compile production and tests in Swift 6 strict concurrency;
+- replace the hard-coded sibling Native SDK path with one resolved dependency
+  input;
+- pin the Native UI design-system revision in a lock file;
+- build into a temporary bundle, sign and verify it, then atomically replace the
+  previous app;
+- make every signing failure fatal;
+- add macOS CI for headless tests, strict compilation, Native SDK validation,
+  production build, and signature structure.
+
+The initial dependency lock should record the currently audited design-system
+revision `b2e7cb0`; later updates require an explicit lock change and full suite.
+
+Required gates:
+
+- zero strict-concurrency warnings;
+- clean checkout builds without an implicit sibling `node_modules` layout;
+- a forced compiler/signing failure leaves the previous app untouched;
+- CI runs on every pushed commit.
+
+### Phase 6 - Release Verification
+
+Automated:
+
+- complete headless suite;
+- strict-concurrency gate;
+- artifact and memory stress test;
+- 100 fake-backend lifecycle repetitions with randomized completion order;
+- Native SDK dispatch and render gates;
+- production build and signature verification.
+
+Manual runtime gate:
+
+- ten sequential captures with zero stale, missing, or reordered cards;
+- normal windows and fullscreen Spaces;
+- source hover, tooltip, menu, and active-state preservation;
+- immediate drag and a completed drag before selector reveal;
+- Escape during every capture phase;
+- one cursor before, during, and after drag;
+- desktop input immediately after success, cancel, and failure;
+- one, many, collapsed, expanded, and overflowed tray states;
+- mixed-scale displays and negative origins;
+- Dock/menu-bar overlap on every tray edge.
+
+Performance:
+
+- collect at least 50 hotkey-to-selector and mouse-up-to-card samples;
+- report p50, p95, and maximum rather than a single successful run;
+- `hotkey-to-selector <= 120ms p95`;
+- `mouse-up-to-card <= 100ms p95`;
+- no multi-second outlier is waived without a documented product decision.
+
+Runtime checks that post input remain opt-in and must not take over the user's
+screen during ordinary development or CI.
 
 ## Definition Of Done
 
-- Hotkey-time hover, tooltip, menu, and active appearance are present in pixels.
-- Exactly one custom cursor is visible before and during drag.
-- The cursor and frame retain the established geometry in every drag quadrant.
-- No previous frame, stream cache, temporary PNG, or second capture is used.
-- QuickShot UI never appears in the frozen backdrop or final crop.
-- Normal and fullscreen Spaces, mixed-scale displays, and negative origins work.
-- `Esc`, failure, completion, and shutdown hide windows, restore the cursor, and
-  return foreground ownership to the source application in that order.
-- Ten sequential captures succeed with zero stale or missing cards.
-- When the tray overflows, the newest card is visible, all older cards remain
-  scroll-reachable, and no card appears outside a valid layout slot.
-- The QuickShot tray stays visible but noninteractive during area selection.
-- Hotkey-to-selector is at most `120ms` p95 and mouse-up-to-card at most `100ms`
-  p95 on the development machine.
+QuickShot is release-ready only when all of the following are true:
 
-The automated portion is green, and manual runtime acceptance confirms one custom
-cursor plus immediate desktop input after capture. The direct API still has an
-OS-owned latency tail under capture-service contention, so the `120ms` target is
-not declared green from short probes. Repeated snapshot plus activation latency,
-fullscreen Spaces, immediate drag, and unusual multi-display layouts remain
-explicit hardware-dependent release checks.
+- all Phase 0-6 gates pass from a clean checkout;
+- a completed early gesture always produces its intended crop;
+- Escape works from hotkey acceptance through selector teardown;
+- every successful capture has fresh session-owned pixels;
+- exactly one custom cursor is visible and cursor balance returns to zero;
+- no QuickShot surface appears in frozen or delivered pixels;
+- cards and automatic clipboard delivery obey capture sequence;
+- one screenshot owns one reusable delivery artifact;
+- no unleased QuickShot temporary file survives cleanup;
+- the 100-capture stress test remains within the declared resource budget;
+- protection failure is fail-closed;
+- tray free-slot, overflow, scrolling, and pointer pass-through contracts pass;
+- Swift 6 strict concurrency produces zero warnings;
+- Native UI dependency resolution is pinned and reproducible;
+- a failed build cannot destroy the last valid app;
+- CI is green;
+- the manual runtime and latency gates are recorded for the exact release build.
+
+Passing the current tests or producing a signed app is necessary but no longer
+sufficient evidence of completion.
