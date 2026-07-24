@@ -164,6 +164,7 @@ private enum NativeControlSurface: String {
     case hub
     case hubBubble = "hub_bubble"
     case hubCoreBackground = "hub_core_background"
+    case hubCoreForeground = "hub_core_foreground"
     case thumbnail
     case pinned
     case settings
@@ -213,7 +214,20 @@ struct NativeControlDebugButtonSnapshot {
 private final class NativeHubRenderView: NSView {
     var onButtonPressed: ((NativeHubPressedButton) -> Void)?
     var onInteractionChanged: ((NativeInteractionChannel, NativeHubPressedButton) -> Void)?
+    var onRendered: (() -> Void)?
     var rendersPressedState = true
+    var acceptsPointerInteraction = true {
+        didSet {
+            if oldValue != acceptsPointerInteraction {
+                updateTrackingAreas()
+            }
+        }
+    }
+    var presentsRenderedContents = true {
+        didSet {
+            layer?.contents = presentsRenderedContents ? retainedCGImage : nil
+        }
+    }
     private(set) var isPressing = false
 
     private let nativeApp: UnsafeMutableRawPointer?
@@ -284,9 +298,17 @@ private final class NativeHubRenderView: NSView {
         syncSystemAppearance()
     }
 
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        invalidateRender()
+        renderNow()
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let trackingArea { removeTrackingArea(trackingArea) }
+        trackingArea = nil
+        guard acceptsPointerInteraction else { return }
         let area = NSTrackingArea(rect: .zero,
                                   options: [.activeAlways, .inVisibleRect, .mouseEnteredAndExited, .mouseMoved],
                                   owner: self,
@@ -413,11 +435,17 @@ private final class NativeHubRenderView: NSView {
                             shouldInterpolate: false,
                             intent: .defaultIntent)
         layer?.contentsScale = scale
-        layer?.contents = image
+        layer?.contents = presentsRenderedContents ? image : nil
         retainedCGImage = image
         lastRenderSignature = signature
         renderPassCount += 1
         totalRenderDuration += CACurrentMediaTime() - startedAt
+        onRendered?()
+    }
+
+    func currentRenderedImage() -> CGImage? {
+        renderNow()
+        return retainedCGImage
     }
 
     func renderedCrop(in rect: NSRect) -> CGImage? {
@@ -503,14 +531,17 @@ private final class NativeHubRenderView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
+        guard acceptsPointerInteraction else { return }
         forwardPointerMove(convert(event.locationInWindow, from: nil))
     }
 
     override func mouseMoved(with event: NSEvent) {
+        guard acceptsPointerInteraction else { return }
         forwardPointerMove(convert(event.locationInWindow, from: nil))
     }
 
     override func mouseExited(with event: NSEvent) {
+        guard acceptsPointerInteraction else { return }
         guard hoveredNodeID != nil else { return }
         hoveredNodeID = nil
         quickshot_native_ui_pointer_move(nativeApp, -1, -1)
@@ -519,6 +550,7 @@ private final class NativeHubRenderView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard acceptsPointerInteraction else { return }
         let point = convert(event.locationInWindow, from: nil)
         guard let node = button(at: point) else { return }
         isPressing = true
@@ -529,6 +561,7 @@ private final class NativeHubRenderView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard acceptsPointerInteraction else { return }
         guard isPressing else { return }
         let point = convert(event.locationInWindow, from: nil)
         let target = button(at: point)
@@ -541,6 +574,7 @@ private final class NativeHubRenderView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        guard acceptsPointerInteraction else { return }
         guard isPressing else { return }
         defer { isPressing = false }
         let point = convert(event.locationInWindow, from: nil)
@@ -667,6 +701,76 @@ private final class NativeHubRenderView: NSView {
         guard let name = native_sdk_app_last_error_name(nativeApp), name[0] != 0 else { return }
         NSLog("QuickShot Native UI: \(stage) failed: \(String(cString: name))")
     }
+}
+
+/// Presents one Native SDK-rendered control chrome while allowing only its
+/// center fill to stretch. The rasterized corners and stroke keep their exact
+/// device pixels, so hover geometry can change without repainting or scaling
+/// the Retina edge.
+private final class NativeStretchableChromeView: NSView {
+    private let chromeLayer = CALayer()
+    private var renderScale: CGFloat = 1
+
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.masksToBounds = false
+        chromeLayer.contentsGravity = .resize
+        chromeLayer.minificationFilter = .linear
+        chromeLayer.magnificationFilter = .linear
+        chromeLayer.masksToBounds = false
+        layer?.addSublayer(chromeLayer)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func setSource(image: CGImage, sourceBounds: NSRect, buttonFrame: NSRect, radius: CGFloat) {
+        guard sourceBounds.width > 0.5, sourceBounds.height > 0.5 else { return }
+        renderScale = CGFloat(image.width) / sourceBounds.width
+        let leftStretchEdge = min(buttonFrame.midX, buttonFrame.minX + radius)
+        let rightStretchEdge = max(buttonFrame.midX, buttonFrame.maxX - radius)
+        let center = CGRect(
+            x: leftStretchEdge / sourceBounds.width,
+            y: 0,
+            width: max(1 / CGFloat(image.width),
+                       (rightStretchEdge - leftStretchEdge) / sourceBounds.width),
+            height: 1
+        )
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        chromeLayer.contentsScale = renderScale
+        chromeLayer.contentsCenter = center
+        chromeLayer.contents = image
+        CATransaction.commit()
+    }
+
+    func setPresentationFrame(_ frame: NSRect) {
+        let scale = max(1, renderScale)
+        let minX = (frame.minX * scale).rounded() / scale
+        let minY = (frame.minY * scale).rounded() / scale
+        let maxX = (frame.maxX * scale).rounded() / scale
+        let maxY = (frame.maxY * scale).rounded() / scale
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        chromeLayer.frame = NSRect(x: minX,
+                                   y: minY,
+                                   width: max(0, maxX - minX),
+                                   height: max(0, maxY - minY))
+        CATransaction.commit()
+    }
+
+#if TESTING
+    var debugPresentationFrame: NSRect { chromeLayer.frame }
+    var debugContentsCenter: NSRect { chromeLayer.contentsCenter }
+    var debugRenderScale: CGFloat { renderScale }
+    var debugHasSource: Bool { chromeLayer.contents != nil }
+#endif
 }
 
 extension NativeSDKWidgetSemantics {
@@ -871,6 +975,7 @@ final class NativeHubShellView: NSView {
     var onHoverChanged: ((Bool) -> Void)?
 
     private let bubbleView = NativeHubRenderView(frame: .zero)
+    private let coreChromeView = NativeStretchableChromeView(frame: .zero)
     private let coreBackgroundView = NativeHubRenderView(frame: .zero)
     private let nativeView = NativeHubRenderView(frame: .zero)
     private let revealedLabelView = NativeHubRenderView(frame: .zero)
@@ -917,6 +1022,10 @@ final class NativeHubShellView: NSView {
                                                    y: NativeHubMetrics.shellInset,
                                                    width: NativeHubMetrics.height,
                                                    height: NativeHubMetrics.height)
+    private var currentBackgroundButtonRect = NSRect(x: NativeHubMetrics.shellInset,
+                                                     y: NativeHubMetrics.shellInset,
+                                                     width: NativeHubMetrics.height,
+                                                     height: NativeHubMetrics.height)
     private var revealedActionNativeFrames: [NSRect] = []
     private var revealedIntrinsicCoreWidth: CGFloat = NativeHubMetrics.height
     private var countTranslationX: CGFloat = 0
@@ -969,6 +1078,10 @@ final class NativeHubShellView: NSView {
         bubbleView.setSurface(.hubBubble)
         coreBackgroundView.setSurface(.hubCoreBackground)
         coreBackgroundView.rendersPressedState = false
+        coreBackgroundView.presentsRenderedContents = false
+        revealedLabelView.acceptsPointerInteraction = false
+        compactCoreView.acceptsPointerInteraction = false
+        compactIconView.acceptsPointerInteraction = false
         bubbleView.alphaValue = 0
         let handlePress: (NativeHubPressedButton) -> Void = { [weak self] pressed in
             guard let self else { return }
@@ -988,11 +1101,12 @@ final class NativeHubShellView: NSView {
         coreBackgroundView.onButtonPressed = handlePress
         coreBackgroundView.onInteractionChanged = { [weak self] channel, action in
             self?.nativeView.mirrorInteraction(channel, action: action)
-            self?.revealedLabelView.mirrorInteraction(channel, action: action)
-            self?.compactCoreView.mirrorInteraction(channel, action: action)
-            self?.compactIconView.mirrorInteraction(channel, action: action)
+        }
+        coreBackgroundView.onRendered = { [weak self] in
+            self?.refreshCoreChromeSource()
         }
         addSubview(bubbleView)
+        addSubview(coreChromeView)
         addSubview(coreBackgroundView)
         addSubview(nativeView)
         addSubview(revealedLabelView)
@@ -1277,10 +1391,12 @@ final class NativeHubShellView: NSView {
                                 y: backgroundCoreNativeFrame.minY,
                                 width: currentButtonWidth,
                                 height: backgroundCoreNativeFrame.height)
+        currentBackgroundButtonRect = buttonRect
         coreBackgroundMaskLayer.path = CGPath(roundedRect: buttonRect,
                                               cornerWidth: NativeHubMetrics.radius,
                                               cornerHeight: NativeHubMetrics.radius,
                                               transform: nil)
+        updateCoreChromePresentation(buttonRect: buttonRect)
         bubbleView.alphaValue = clippedContent
         nativeView.alphaValue = clippedContent
         revealedLabelView.alphaValue = revealedContentAlpha
@@ -1300,6 +1416,30 @@ final class NativeHubShellView: NSView {
     private func contentPhase(_ progress: CGFloat, from start: CGFloat, to end: CGFloat) -> CGFloat {
         guard end > start else { return progress >= end ? 1 : 0 }
         return motionStrongEaseOut((progress - start) / (end - start))
+    }
+
+    private func refreshCoreChromeSource() {
+        guard backgroundCoreNativeFrame.width > 0.5,
+              backgroundCoreNativeFrame.height > 0.5,
+              let image = coreBackgroundView.currentRenderedImage() else { return }
+        coreChromeView.setSource(image: image,
+                                 sourceBounds: coreBackgroundView.bounds,
+                                 buttonFrame: backgroundCoreNativeFrame,
+                                 radius: NativeHubMetrics.radius)
+    }
+
+    private func updateCoreChromePresentation(buttonRect: NSRect) {
+        let buttonInShell = coreBackgroundView.convert(buttonRect, to: self)
+        let left = backgroundCoreNativeFrame.minX
+        let right = max(0, coreBackgroundView.bounds.width - backgroundCoreNativeFrame.maxX)
+        let top = backgroundCoreNativeFrame.minY
+        let bottom = max(0, coreBackgroundView.bounds.height - backgroundCoreNativeFrame.maxY)
+        coreChromeView.setPresentationFrame(
+            NSRect(x: buttonInShell.minX - left,
+                   y: buttonInShell.minY - top,
+                   width: buttonInShell.width + left + right,
+                   height: buttonInShell.height + top + bottom)
+        )
     }
 
     private var compactBounds: NSRect {
@@ -1330,6 +1470,7 @@ final class NativeHubShellView: NSView {
                        height: compactHeight)
 
         bubbleView.frame = bounds
+        coreChromeView.frame = bounds
         bubbleView.setSurface(.hubBubble)
         bubbleView.renderNow()
 
@@ -1351,6 +1492,7 @@ final class NativeHubShellView: NSView {
                                     expanded: true,
                                     coreRevealed: true,
                                     actionsAfter: expandsRight)
+        revealedLabelView.setSurface(.hubCoreForeground)
         revealedLabelView.renderNow()
 
         let targetCoreFrame = NSRect(x: nativeX + revealedCoreNativeFrame.minX,
@@ -1372,6 +1514,7 @@ final class NativeHubShellView: NSView {
         coreBackgroundView.setCoreWidth(revealedCoreNativeFrame.width)
         coreBackgroundView.setSurface(.hubCoreBackground)
         coreBackgroundView.renderNow()
+        refreshCoreChromeSource()
 
         let compactContentOffset = max(0, stableCompactButtonWidth - compactCoreNativeFrame.width)
         let compactX = compactShellX + compactContentOffset
@@ -1385,6 +1528,7 @@ final class NativeHubShellView: NSView {
                                  expanded: false,
                                  coreRevealed: false,
                                  actionsAfter: expandsRight)
+        compactCoreView.setSurface(.hubCoreForeground)
         compactCoreView.renderNow()
         compactIconView.frame = compactCoreView.bounds
         compactIconView.setState(count: count,
@@ -1393,6 +1537,7 @@ final class NativeHubShellView: NSView {
                                  expanded: false,
                                  coreRevealed: false,
                                  actionsAfter: expandsRight)
+        compactIconView.setSurface(.hubCoreForeground)
         compactIconView.renderNow()
         configureContentMasks()
         updateTrackingAreas()
@@ -1440,6 +1585,8 @@ final class NativeHubShellView: NSView {
         compactCountMaskFrame = compactCountCropRect
         compactIconMaskFrame = compactIconRect
         revealedCountMaskFrame = revealedCountRect
+            .insetBy(dx: -NativeHubMetrics.countBleed, dy: 0)
+            .intersection(revealedLabelView.bounds)
         revealedIconMaskFrame = revealedIconRect
         revealedLabelNativeFrame = revealedLabelRect
         revealedContentMaskLayer.frame = nativeView.bounds
@@ -1504,7 +1651,7 @@ final class NativeHubShellView: NSView {
         }
     }
 
-    private func updateCoreContentMasks(progress: CGFloat) {
+    private func updateCoreContentMasks(progress _: CGFloat) {
         compactContentMaskLayer.path = hasCountTransition
             ? nil
             : contentMaskPath(outer: compactCoreNativeFrame, holes: [compactIconMaskFrame])
@@ -1592,6 +1739,7 @@ final class NativeHubShellView: NSView {
                                      expanded: false,
                                      coreRevealed: false,
                                      actionsAfter: expandsRight)
+            compactCoreView.setSurface(.hubCoreForeground)
             compactCoreView.renderNow()
             if let stableCompactNode = compactCoreView.buttonNodes().first {
                 stableCompactButtonWidth = ceil(stableCompactNode.frame.width)
@@ -1606,6 +1754,7 @@ final class NativeHubShellView: NSView {
                                  expanded: false,
                                  coreRevealed: false,
                                  actionsAfter: expandsRight)
+        compactCoreView.setSurface(.hubCoreForeground)
         compactCoreView.renderNow()
         if let compactCoreNode = compactCoreView.buttonNodes().first {
             compactCoreNativeFrame = compactCoreNode.frame
@@ -1740,6 +1889,34 @@ final class NativeHubShellView: NSView {
             ?? currentCoreFrame()
         let coreBackgroundFrame = coreBackgroundView.buttonNodes().first
             .map { coreBackgroundView.convert($0.frame, to: self) } ?? coreFrame
+        let strokeInset: CGFloat = 0.25
+        let strokeProbes = [
+            NSPoint(x: coreFrame.midX, y: coreFrame.minY + strokeInset),
+            NSPoint(x: coreFrame.midX, y: coreFrame.maxY - strokeInset),
+        ]
+        var foregroundStrokeOwners = 0
+        var compactForegroundPerimeterAlpha: UInt8 = 0
+        var revealedForegroundPerimeterAlpha: UInt8 = 0
+        for point in strokeProbes {
+            var owners = 0
+            let compactPoint = convert(point, to: compactCoreView)
+            let compactAlpha = UInt8(compactCoreView.debugPixel(at: compactPoint) & 0xff)
+            if compactCoreView.alphaValue > 0.01,
+               compactContentMaskLayer.path?.contains(compactPoint) == true,
+               compactAlpha > 0 {
+                owners += 1
+                compactForegroundPerimeterAlpha = max(compactForegroundPerimeterAlpha, compactAlpha)
+            }
+            let revealedPoint = convert(point, to: revealedLabelView)
+            let revealedAlpha = UInt8(revealedLabelView.debugPixel(at: revealedPoint) & 0xff)
+            if revealedLabelView.alphaValue > 0.01,
+               revealedLabelMaskLayer.path?.contains(revealedPoint) == true,
+               revealedAlpha > 0 {
+                owners += 1
+                revealedForegroundPerimeterAlpha = max(revealedForegroundPerimeterAlpha, revealedAlpha)
+            }
+            foregroundStrokeOwners = max(foregroundStrokeOwners, owners)
+        }
         let coreCountFrame = hasCountTransition
             ? odometerView.debugIncomingFrame.insetBy(dx: NativeHubMetrics.countBleed, dy: 0)
             : compactCoreView.convert(
@@ -1793,6 +1970,15 @@ final class NativeHubShellView: NSView {
                                 animationStartCount: animationStartCount,
                                 shellBorderWidth: layer?.borderWidth ?? 0,
                                 shellSublayerCount: layer?.sublayers?.count ?? 0,
+                                coreChromeOwnerCount: 1 + foregroundStrokeOwners,
+                                coreChromeUsesStretchableNativeRaster: coreChromeView.debugHasSource &&
+                                    coreChromeView.debugContentsCenter.width < 1 &&
+                                    !coreBackgroundView.presentsRenderedContents,
+                                coreChromeFrame: coreChromeView.debugPresentationFrame,
+                                coreChromeRenderScale: coreChromeView.debugRenderScale,
+                                compactForegroundPerimeterAlpha: compactForegroundPerimeterAlpha,
+                                revealedForegroundPerimeterAlpha: revealedForegroundPerimeterAlpha,
+                                revealedForegroundHovered: revealedLabelView.buttonNodes().contains(where: \.isHovered),
                                 coreFrame: coreFrame,
                                 coreBackgroundFrame: coreBackgroundFrame,
                                 coreCountFrame: coreCountFrame,
@@ -1814,8 +2000,10 @@ final class NativeHubShellView: NSView {
                                 coreHasIcon: true,
                                 stableCoreContentAlpha: compactCoreView.alphaValue + revealedLabelView.alphaValue,
                                 revealedLabelAlpha: revealedLabelView.alphaValue,
-                                compactTextUsesCompleteNativeRender: compactContentMaskLayer.path?.boundingBox == compactCoreNativeFrame,
-                                revealedTextUsesCompleteNativeRender: revealedLabelMaskLayer.path?.boundingBox == revealedCoreNativeFrame,
+                                compactTextUsesCompleteNativeRender:
+                                    compactContentMaskLayer.path?.boundingBox == compactCoreNativeFrame,
+                                revealedTextUsesCompleteNativeRender:
+                                    revealedLabelMaskLayer.path?.boundingBox == revealedCoreNativeFrame,
                                 odometerHiddenAtRest: !hasCountTransition && odometerView.isHidden,
                                 coreCornerRadius: NativeHubMetrics.radius,
                                 actionClipFrame: actionClipFrame,

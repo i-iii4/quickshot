@@ -23,6 +23,13 @@ struct HubDebugSnapshot {
     let animationStartCount: Int
     let shellBorderWidth: CGFloat
     let shellSublayerCount: Int
+    let coreChromeOwnerCount: Int
+    let coreChromeUsesStretchableNativeRaster: Bool
+    let coreChromeFrame: NSRect
+    let coreChromeRenderScale: CGFloat
+    let compactForegroundPerimeterAlpha: UInt8
+    let revealedForegroundPerimeterAlpha: UInt8
+    let revealedForegroundHovered: Bool
     let coreFrame: NSRect
     let coreBackgroundFrame: NSRect
     let coreCountFrame: NSRect

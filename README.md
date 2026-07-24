@@ -72,6 +72,11 @@ visually stable instead of blinking out and back in at capture time.
 - Hub, thumbnail, pinned, settings, and status-menu commands are real Native
   SDK controls rendered from one fixed House Dark token register. AppKit owns only window
   hosting and system chrome.
+- Every rounded control has exactly one Native SDK chrome owner. The hub's
+  animated core stretches that owner's raster with preserved caps; transparent,
+  pointer-free foreground slices carry only its icon and text. Stroke geometry
+  is aligned to physical display pixels and rendered with coverage
+  antialiasing, so Retina scaling cannot create doubled or jagged borders.
 - Hover, pressed, and click dispatch travel through the Native SDK runtime;
   visible labels are not used as action identifiers.
 - Native SDK `button-group` is reserved for model-owned exclusive choices such
@@ -129,8 +134,8 @@ catalog, and reusable markup contracts live in the independent project:
 
 The dependency is separately versioned in the private
 `i-iii4/native-ui-design-system` repository. `NativeUIDependencies.lock` pins
-design-system revision `b2e7cb0ad13a05d39dfc8e6ded91ab86817b9869` and Native
-SDK `0.4.0`; build and test fail on any mismatch or tracked dependency change.
+design-system revision `bcfa1be8c3c4e219bcd79aaf9219a79c34933f22` and Native
+SDK `0.5.4`; build and test fail on any mismatch or tracked dependency change.
 QuickShot does not keep a private copy of the catalog or validator.
 
 Configure any clean checkout once:

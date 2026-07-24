@@ -4,6 +4,38 @@
 
 ---
 
+## 24.07.2026 — Retina-обводки переведены на единый Native chrome
+
+Проверка показала две независимые причины грязной серой кромки. Reference CPU
+renderer Native SDK `0.4.0` определял rounded fill/stroke бинарно по центру
+пикселя и не вычислял coverage, поэтому диагональные участки радиуса на Retina
+получались ступенчатыми и визуально меняли толщину. Одновременно центральная
+кнопка хаба собиралась из нескольких полных button-raster: фоновый слой и
+контентные слои повторно содержали собственный периметр и могли накладывать
+полупрозрачные края друг на друга.
+
+Native UI Design System обновлена до `0.1.1` и отдельно опубликована на ревизии
+`bcfa1be8c3c4e219bcd79aaf9219a79c34933f22`; она фиксирует Native SDK `0.5.4`
+(`349618a`, automation protocol `v7`). Новый renderer использует signed-distance
+coverage antialiasing и строит внешнюю и внутреннюю границы stroke из одного
+поля расстояний. Контрактный тест рисует rounded stroke толщиной `1pt` при
+scale `2x` и проверяет частичное покрытие и симметрию краёв.
+
+В QuickShot центральный core теперь имеет ровно одного владельца chrome:
+официальный Native SDK `secondary` button. Его raster отображается через
+stretchable center-сегмент, поэтому углы и stroke не масштабируются при
+раскрытии. Иконка, одометр и подпись берутся из прозрачных `ghost` foreground
+renders той же геометрии; эти слои не принимают pointer events и не содержат
+видимой рамки. Frame chrome выравнивается по физической сетке текущего
+backing scale и перерисовывается при смене дисплея.
+
+Headless regression проверяет единственного владельца stroke на нескольких
+точках анимации, совпадение chrome/core frame и pixel-grid alignment. Полный
+`scripts/test.sh` и production build проходят без показа capture overlay на
+активном экране.
+
+---
+
 ## 24.07.2026 — план стабилизации реализован
 
 Полностью реализованы фазы 1-5 из `CAPTURE_ARCHITECTURE.md` и автоматическая
@@ -36,7 +68,7 @@ immutable Sendable-границу.
 
 Native UI Design System опубликована как отдельный приватный репозиторий
 `i-iii4/native-ui-design-system`. QuickShot фиксирует ревизию
-`b2e7cb0ad13a05d39dfc8e6ded91ab86817b9869` и SDK `0.4.0` в
+`bcfa1be8c3c4e219bcd79aaf9219a79c34933f22` и SDK `0.5.4` в
 `NativeUIDependencies.lock`; build/test принимают один разрешённый путь и больше
 не зависят от неявного sibling `node_modules`. GitHub Actions получает только
 read-only deploy key.

@@ -59,6 +59,10 @@ pub const Model = struct {
         return model.surface == .hub_core_background;
     }
 
+    pub fn hubCoreForegroundSurface(model: *const Model) bool {
+        return model.surface == .hub_core_foreground;
+    }
+
     pub fn pinnedSurface(model: *const Model) bool {
         return model.surface == .pinned;
     }
@@ -93,6 +97,7 @@ pub const Surface = enum {
     hub,
     hub_bubble,
     hub_core_background,
+    hub_core_foreground,
     thumbnail,
     pinned,
     settings,
@@ -210,7 +215,7 @@ fn designTokens(model: *const Model) canvas.DesignTokens {
         .contrast = if (model.high_contrast) .high else .standard,
         .reduce_motion = model.reduce_motion,
     });
-    if (model.surface == .hub or model.surface == .hub_bubble or model.surface == .hub_core_background or model.surface == .thumbnail or model.surface == .pinned) {
+    if (model.surface == .hub or model.surface == .hub_bubble or model.surface == .hub_core_background or model.surface == .hub_core_foreground or model.surface == .thumbnail or model.surface == .pinned) {
         tokens.colors.background = canvas.Color.rgba8(0, 0, 0, 0);
     }
     return tokens;
@@ -293,6 +298,7 @@ fn onCommand(name: []const u8) ?Msg {
         if (std.mem.eql(u8, raw, "hub")) return .{ .set_surface = .hub };
         if (std.mem.eql(u8, raw, "hub_bubble")) return .{ .set_surface = .hub_bubble };
         if (std.mem.eql(u8, raw, "hub_core_background")) return .{ .set_surface = .hub_core_background };
+        if (std.mem.eql(u8, raw, "hub_core_foreground")) return .{ .set_surface = .hub_core_foreground };
         if (std.mem.eql(u8, raw, "thumbnail")) return .{ .set_surface = .thumbnail };
         if (std.mem.eql(u8, raw, "pinned")) return .{ .set_surface = .pinned };
         if (std.mem.eql(u8, raw, "settings")) return .{ .set_surface = .settings };

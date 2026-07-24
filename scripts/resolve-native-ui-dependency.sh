@@ -59,7 +59,7 @@ if [ ! -f "$SDK_DIR/build.zig" ] || [ ! -x "$DESIGN_SYSTEM_DIR/node_modules/.bin
 fi
 
 ACTUAL_SDK_VERSION="$("$DESIGN_SYSTEM_DIR/node_modules/.bin/native" version)"
-EXPECTED_SDK_VERSION="native $NATIVE_SDK_VERSION (commit $NATIVE_SDK_UPSTREAM_COMMIT, automation protocol v6)"
+EXPECTED_SDK_VERSION="native $NATIVE_SDK_VERSION (commit $NATIVE_SDK_UPSTREAM_COMMIT, automation protocol $NATIVE_SDK_AUTOMATION_PROTOCOL)"
 if [ "$ACTUAL_SDK_VERSION" != "$EXPECTED_SDK_VERSION" ]; then
   echo "error: Native SDK version mismatch" >&2
   echo "expected: $EXPECTED_SDK_VERSION" >&2

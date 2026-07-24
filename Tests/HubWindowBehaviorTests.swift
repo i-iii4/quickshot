@@ -782,16 +782,39 @@ struct HubWindowBehaviorTests {
     private static func testCompactShellUsesOneStroke() throws {
         for position in [TrayPosition.right, .left, .bottom, .top] {
             let harness = Harness(position: position)
-            harness.hub.debugSetExpansionProgress(0)
-            let snapshot = harness.hub.debugSnapshot()
+            for progress: CGFloat in [0, 0.18, 0.5, 0.82, 1] {
+                harness.hub.debugSetExpansionProgress(progress)
+                let snapshot = harness.hub.debugSnapshot()
 
-            try require(abs(snapshot.shellBorderWidth) <= 0.001,
-                        "\(position): House command row must not use container border")
-            try require(snapshot.bubbleAlpha == 0,
+                try require(abs(snapshot.shellBorderWidth) <= 0.001,
+                            "\(position): House command row must not use container border")
+                try require(snapshot.coreChromeOwnerCount == 1,
+                            "\(position) progress \(progress): core perimeter has \(snapshot.coreChromeOwnerCount) raster owners; compact alpha \(snapshot.compactForegroundPerimeterAlpha), revealed alpha \(snapshot.revealedForegroundPerimeterAlpha), revealed hover \(snapshot.revealedForegroundHovered)")
+                try require(snapshot.coreChromeUsesStretchableNativeRaster,
+                            "\(position) progress \(progress): core must preserve the Native raster caps")
+                let expectedChrome = snapshot.coreFrame.insetBy(dx: -snapshot.shellInset,
+                                                                dy: -snapshot.shellInset)
+                try require(rectsEqual(snapshot.coreChromeFrame, expectedChrome, tolerance: 0.501),
+                            "\(position) progress \(progress): chrome frame \(snapshot.coreChromeFrame) != \(expectedChrome)")
+                for edge in [
+                    snapshot.coreChromeFrame.minX,
+                    snapshot.coreChromeFrame.minY,
+                    snapshot.coreChromeFrame.maxX,
+                    snapshot.coreChromeFrame.maxY,
+                ] {
+                    let physical = edge * snapshot.coreChromeRenderScale
+                    try require(abs(physical - physical.rounded()) <= 0.001,
+                                "\(position) progress \(progress): chrome edge \(edge) is off the device-pixel grid")
+                }
+            }
+
+            harness.hub.debugSetExpansionProgress(0)
+            let compact = harness.hub.debugSnapshot()
+            try require(compact.bubbleAlpha == 0,
                         "\(position): compact hub must not show the hover bubble")
-            try require(snapshot.coreHasIcon,
+            try require(compact.coreHasIcon,
                         "\(position): compact hub must keep the trailing chevron")
-            try require(snapshot.coreTitle.allSatisfy { $0.isNumber || $0 == "+" },
+            try require(compact.coreTitle.allSatisfy { $0.isNumber || $0 == "+" },
                         "\(position): compact hub must show only the screenshot count")
         }
     }

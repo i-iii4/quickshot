@@ -31,9 +31,14 @@ and the remaining release gates.
   state and animation commit.
 - Production and tests compile in Swift 6 with complete strict concurrency and
   warnings as errors.
-- Native UI Design System `0.1.0` is resolved from one configured input and
-  locked to `b2e7cb0ad13a05d39dfc8e6ded91ab86817b9869`; the Zig manifest no longer
+- Native UI Design System `0.1.1` is resolved from one configured input and
+  locked to `bcfa1be8c3c4e219bcd79aaf9219a79c34933f22`; the Zig manifest no longer
   assumes a sibling `node_modules` path.
+- Native SDK `0.5.4` supplies signed-distance coverage antialiasing for rounded
+  fills and strokes. Animated hub geometry keeps one official secondary-button
+  raster as the sole chrome owner, stretches only its center pixels, and
+  composites pointer-free ghost foregrounds for icon and text. Every animated
+  edge is snapped to the active backing-scale grid.
 - Production builds compile, sign, and verify a staging bundle. `renameatx_np`
   swaps it with the installed app atomically; compiler, signing, and pre-install
   failure tests prove that the previous valid app remains unchanged.
@@ -439,8 +444,8 @@ Scope:
 - add macOS CI for headless tests, strict compilation, Native SDK validation,
   production build, and signature structure.
 
-The initial dependency lock should record the currently audited design-system
-revision `b2e7cb0`; later updates require an explicit lock change and full suite.
+The dependency lock records the currently audited design-system revision
+`bcfa1be`; later updates require an explicit lock change and full suite.
 
 Required gates:
 
