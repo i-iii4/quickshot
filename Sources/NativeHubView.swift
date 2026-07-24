@@ -50,6 +50,7 @@ func nativeHubSpringStep(value: CGFloat,
 
 /// A finite, critically damped reveal. Retargeting keeps the presentation
 /// velocity, while the House fast token remains a hard perceptual deadline.
+@MainActor
 private final class NativeHubSpringAnimator: NSObject {
     private weak var hostView: NSView?
     private var link: CADisplayLink?
@@ -138,7 +139,7 @@ private final class NativeHubSpringAnimator: NSObject {
         onDone = nil
     }
 
-    deinit { link?.invalidate() }
+    isolated deinit { link?.invalidate() }
 }
 
 private enum NativeHubPressedButton: Int32 {
@@ -256,14 +257,16 @@ private final class NativeHubRenderView: NSView {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.syncSystemAppearance()
+            Task { @MainActor [weak self] in
+                self?.syncSystemAppearance()
+            }
         }
         syncSystemAppearance()
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    deinit {
+    isolated deinit {
         if let accessibilityObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(accessibilityObserver)
         }
@@ -1001,7 +1004,7 @@ final class NativeHubShellView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    deinit {
+    isolated deinit {
         stopHoverMonitoring()
     }
 
@@ -1553,7 +1556,9 @@ final class NativeHubShellView: NSView {
         }
         globalHoverMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) {
             [weak self] _ in
-            DispatchQueue.main.async { self?.updateHoverFromGlobalPointer() }
+            Task { @MainActor [weak self] in
+                self?.updateHoverFromGlobalPointer()
+            }
         }
     }
 
@@ -2234,6 +2239,7 @@ final class NativeStatusMenuContentView: NSView {
 }
 
 #if TESTING
+@MainActor
 private func nativeDebugButtons(_ nativeView: NativeHubRenderView,
                                 in host: NSView) -> [NativeControlDebugButtonSnapshot] {
     nativeView.renderNow()
@@ -2246,6 +2252,7 @@ private func nativeDebugButtons(_ nativeView: NativeHubRenderView,
     }
 }
 
+@MainActor
 private func nativeDebugHover(title: String, nativeView: NativeHubRenderView) {
     nativeView.renderNow()
     guard let node = nativeView.buttonNodes().first(where: { $0.title == title }) else { return }

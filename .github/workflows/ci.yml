@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quickshot-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out QuickShot
+        uses: actions/checkout@v4
+
+      - name: Configure read-only design-system access
+        env:
+          DEPLOY_KEY: ${{ secrets.NATIVE_UI_DEPLOY_KEY }}
+        run: |
+          test -n "$DEPLOY_KEY"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -H github.com >> "$HOME/.ssh/known_hosts"
+
+      - name: Resolve pinned Native UI dependency
+        run: |
+          source NativeUIDependencies.lock
+          dependency_dir="$RUNNER_TEMP/native-ui-design-system"
+          git clone --filter=blob:none "$NATIVE_UI_DESIGN_SYSTEM_REPOSITORY" "$dependency_dir"
+          git -C "$dependency_dir" checkout --detach "$NATIVE_UI_DESIGN_SYSTEM_REVISION"
+          test "$(git -C "$dependency_dir" rev-parse HEAD)" = "$NATIVE_UI_DESIGN_SYSTEM_REVISION"
+          npm ci --prefix "$dependency_dir"
+          echo "NATIVE_DESIGN_SYSTEM_DIR=$dependency_dir" >> "$GITHUB_ENV"
+
+      - name: Install Zig 0.16
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Run headless regression suite
+        run: ./scripts/test.sh
+
+      - name: Build and verify production bundle
+        run: |
+          ./build.sh
+          codesign --verify --deep --strict QuickShot.app
+
+      - name: Prove failed builds preserve the installed app
+        run: ./scripts/test-build-failure-preservation.sh

@@ -225,7 +225,7 @@ private final class CaptureSession {
     let id = UUID()
     let sequence: CaptureSequence
 
-    private let snapshotProvider: DirectScreenSnapshotProvider
+    private let snapshotProvider: any ScreenSnapshotProviding
     private let onSelectionReleased: (UUID) -> Void
     private let onImage: (CaptureSequence, CGImage, NSScreen, CFAbsoluteTime) -> Void
     private let onError: (Error) -> Void
@@ -243,7 +243,7 @@ private final class CaptureSession {
     private var endOutcome: CaptureSessionOutcome = .unknown
 
     init(sequence: CaptureSequence,
-         snapshotProvider: DirectScreenSnapshotProvider,
+         snapshotProvider: any ScreenSnapshotProviding,
          onSelectionReleased: @escaping (UUID) -> Void,
          onImage: @escaping (CaptureSequence, CGImage, NSScreen, CFAbsoluteTime) -> Void,
          onError: @escaping (Error) -> Void,
@@ -414,37 +414,48 @@ private final class CaptureSession {
                                selection: CGRect,
                                deliveryDisplayID: CGDirectDisplayID,
                                mouseUpAt: CFAbsoluteTime) {
-        let deliver = onImage
-        cropTask = Task.detached(priority: .userInitiated) { [weak self] in
+        let work = Task.detached(priority: .userInitiated) {
             let cropStartedAt = CFAbsoluteTimeGetCurrent()
-            let cropped = shot.crop(globalSelection: selection)
+            let cropped = shot.crop(globalSelection: selection).map(CaptureImagePayload.init)
             let cropMs = (CFAbsoluteTimeGetCurrent() - cropStartedAt) * 1000
-            guard !Task.isCancelled else { return }
-            await MainActor.run { [weak self] in
-                guard let self, self.phase == .delivering, !self.didEnd else { return }
-                guard let cropped else {
-                    self.endOutcome = .failed
-                    self.onError(CaptureError.snapshotUnavailable("Frozen image crop failed"))
-                    self.end()
-                    return
-                }
-                guard let screen = Self.screen(forDisplayID: deliveryDisplayID)
-                        ?? NSScreen.main ?? NSScreen.screens.first else {
-                    self.endOutcome = .failed
-                    self.onError(CaptureError.noDisplay)
-                    self.end()
-                    return
-                }
-
-                let mouseUpToHandoffMs = (CFAbsoluteTimeGetCurrent() - mouseUpAt) * 1000
-                Self.log.info("capture crop complete width=\(cropped.width, privacy: .public) height=\(cropped.height, privacy: .public) cropMs=\(cropMs, privacy: .public) mouseUpToHandoffMs=\(mouseUpToHandoffMs, privacy: .public)")
-                Self.log.info("capture image handoff started width=\(cropped.width, privacy: .public) height=\(cropped.height, privacy: .public)")
-                deliver(self.sequence, cropped, screen, mouseUpAt)
-                self.endOutcome = .completed
-                self.phase = .finished
-                self.end()
-            }
+            return (cropped, cropMs)
         }
+        cropTask = Task { @MainActor [weak self] in
+            let (payload, cropMs) = await work.value
+            guard !Task.isCancelled else { return }
+            self?.cropCompleted(payload,
+                                cropMs: cropMs,
+                                deliveryDisplayID: deliveryDisplayID,
+                                mouseUpAt: mouseUpAt)
+        }
+    }
+
+    private func cropCompleted(_ payload: CaptureImagePayload?,
+                               cropMs: Double,
+                               deliveryDisplayID: CGDirectDisplayID,
+                               mouseUpAt: CFAbsoluteTime) {
+        guard phase == .delivering, !didEnd else { return }
+        guard let cropped = payload?.image else {
+            endOutcome = .failed
+            onError(CaptureError.snapshotUnavailable("Frozen image crop failed"))
+            end()
+            return
+        }
+        guard let screen = Self.screen(forDisplayID: deliveryDisplayID)
+                ?? NSScreen.main ?? NSScreen.screens.first else {
+            endOutcome = .failed
+            onError(CaptureError.noDisplay)
+            end()
+            return
+        }
+
+        let mouseUpToHandoffMs = (CFAbsoluteTimeGetCurrent() - mouseUpAt) * 1000
+        Self.log.info("capture crop complete width=\(cropped.width, privacy: .public) height=\(cropped.height, privacy: .public) cropMs=\(cropMs, privacy: .public) mouseUpToHandoffMs=\(mouseUpToHandoffMs, privacy: .public)")
+        Self.log.info("capture image handoff started width=\(cropped.width, privacy: .public) height=\(cropped.height, privacy: .public)")
+        onImage(sequence, cropped, screen, mouseUpAt)
+        endOutcome = .completed
+        phase = .finished
+        end()
     }
 
     private func fail(_ error: Error) {

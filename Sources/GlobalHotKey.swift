@@ -12,10 +12,12 @@ import OSLog
 ///
 /// Важно для macOS 15/26: комбинация обязана содержать Command или Control (не только
 /// Shift/Option), иначе RegisterEventHotKey вернёт -9868. ⌘⇧4 это условие выполняет.
+@MainActor
 final class GlobalHotKey {
 
     static let shared = GlobalHotKey()
-    private static let log = Logger(subsystem: "com.iiii.quickshot", category: "capture")
+    nonisolated private static let log = Logger(subsystem: "com.iiii.quickshot",
+                                                category: "capture")
 
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
@@ -88,7 +90,6 @@ final class GlobalHotKey {
         return true
     }
 
-    deinit { unregister() }
 }
 
 /// C-совместимый колбэк. Глобальная функция без захвата конвертируется в указатель
@@ -109,5 +110,7 @@ private func hotKeyEventHandler(_ next: EventHandlerCallRef?,
     guard err == noErr else { return err }
 
     let manager = Unmanaged<GlobalHotKey>.fromOpaque(userData).takeUnretainedValue()
-    return manager.fire(firedID) ? noErr : OSStatus(eventNotHandledErr)
+    return MainActor.assumeIsolated {
+        manager.fire(firedID) ? noErr : OSStatus(eventNotHandledErr)
+    }
 }

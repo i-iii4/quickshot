@@ -3,6 +3,7 @@ import AppKit
 /// Owns exactly one balanced AppKit cursor suppression for one capture session.
 /// The lease may only be acquired after QuickShot becomes foreground; AppKit and
 /// CoreGraphics do not guarantee cursor replacement for a background process.
+@MainActor
 final class CursorLease {
     typealias CursorOperation = () -> Bool
 
@@ -38,7 +39,7 @@ final class CursorLease {
         return true
     }
 
-    deinit {
+    isolated deinit {
         if isAcquired {
             _ = showCursor()
         }

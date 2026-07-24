@@ -57,6 +57,7 @@ struct HubDebugSnapshot {
 
 /// Public tray hub wrapper. The visible controls are rendered by Native SDK:
 /// `NativeQuickShotUI/src/hub.native` owns the real `<button>` and `<button-group>`.
+@MainActor
 final class HubWindow {
     private let shell: NativeHubShellView
 

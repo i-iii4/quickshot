@@ -14,13 +14,11 @@ if [ -z "$ZIG_BIN" ]; then
   exit 1
 fi
 
-NATIVE_DESIGN_SYSTEM_DIR="${NATIVE_DESIGN_SYSTEM_DIR:-$PWD/../native-ui-design-system}"
-if [ ! -x "$NATIVE_DESIGN_SYSTEM_DIR/scripts/check.sh" ]; then
-  echo "error: Native UI Design System not found at $NATIVE_DESIGN_SYSTEM_DIR" >&2
-  exit 1
-fi
+NATIVE_DESIGN_SYSTEM_DIR="$("$PWD/scripts/resolve-native-ui-dependency.sh")"
 NATIVE_DESIGN_SYSTEM_ZIG="$ZIG_BIN" \
   "$NATIVE_DESIGN_SYSTEM_DIR/scripts/check.sh" "$PWD/NativeQuickShotUI/src/hub.native"
+
+"$PWD/scripts/test-atomic-replace.sh"
 
 NATIVE_UI_LIB="$PWD/NativeQuickShotUI/zig-out/lib/libquickshot-native-ui.a"
 OUT="$(mktemp -t quickshot-hub-tests)"
@@ -47,7 +45,9 @@ trap 'rm -f "$OUT" "$SURFACE_OUT" "$STATUS_LAYOUT_OUT" "$TRAY_POINTER_OUT" "$THU
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   Sources/CaptureGestureBuffer.swift \
   Tests/CaptureGestureBufferTests.swift \
   -o "$CAPTURE_GESTURE_OUT"
@@ -57,7 +57,9 @@ xcrun swiftc \
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   Sources/CaptureSequence.swift \
   Tests/CaptureSequenceTests.swift \
   -o "$CAPTURE_SEQUENCE_OUT"
@@ -67,7 +69,9 @@ xcrun swiftc \
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -framework AppKit \
   -framework ImageIO \
   Sources/CaptureSequence.swift \
@@ -81,7 +85,9 @@ xcrun swiftc \
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -framework AppKit \
   Sources/WindowCaptureProtection.swift \
   Tests/WindowCaptureProtectionTests.swift \
@@ -92,7 +98,9 @@ xcrun swiftc \
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   Sources/CaptureSequence.swift \
   Sources/ThumbnailCollectionModel.swift \
   Tests/ThumbnailCollectionModelTests.swift \
@@ -107,7 +115,9 @@ xcrun swiftc \
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -D TESTING \
   -framework AppKit \
   -framework CoreGraphics \
@@ -125,7 +135,9 @@ xcrun swiftc \
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -D TESTING \
   -framework AppKit \
   -framework CoreGraphics \
@@ -143,7 +155,9 @@ xcrun swiftc \
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -framework AppKit \
   Sources/StatusMenuLayout.swift \
   Tests/StatusMenuLayoutTests.swift \
@@ -154,7 +168,9 @@ xcrun swiftc \
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -framework AppKit \
   Sources/TrayHostContentView.swift \
   Tests/TrayPointerRoutingTests.swift \
@@ -165,7 +181,9 @@ xcrun swiftc \
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -framework AppKit \
   Sources/ThumbnailLayout.swift \
   Tests/ThumbnailLayoutTests.swift \
@@ -176,7 +194,9 @@ xcrun swiftc \
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -framework AppKit \
   Sources/MotionCurves.swift \
   Sources/ThumbnailMotion.swift \
@@ -188,7 +208,9 @@ xcrun swiftc \
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -D TESTING \
   -framework AppKit \
   -framework CoreGraphics \
@@ -222,7 +244,9 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -D TESTING \
 	  -framework AppKit \
 	  -framework CoreGraphics \
@@ -242,7 +266,9 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -D TESTING \
   -framework AppKit \
   -framework CoreGraphics \
@@ -277,7 +303,9 @@ fi
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -D TESTING \
   -framework AppKit \
   -framework Carbon \
@@ -297,7 +325,9 @@ xcrun swiftc \
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -framework AppKit \
   -framework CoreGraphics \
   Sources/CursorLease.swift \
@@ -309,7 +339,9 @@ xcrun swiftc \
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -framework AppKit \
   -framework CoreGraphics \
   Sources/CursorLease.swift \
@@ -322,7 +354,9 @@ xcrun swiftc \
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -parse-as-library \
   -framework AppKit \
   -framework CoreGraphics \
@@ -337,7 +371,9 @@ xcrun swiftc \
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -parse-as-library \
   Tests/CaptureHotPathStaticTests.swift \
   -o "$CAPTURE_HOT_PATH_OUT"
@@ -423,7 +459,7 @@ rg -F -q "artifactStore.admit(sequence: sequence, image: image)" Sources/Capture
 rg -F -q "preparationTask" Sources/CaptureArtifact.swift
 rg -q "struct PreparedImage" Sources/Clipboard.swift
 rg -q "import ImageIO" Sources/Clipboard.swift
-rg -F -q "prepareImages(cgImages: [CGImage])" Sources/Clipboard.swift
+rg -F -q "prepareImage(cgImage: CGImage, fileURL: URL? = nil)" Sources/Clipboard.swift
 rg -F -q "pasteboardItem(preparedImage" Sources/Clipboard.swift
 if output="$(rg -n "copy\\(cgImage:|copyAll\\(cgImages:" Sources/Clipboard.swift)"; then
   echo "$output"

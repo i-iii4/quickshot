@@ -8,6 +8,7 @@ struct CaptureSequenceTests {
         testFailedNewerCaptureReleasesBarrier()
         testStaleCompletionCannotReplaceClipboard()
         testOrderedInsertion()
+        testHundredRandomizedCompletionOrders()
         print("CaptureSequenceTests: passed")
     }
 
@@ -59,10 +60,57 @@ struct CaptureSequenceTests {
         require(index == 1, "late delivery must be inserted by capture sequence")
     }
 
+    private static func testHundredRandomizedCompletionOrders() {
+        for iteration in 0..<100 {
+            var state = CaptureDeliveryState()
+            let sequences = (1...100).map {
+                CaptureSequence(rawValue: UInt64($0))
+            }
+            sequences.forEach { state.accept($0) }
+
+            var random = DeterministicRandom(seed: UInt64(iteration + 1))
+            var completions = sequences
+            random.shuffle(&completions)
+            let successful = Set(sequences.filter { sequence in
+                (sequence.rawValue + UInt64(iteration)) % 7 != 0
+            })
+            var commits: [CaptureSequence] = []
+
+            for sequence in completions {
+                let commit = successful.contains(sequence)
+                    ? state.markReady(sequence)
+                    : state.markFailed(sequence)
+                if let commit { commits.append(commit) }
+            }
+
+            require(zip(commits, commits.dropFirst()).allSatisfy(<),
+                    "clipboard commits moved backwards in iteration \(iteration)")
+            require(state.lastClipboardCommit == successful.max(),
+                    "random completion order lost the newest successful capture")
+        }
+    }
+
     private static func require(_ condition: @autoclosure () -> Bool, _ message: String) {
         if !condition() {
             fputs("CaptureSequenceTests failed: \(message)\n", stderr)
             exit(1)
+        }
+    }
+}
+
+private struct DeterministicRandom {
+    private var state: UInt64
+
+    init(seed: UInt64) {
+        state = seed
+    }
+
+    mutating func shuffle<T>(_ values: inout [T]) {
+        guard values.count > 1 else { return }
+        for index in stride(from: values.count - 1, through: 1, by: -1) {
+            state = state &* 6_364_136_223_846_793_005 &+ 1
+            let target = Int(state % UInt64(index + 1))
+            values.swapAt(index, target)
         }
     }
 }

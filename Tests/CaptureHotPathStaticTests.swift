@@ -338,11 +338,12 @@ struct CaptureHotPathStaticTests {
     ) throws {
         try require(clipboardSource.contains("import ImageIO")
                     && clipboardSource.contains("struct PreparedImage")
-                    && clipboardSource.contains("prepareImages(cgImages: [CGImage])"),
-                    "Clipboard must own off-main prepared image payloads")
+                    && clipboardSource.contains("prepareImage(cgImage: CGImage, fileURL: URL? = nil)"),
+                    "Clipboard must expose one pure prepared-image encoder")
         try require(artifactSource.contains("final class CaptureArtifact")
                     && artifactSource.contains("preparedImageIfReady")
-                    && artifactSource.contains("preparationTask"),
+                    && artifactSource.contains("preparationTask")
+                    && artifactSource.contains("Task.detached(priority: .userInitiated)"),
                     "One capture artifact must own and coalesce encoded representations")
         for (name, source) in [("CaptureController", captureSource),
                                ("ThumbnailManager", thumbnailManagerSource),

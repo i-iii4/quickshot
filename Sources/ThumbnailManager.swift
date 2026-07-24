@@ -145,7 +145,7 @@ final class ThumbnailManager {
     private var pointerMonitor: Any?
     private var localPointerMonitor: Any?
 
-    deinit {
+    isolated deinit {
         collapsedPeekWorkItem?.cancel()
         hoverExitWorkItem?.cancel()
         NotificationCenter.default.removeObserver(self)
@@ -551,7 +551,6 @@ final class ThumbnailManager {
         let removesVisiblePeek = removed.contains { $0 === collapsedPeekItem }
         if removesVisiblePeek { collapsedPeekItem = nil }
         guard let screen = anchorScreen ?? NSScreen.main else { return }
-        let removedIDs = Set(removed.map { ObjectIdentifier($0) })
         let oldVisibleIDs = Set(items.filter { !$0.hostView.isHidden }.map { ObjectIdentifier($0) })
         let oldFrames = Dictionary(uniqueKeysWithValues: items.map { (ObjectIdentifier($0), $0.layoutFrame) })
         let removedArtifactIDs = Set(removed.map { $0.artifact.id })

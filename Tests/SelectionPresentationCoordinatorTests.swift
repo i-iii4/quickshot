@@ -1,6 +1,7 @@
 import Foundation
 
 @main
+@MainActor
 struct SelectionPresentationCoordinatorTests {
     static func main() {
         run("cursor waits for foreground ownership", testCursorWaitsForActivation)

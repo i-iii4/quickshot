@@ -18,6 +18,7 @@ enum WindowCaptureProtection {
     @MainActor
     private static var externalWindowProviders: [() -> NSWindow?] = []
 
+    @MainActor
     static func excludeFromScreenCapture(_ window: NSWindow) {
         window.sharingType = .none
     }

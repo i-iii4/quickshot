@@ -11,6 +11,7 @@ enum SelectionPresentationFailure: Equatable {
 /// pixels are already immutable before this starts, so activation cannot change
 /// the captured hover state. Presentation is revealed only after foreground
 /// ownership and cursor suppression are both confirmed.
+@MainActor
 final class SelectionPresentationCoordinator {
     enum State: Equatable {
         case idle
@@ -71,7 +72,9 @@ final class SelectionPresentationCoordinator {
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
             queue: .main) { [weak self] _ in
-                self?.applicationDidActivate()
+                Task { @MainActor [weak self] in
+                    self?.applicationDidActivate()
+                }
             }
         scheduleTimeout()
         guard requestActivation() else {
@@ -106,7 +109,9 @@ final class SelectionPresentationCoordinator {
             forName: NSApplication.didResignActiveNotification,
             object: nil,
             queue: .main) { [weak self] _ in
-                self?.applicationDidResign()
+                Task { @MainActor [weak self] in
+                    self?.applicationDidResign()
+                }
             }
         let callback = onAcquired
         onAcquired = nil
@@ -166,7 +171,7 @@ final class SelectionPresentationCoordinator {
         return restored
     }
 
-    deinit {
+    isolated deinit {
         clearObservers()
     }
 }

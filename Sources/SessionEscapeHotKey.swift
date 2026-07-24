@@ -2,6 +2,7 @@ import Carbon.HIToolbox
 
 /// Session-scoped Escape registration that works while QuickShot deliberately
 /// stays inactive. Carbon observes only this key and requires no input monitor.
+@MainActor
 final class SessionEscapeHotKey {
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
@@ -59,7 +60,6 @@ final class SessionEscapeHotKey {
         return true
     }
 
-    deinit { unregister() }
 }
 
 private func sessionEscapeHandler(_ next: EventHandlerCallRef?,
@@ -76,5 +76,7 @@ private func sessionEscapeHandler(_ next: EventHandlerCallRef?,
                                    &identifier)
     guard status == noErr else { return status }
     let owner = Unmanaged<SessionEscapeHotKey>.fromOpaque(userData).takeUnretainedValue()
-    return owner.fire(identifier) ? noErr : OSStatus(eventNotHandledErr)
+    return MainActor.assumeIsolated {
+        owner.fire(identifier) ? noErr : OSStatus(eventNotHandledErr)
+    }
 }

@@ -15,6 +15,7 @@ struct DirectScreenSnapshotProviderTests {
             try await testProviderRejectsExcessiveDisplaySkew()
             try await testCancellationDiscardsSynchronousResult()
             try await testDuplicateDisplaysFailBeforeCapture()
+            try await testHundredFakeBackendLifecycles()
             print("DirectScreenSnapshotProviderTests: passed")
         } catch {
             fputs("DirectScreenSnapshotProviderTests failed: \(error)\n", stderr)
@@ -195,6 +196,55 @@ struct DirectScreenSnapshotProviderTests {
             try require(recorder.callCount == 0,
                         "Duplicate display validation ran after pixel capture")
         }
+    }
+
+    private static func testHundredFakeBackendLifecycles() async throws {
+        let provider = DirectScreenSnapshotProvider { bounds in
+            let index = Int(bounds.minX)
+            if index % 13 == 0 {
+                throw CaptureError.snapshotUnavailable("planned fake failure")
+            }
+            if index % 5 == 0 {
+                Thread.sleep(forTimeInterval: 0.0005)
+            }
+            return try solidImage(width: 2, height: 2,
+                                  red: CGFloat(index % 10) / 10)
+        }
+
+        let allPassed = await withTaskGroup(of: Bool.self,
+                                            returning: Bool.self) { group in
+            for index in 0..<100 {
+                group.addTask {
+                    if index % 3 == 0 {
+                        await Task.yield()
+                    }
+                    let sessionID = UUID()
+                    let display = CaptureDisplay(
+                        id: CGDirectDisplayID(index + 1),
+                        frame: CGRect(x: index, y: 0, width: 2, height: 2),
+                        quartzBounds: CGRect(x: index, y: 0, width: 2, height: 2))
+                    do {
+                        let batch = try await provider.capture(
+                            sessionID: sessionID,
+                            displays: [display])
+                        return index % 13 != 0
+                            && batch.sessionID == sessionID
+                            && batch.screens.map(\.displayID) == [display.id]
+                    } catch CaptureError.snapshotUnavailable {
+                        return index % 13 == 0
+                    } catch {
+                        return false
+                    }
+                }
+            }
+
+            for await passed in group where !passed {
+                return false
+            }
+            return true
+        }
+        try require(allPassed,
+                    "100 fake-backend lifecycles leaked, reordered, or misowned a result")
     }
 
     private static func solidImage(width: Int, height: Int, red: CGFloat) throws -> CGImage {

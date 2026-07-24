@@ -1,5 +1,6 @@
 import AppKit
 
+@MainActor
 enum TrayPosition: String {
     case right, left, bottom, top
 
@@ -9,6 +10,7 @@ enum TrayPosition: String {
     static var current: TrayPosition { testCurrent }
 }
 
+@MainActor
 final class FrameAnimator {
     init(hostView: NSView) {}
 

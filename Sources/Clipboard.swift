@@ -61,32 +61,6 @@ enum Clipboard {
         }
     }
 
-    static func prepareImages(cgImages: [CGImage]) -> [PreparedImage] {
-        cgImages.map { prepareImage(cgImage: $0) }.filter { !$0.isEmpty }
-    }
-
-    static func prepareImage(cgImage: CGImage,
-                             qos: DispatchQoS.QoSClass = .userInitiated,
-                             completion: @escaping (PreparedImage) -> Void) {
-        DispatchQueue.global(qos: qos).async {
-            let prepared = prepareImage(cgImage: cgImage)
-            DispatchQueue.main.async {
-                completion(prepared)
-            }
-        }
-    }
-
-    static func prepareImages(cgImages: [CGImage],
-                              qos: DispatchQoS.QoSClass = .userInitiated,
-                              completion: @escaping ([PreparedImage]) -> Void) {
-        DispatchQueue.global(qos: qos).async {
-            let prepared = prepareImages(cgImages: cgImages)
-            DispatchQueue.main.async {
-                completion(prepared)
-            }
-        }
-    }
-
     static func copy(preparedImages: [PreparedImage]) {
         let preparedImages = preparedImages.filter { !$0.isEmpty }
         guard !preparedImages.isEmpty else { return }

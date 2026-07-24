@@ -5,6 +5,8 @@ build/
 DerivedData/
 .zig-cache/
 zig-out/
+.dependencies/
+.QuickShot-build.*/
 
 # macOS
 .DS_Store

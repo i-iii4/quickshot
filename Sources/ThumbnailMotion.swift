@@ -79,6 +79,7 @@ func thumbnailAxisLockedOrigin(candidate: NSPoint,
 
 /// One finite display-linked clock for a discrete collection transaction. Visual channels
 /// derive their own curves from this raw progress, avoiding compounded easing and idle tails.
+@MainActor
 final class CollectionProgressAnimator: NSObject {
     private weak var hostView: NSView?
     private var link: CADisplayLink?
@@ -131,7 +132,7 @@ final class CollectionProgressAnimator: NSObject {
         onDone = nil
     }
 
-    deinit { link?.invalidate() }
+    isolated deinit { link?.invalidate() }
 }
 
 struct ThumbnailTrayVisualState {
@@ -166,6 +167,7 @@ func thumbnailTrayVisualState(progress: CGFloat, reduceMotion: Bool) -> Thumbnai
 
 /// One display clock for the complete tray. Retargeting keeps both the current
 /// presentation value and velocity, so Hide/Show can reverse without a stop.
+@MainActor
 final class TrayProgressAnimator: NSObject {
     private weak var hostView: NSView?
     private var link: CADisplayLink?
@@ -256,5 +258,5 @@ final class TrayProgressAnimator: NSObject {
         onDone = nil
     }
 
-    deinit { link?.invalidate() }
+    isolated deinit { link?.invalidate() }
 }

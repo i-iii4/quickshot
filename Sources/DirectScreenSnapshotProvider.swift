@@ -3,7 +3,12 @@ import Darwin
 import Foundation
 import OSLog
 
-struct DirectScreenSnapshotProvider: Sendable {
+protocol ScreenSnapshotProviding: Sendable {
+    func capture(sessionID: UUID,
+                 displays: [CaptureDisplay]) async throws -> FrozenSnapshotBatch
+}
+
+struct DirectScreenSnapshotProvider: ScreenSnapshotProviding {
     typealias CaptureImage = @Sendable (CGRect) throws -> CGImage
 
     nonisolated private static let log = Logger(subsystem: "com.iiii.quickshot",
@@ -109,20 +114,26 @@ private enum LegacyWindowSnapshotBackend {
         CGRect, UInt32, UInt32, UInt32
     ) -> Unmanaged<CGImage>?
 
-    private static let coreGraphicsHandle: UnsafeMutableRawPointer? = {
-        dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
-               RTLD_LAZY | RTLD_LOCAL)
-    }()
+    private final class Resolver: @unchecked Sendable {
+        let handle: UnsafeMutableRawPointer?
+        let createImage: CreateImageFunction?
 
-    private static let createImage: CreateImageFunction? = {
-        guard let coreGraphicsHandle,
-              let symbol = dlsym(coreGraphicsHandle, "CGWindowListCreateImage") else {
-            return nil
+        init() {
+            let handle = dlopen(
+                "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
+                RTLD_LAZY | RTLD_LOCAL)
+            self.handle = handle
+            if let handle, let symbol = dlsym(handle, "CGWindowListCreateImage") {
+                createImage = unsafeBitCast(symbol, to: CreateImageFunction.self)
+            } else {
+                createImage = nil
+            }
         }
-        return unsafeBitCast(symbol, to: CreateImageFunction.self)
-    }()
+    }
 
-    static var isAvailable: Bool { createImage != nil }
+    private static let resolver = Resolver()
+
+    static var isAvailable: Bool { resolver.createImage != nil }
 
     static func capture(bounds: CGRect) throws -> CGImage {
         guard bounds.origin.x.isFinite, bounds.origin.y.isFinite,
@@ -130,7 +141,7 @@ private enum LegacyWindowSnapshotBackend {
               bounds.width > 0, bounds.height > 0 else {
             throw CaptureError.snapshotUnavailable("Invalid display bounds: \(bounds)")
         }
-        guard let createImage else {
+        guard let createImage = resolver.createImage else {
             let reason = dlerror().map { String(cString: $0) }
                 ?? "CGWindowListCreateImage is unavailable"
             throw CaptureError.captureStackUnavailable(reason)

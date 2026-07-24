@@ -171,8 +171,11 @@ private final class ThumbnailView: NSView, NSDraggingSource {
             NSAnimationContext.runAnimationGroup({ ctx in
                 ctx.duration = Self.fade
                 controls.animator().alphaValue = 0
-            }, completionHandler: {
-                if self.controls.alphaValue == 0 { self.controls.isHidden = true }
+            }, completionHandler: { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    if self.controls.alphaValue == 0 { self.controls.isHidden = true }
+                }
             })
         }
     }

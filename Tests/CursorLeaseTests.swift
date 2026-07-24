@@ -1,6 +1,7 @@
 import Foundation
 
 @main
+@MainActor
 struct CursorLeaseTests {
     static func main() {
         run("acquire and release are idempotent", testIdempotentLifecycle)

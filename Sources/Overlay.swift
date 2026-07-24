@@ -6,6 +6,7 @@ import OSLog
 /// живут в разных окнах, чтобы исключённый из capture интерфейс
 /// QuickShot оставался виден между ними. Окна становятся key только
 /// после готовности frozen pixels и фактической активации QuickShot.
+@MainActor
 final class OverlayWindow: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
@@ -16,6 +17,7 @@ final class OverlayWindow: NSPanel {
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
+@MainActor
 private final class BackdropView: NSView {
     init(image: CGImage) {
         super.init(frame: .zero)
@@ -31,6 +33,7 @@ private final class BackdropView: NSView {
 /// Хром выделения поверх уже зафиксированного кадра. До drag он рисует только кастомный курсор.
 /// После начала выделения появляется лёгкая внутренняя заливка выбранной области
 /// и рамка; внешний экран не затемняется.
+@MainActor
 final class SelectionView: NSView {
 
     var onComplete: ((NSRect, NSScreen) -> Void)?
@@ -460,6 +463,7 @@ final class SelectionView: NSView {
 
 /// Создаёт и удерживает по одному frozen-оверлею на каждый экран. Статический
 /// снимок и динамический selection chrome живут в разных слоях.
+@MainActor
 final class OverlayController {
 
     private static let log = Logger(subsystem: "com.iiii.quickshot", category: "capture")
@@ -479,7 +483,7 @@ final class OverlayController {
     private var isPresented = false
     private var isDismissed = false
 
-    deinit {
+    isolated deinit {
         dismiss()
     }
 
@@ -565,7 +569,9 @@ final class OverlayController {
         // оверлей теряет key, локальный Esc-монитор до него не доходит, и выйти можно только сняв кадр).
         spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.onCancel?()
+            Task { @MainActor [weak self] in
+                self?.onCancel?()
+            }
         }
 
         presentation.begin(

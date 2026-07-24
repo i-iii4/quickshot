@@ -1,6 +1,6 @@
 #!/bin/bash
-# Собирает QuickShot.app из исходников Sources/*.swift одним вызовом swiftc и
-# складывает их в .app-бандл (без Xcode-проекта), затем ad-hoc подписывает.
+# Собирает QuickShot.app из исходников Sources/*.swift одним вызовом swiftc.
+# Bundle заменяется только после успешной компиляции, подписи и проверки подписи.
 #
 # Почему .app-бандл, а не голый бинарник: TCC («Запись экрана») привязывается к
 # бандлу со стабильным CFBundleIdentifier; на Tahoe голый бинарник может вообще не
@@ -13,6 +13,11 @@ BUNDLE="${APP}.app"
 ARCH="$(uname -m)"
 DEPLOY="26.0"
 SDK="$(xcrun --show-sdk-path)"
+STAGING_ROOT="$(mktemp -d "$PWD/.QuickShot-build.XXXXXX")"
+STAGING_BUNDLE="$STAGING_ROOT/$BUNDLE"
+ATOMIC_REPLACE="$STAGING_ROOT/atomic-replace"
+trap 'rm -rf "$STAGING_ROOT"' EXIT
+
 ZIG_BIN="${QUICKSHOT_ZIG:-$(command -v zig || true)}"
 if [ -z "$ZIG_BIN" ] && [ -x "$HOME/.native/toolchains/zig-0.16.0/zig" ]; then
   ZIG_BIN="$HOME/.native/toolchains/zig-0.16.0/zig"
@@ -23,11 +28,7 @@ if [ -z "$ZIG_BIN" ]; then
 fi
 
 echo "==> Проверка Native UI contract"
-NATIVE_DESIGN_SYSTEM_DIR="${NATIVE_DESIGN_SYSTEM_DIR:-$PWD/../native-ui-design-system}"
-if [ ! -x "$NATIVE_DESIGN_SYSTEM_DIR/scripts/check.sh" ]; then
-  echo "error: Native UI Design System not found at $NATIVE_DESIGN_SYSTEM_DIR" >&2
-  exit 1
-fi
+NATIVE_DESIGN_SYSTEM_DIR="$("$PWD/scripts/resolve-native-ui-dependency.sh")"
 NATIVE_DESIGN_SYSTEM_ZIG="$ZIG_BIN" \
   "$NATIVE_DESIGN_SYSTEM_DIR/scripts/check.sh" "$PWD/NativeQuickShotUI/src/hub.native"
 
@@ -37,41 +38,71 @@ echo "==> Сборка ${BUNDLE} (${ARCH}, deployment macOS ${DEPLOY})"
 echo "==> Сборка NativeQuickShotUI ($(basename "$ZIG_BIN"))"
 (cd NativeQuickShotUI && PATH="$(dirname "$ZIG_BIN"):$PATH" "$ZIG_BIN" build lib -Doptimize=ReleaseFast)
 
-rm -rf "$BUNDLE"
-mkdir -p "$BUNDLE/Contents/MacOS"
-mkdir -p "$BUNDLE/Contents/Resources"
+mkdir -p "$STAGING_BUNDLE/Contents/MacOS"
+mkdir -p "$STAGING_BUNDLE/Contents/Resources"
 
-# -swift-version 5 ОБЯЗАТЕЛЕН: в языковом режиме Swift 6 строгая проверка
-# concurrency отвергает Carbon C-колбэк и глобальное изменяемое состояние хоткея.
+if [ "${QUICKSHOT_TEST_FAIL_BEFORE_COMPILE:-0}" = "1" ]; then
+  echo "error: injected compiler failure" >&2
+  exit 86
+fi
+
+# Swift 6 и complete strict concurrency являются release gate: AppKit живёт на
+# MainActor, а Carbon callbacks входят в него через проверенную C-границу.
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 5 \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -O \
   -framework AppKit \
   -framework Carbon \
   -framework CoreGraphics \
   -framework ImageIO \
-  -o "$BUNDLE/Contents/MacOS/$APP" \
+  -o "$STAGING_BUNDLE/Contents/MacOS/$APP" \
   "$NATIVE_UI_LIB" \
   Sources/*.swift
 
-cp Info.plist "$BUNDLE/Contents/Info.plist"
-printf 'APPL????' > "$BUNDLE/Contents/PkgInfo"
+cp Info.plist "$STAGING_BUNDLE/Contents/Info.plist"
+printf 'APPL????' > "$STAGING_BUNDLE/Contents/PkgInfo"
+
+if [ "${QUICKSHOT_TEST_FAIL_BEFORE_SIGN:-0}" = "1" ]; then
+  echo "error: injected signing failure" >&2
+  exit 87
+fi
 
 # Подпись бандла. Стабильная личность (Apple Development / Developer ID) даёт
 # неизменный designated requirement, поэтому TCC помнит доступ «Запись экрана» между
 # сборками. Ad-hoc (-s -) меняет хеш кода каждую сборку и сбрасывает разрешение —
 # используется только как fallback, если стабильной подписи нет.
-SIGN_IDENTITY="${QUICKSHOT_SIGN_IDENTITY:-$(security find-identity -p codesigning -v 2>/dev/null \
-  | grep -oE '"(Apple Development|Developer ID Application)[^"]*"' | head -1 | tr -d '"')}"
+SIGN_IDENTITY="${QUICKSHOT_SIGN_IDENTITY:-}"
+if [ -z "$SIGN_IDENTITY" ]; then
+  SIGN_IDENTITY="$(security find-identity -p codesigning -v 2>/dev/null \
+    | grep -oE '"(Apple Development|Developer ID Application)[^"]*"' \
+    | head -1 \
+    | tr -d '"' \
+    || true)"
+fi
+
 if [ -n "$SIGN_IDENTITY" ]; then
   echo "==> Подпись: $SIGN_IDENTITY"
-  codesign --force --deep --sign "$SIGN_IDENTITY" "$BUNDLE"
+  codesign --force --deep --sign "$SIGN_IDENTITY" "$STAGING_BUNDLE"
 else
   echo "==> Подпись: ad-hoc (стабильной личности не найдено — доступ будет слетать при пересборке)"
-  codesign --force --deep --sign - "$BUNDLE" 2>/dev/null || true
+  codesign --force --deep --sign - "$STAGING_BUNDLE"
 fi
+
+codesign --verify --deep --strict "$STAGING_BUNDLE"
+
+if [ "${QUICKSHOT_TEST_FAIL_BEFORE_INSTALL:-0}" = "1" ]; then
+  echo "error: injected installation failure" >&2
+  exit 88
+fi
+
+xcrun clang -Wall -Wextra -Werror \
+  "$PWD/scripts/atomic-replace.c" \
+  -o "$ATOMIC_REPLACE"
+"$ATOMIC_REPLACE" "$STAGING_BUNDLE" "$PWD/$BUNDLE"
 
 echo "==> Готово: ./$BUNDLE"
 echo "    Запуск:  open ./$BUNDLE"

@@ -81,7 +81,88 @@ struct CaptureArtifactTests {
 
         store.releaseCard(second)
         store.shutdown()
+        await testHundredArtifactResourceLifecycle()
         print("CaptureArtifactTests: passed")
+    }
+
+    @MainActor
+    private static func testHundredArtifactResourceLifecycle() async {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("QuickShotArtifactStress-\(UUID().uuidString)",
+                                    isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let counter = PreparationCounter()
+        let recorder = ClipboardRecorder()
+        let store = CaptureArtifactStore(
+            rootURL: root,
+            limits: .production,
+            preparer: { _, url in
+                counter.increment()
+                let data = Data([0x51, 0x53])
+                try? data.write(to: url, options: .atomic)
+                return Clipboard.PreparedImage(png: data, tiff: nil, fileURL: url)
+            },
+            currentPasteboardFiles: { [] },
+            publishClipboard: { recorder.publications.append($0) })
+
+        var artifacts: [CaptureArtifact] = []
+        for rawValue in 1...100 {
+            let sequence = CaptureSequence(rawValue: UInt64(rawValue))
+            store.registerCapture(sequence)
+            do {
+                artifacts.append(try store.admit(
+                    sequence: sequence,
+                    image: makeImage(red: CGFloat(rawValue) / 100)))
+            } catch {
+                fail("production budget rejected artifact \(rawValue): \(error)")
+            }
+        }
+
+        for artifact in artifacts {
+            _ = await artifact.preparedImage()
+        }
+        await waitUntil { counter.count == 100 }
+        require(store.cardCount == 100, "stress store lost a retained card")
+        require(store.estimatedCardBytes <= 1_073_741_824,
+                "stress store exceeded the declared byte budget")
+
+        let overflow = CaptureSequence(rawValue: 101)
+        store.registerCapture(overflow)
+        do {
+            _ = try store.admit(sequence: overflow, image: makeImage(red: 0))
+            fail("production card limit accepted artifact 101")
+        } catch CaptureArtifactStore.AdmissionError.countLimit(let maximum) {
+            require(maximum == 100, "production count limit changed unexpectedly")
+            store.markCaptureFailed(overflow)
+        } catch {
+            fail("unexpected production budget error: \(error)")
+        }
+
+        artifacts.forEach(store.releaseCard)
+        store.shutdown()
+        let leasedFiles = directoryFileCount(root)
+        require(leasedFiles <= 1,
+                "shutdown left \(leasedFiles) files after all card leases ended")
+
+        let cleanupStore = CaptureArtifactStore(
+            rootURL: root,
+            limits: .production,
+            preparer: { _, _ in Clipboard.PreparedImage(png: nil,
+                                                        tiff: nil,
+                                                        fileURL: nil) },
+            currentPasteboardFiles: { [] },
+            publishClipboard: { _ in })
+        cleanupStore.shutdown()
+        require(directoryFileCount(root) == 0,
+                "startup cleanup left an unleased artifact file")
+    }
+
+    private static func directoryFileCount(_ root: URL) -> Int {
+        (try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]))?.count ?? 0
     }
 
     @MainActor

@@ -2,6 +2,7 @@ import AppKit
 
 /// Окно настроек. Положение трея отрисовано Native SDK surface-ом:
 /// `button-group` внутри `.native`, без AppKit segmented/button replica.
+@MainActor
 final class SettingsController: NSObject, NSWindowDelegate {
 
     private var window: NSWindow?
