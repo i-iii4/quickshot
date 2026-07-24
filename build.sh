@@ -37,6 +37,7 @@ NATIVE_UI_LIB="$PWD/NativeQuickShotUI/zig-out/lib/libquickshot-native-ui.a"
 echo "==> Сборка ${BUNDLE} (${ARCH}, deployment macOS ${DEPLOY})"
 echo "==> Сборка NativeQuickShotUI ($(basename "$ZIG_BIN"))"
 (cd NativeQuickShotUI && PATH="$(dirname "$ZIG_BIN"):$PATH" "$ZIG_BIN" build lib -Doptimize=ReleaseFast)
+"$PWD/scripts/normalize-native-static-library.sh" "$NATIVE_UI_LIB"
 
 mkdir -p "$STAGING_BUNDLE/Contents/MacOS"
 mkdir -p "$STAGING_BUNDLE/Contents/Resources"

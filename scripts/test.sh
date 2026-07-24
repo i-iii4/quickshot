@@ -111,6 +111,7 @@ xcrun swiftc \
 # Pixel timing is a product contract, so exercise the same optimized Native SDK
 # renderer that ships in QuickShot instead of measuring the debug reference path.
 (cd NativeQuickShotUI && PATH="$(dirname "$ZIG_BIN"):$PATH" "$ZIG_BIN" build lib -Doptimize=ReleaseFast)
+"$PWD/scripts/normalize-native-static-library.sh" "$NATIVE_UI_LIB"
 
 xcrun swiftc \
   -sdk "$SDK" \

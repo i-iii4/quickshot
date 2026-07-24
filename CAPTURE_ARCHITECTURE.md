@@ -1,15 +1,48 @@
 # QuickShot Capture Architecture
 
-Status: remediation required after the 24 July 2026 architecture audit.
+Status: remediation implemented; automated release gates pass locally. The
+manual runtime and latency gate remains pending for the exact release build.
 
 Audited baseline: `d54b267`.
 
-The application builds, signs, and passes the current headless suite, but it is
-not release-ready. The audit found three release-blocking correctness defects,
-several unbounded resource and ordering risks, and test/build gaps that allow
-those defects to remain green. This document defines the retained product
-decision, the target architecture, the complete remediation order, and the gates
-required before release.
+The 24 July audit found three release-blocking correctness defects, several
+unbounded resource and ordering risks, and test/build gaps that allowed those
+defects to remain green. Phases 1-5 and the automated part of Phase 6 are now
+implemented. This document preserves the findings, the resulting architecture,
+and the remaining release gates.
+
+## Remediation Result
+
+- `CaptureGestureBuffer` retains a complete early down/drag/up gesture, while a
+  session-owned Carbon Escape registration remains active through teardown.
+- `CaptureSequence`, `CaptureDeliveryState`, and `CaptureArtifactStore` own
+  chronology, clipboard freshness, one-time encoding, file leases, cleanup, and
+  the 100-card/1-GiB resource bound.
+- `ScreenSnapshotProviding` isolates the fakeable provider boundary. Production
+  captures fresh pixels through one serialized direct lane, rejects incomplete
+  or over-skewed display batches, and performs no pixel-producing prewarm.
+- Window exclusion audits fail closed. The accepted multi-display contract is
+  serialized full-resolution display capture with a measured maximum batch skew
+  of `120ms`; a batch outside that bound fails instead of pretending to be
+  atomic.
+- `ThumbnailCollectionModel` owns order, viewport, and follow-newest state.
+  Geometry is clamped per display, and pointer routing is refreshed after every
+  state and animation commit.
+- Production and tests compile in Swift 6 with complete strict concurrency and
+  warnings as errors.
+- Native UI Design System `0.1.0` is resolved from one configured input and
+  locked to `b2e7cb0ad13a05d39dfc8e6ded91ab86817b9869`; the Zig manifest no longer
+  assumes a sibling `node_modules` path.
+- Production builds compile, sign, and verify a staging bundle. `renameatx_np`
+  swaps it with the installed app atomically; compiler, signing, and pre-install
+  failure tests prove that the previous valid app remains unchanged.
+- The default headless suite includes 100 randomized delivery lifecycles, 100
+  fake-backend lifecycles, and a 100-artifact resource and cleanup stress test.
+
+The remaining release evidence is intentionally manual: cursor appearance,
+fullscreen Spaces, source hover preservation, physical display combinations,
+and measured p50/p95 latency. These checks post real input or present capture UI
+and therefore remain opt-in on the user's active machine.
 
 ## Product Decision
 
@@ -57,7 +90,7 @@ These boundaries are retained where possible. The remediation introduces explici
 ownership and sequencing inside them rather than another wholesale capture
 rewrite.
 
-## Audit Findings
+## Historical Audit Findings
 
 ### Release Blockers
 
@@ -279,7 +312,7 @@ Exit criteria:
 - the default suite remains headless;
 - no source-string assertion is accepted as the sole proof of a lifecycle rule.
 
-### Phase 1 - Repair Input And Session Lifecycle
+### Phase 1 - Repair Input And Session Lifecycle (Complete)
 
 Scope:
 
@@ -304,7 +337,7 @@ Exit criteria:
 - exactly one cursor lease exists;
 - every terminal path leaves zero overlay windows and a balanced cursor.
 
-### Phase 2 - Order Delivery And Bound Resources
+### Phase 2 - Order Delivery And Bound Resources (Complete)
 
 Scope:
 
@@ -332,7 +365,7 @@ Exit criteria:
 - repeated captures cannot reorder the tray or clipboard;
 - resource use reaches a stable bound during the stress test.
 
-### Phase 3 - Harden Snapshot And Protection
+### Phase 3 - Harden Snapshot And Protection (Complete)
 
 Scope:
 
@@ -359,7 +392,7 @@ Exit criteria:
 - QuickShot never captures while its exclusion state is unknown;
 - the multi-display contract states and tests one truthful behavior.
 
-### Phase 4 - Make Tray State Deterministic
+### Phase 4 - Make Tray State Deterministic (Complete)
 
 Scope:
 
@@ -386,7 +419,7 @@ Exit criteria:
 - empty host pixels never consume a click;
 - animation completion cannot resurrect hidden views.
 
-### Phase 5 - Enforce Concurrency And Reproducible Builds
+### Phase 5 - Enforce Concurrency And Reproducible Builds (Complete)
 
 Scope:
 
@@ -412,7 +445,7 @@ Required gates:
 - a forced compiler/signing failure leaves the previous app untouched;
 - CI runs on every pushed commit.
 
-### Phase 6 - Release Verification
+### Phase 6 - Release Verification (Automated Complete, Manual Pending)
 
 Automated:
 

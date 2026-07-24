@@ -93,8 +93,9 @@ QuickShot uses a direct, session-owned CoreGraphics snapshot at the hotkey
 moment, then presents the established custom cursor and frame over immutable
 per-display backdrops. Mouse-up crops that same image; there is no stream cache,
 system capture subprocess, temporary PNG pixel source, or second screenshot.
-Post-crop clipboard files are delivery artifacts and are covered by the cleanup
-and ownership work in the remediation plan.
+Post-crop clipboard files are sequence-owned delivery artifacts with explicit
+card, pasteboard, drag, and pin leases. Encoding happens once per screenshot;
+unleased files are removed on replacement, shutdown, or crash recovery.
 
 After frozen pixels are ready, the selector acquires foreground ownership and one
 session-owned AppKit cursor lease before revealing its custom crosshair. The
@@ -103,13 +104,16 @@ chrome, but its full-screen host accepts pointer events only directly above visi
 controls. A finite scrollable viewport keeps every screenshot reachable; new
 captures always enter the visible range instead of creating overflow windows.
 
-The current default suite and production build pass, but the 24 July 2026
-architecture audit found release blockers in early gesture replay, concurrent
-delivery ordering, and artifact cleanup, plus structural gaps in protection,
-multi-display timing, concurrency enforcement, and build reproducibility.
-Passing the current suite is therefore not release evidence. The staged
-remediation and its Definition of Done are recorded in
-`CAPTURE_ARCHITECTURE.md`.
+The 24 July 2026 remediation is implemented: early gestures and Escape are
+session-owned, delivery is monotonic, resources are bounded, protection fails
+closed, tray state is model-owned, and production/tests compile under Swift 6
+complete strict concurrency. The headless suite now includes 100 randomized
+delivery lifecycles, 100 fake-backend lifecycles, and a 100-artifact cleanup
+stress test.
+
+Release still requires the opt-in manual runtime and latency matrix on the exact
+build. Automated success is not treated as proof of cursor appearance,
+fullscreen Spaces behavior, physical multi-display behavior, or p95 latency.
 
 See `CAPTURE_ARCHITECTURE.md` for the component boundaries, migration plan, and
 definition of done.
@@ -117,26 +121,39 @@ definition of done.
 ## Native UI Design System
 
 Native SDK component provenance, tokens, documented compositions, the complete
-catalog, and reusable markup contracts live in the sibling project:
+catalog, and reusable markup contracts live in the independent project:
 
 ```text
 /Users/i_iii/Проекты/native-ui-design-system
 ```
 
-`build.sh` and `scripts/test.sh` currently call that project's `scripts/check.sh`
-before compiling QuickShot UI. The current sibling-path integration is not yet
-reproducibly pinned; remediation will use one resolved dependency input and a
-locked design-system revision. QuickShot does not keep a private copy of the
-catalog or composition validator. Production builds and the default regression
-suite link the Native UI library in `ReleaseFast`, so motion and render budgets
-exercise the shipped path. Debug builds remain available for explicit
-diagnostics.
+The dependency is separately versioned in the private
+`i-iii4/native-ui-design-system` repository. `NativeUIDependencies.lock` pins
+design-system revision `b2e7cb0ad13a05d39dfc8e6ded91ab86817b9869` and Native
+SDK `0.4.0`; build and test fail on any mismatch or tracked dependency change.
+QuickShot does not keep a private copy of the catalog or validator.
+
+Configure any clean checkout once:
+
+```bash
+/absolute/path/to/native-ui-design-system/scripts/bootstrap.sh
+./scripts/configure-native-ui-dependency.sh \
+  /absolute/path/to/native-ui-design-system
+```
+
+CI resolves the same revision with a read-only deploy key. Production builds
+and the default regression suite link the Native UI library in `ReleaseFast`,
+so motion and render budgets exercise the shipped path.
 
 ## Build
 
 ```bash
 ./build.sh
 ```
+
+The build creates and verifies a signed staging bundle before atomically
+replacing `QuickShot.app`. A compiler, signing, or installation failure leaves
+the previous valid app untouched.
 
 ## Test
 

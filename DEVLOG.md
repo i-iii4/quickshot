@@ -4,6 +4,71 @@
 
 ---
 
+## 24.07.2026 — план стабилизации реализован
+
+Полностью реализованы фазы 1-5 из `CAPTURE_ARCHITECTURE.md` и автоматическая
+часть фазы 6.
+
+Capture lifecycle больше не восстанавливается по текущему состоянию кнопки мыши:
+`CaptureGestureBuffer` хранит полный ранний down/drag/up, а session-scoped
+Carbon Escape остаётся зарегистрированным от принятия hotkey до idempotent
+teardown. Snapshot provider вынесен за `ScreenSnapshotProviding`; production
+по-прежнему получает свежие session-owned пиксели прямым one-shot вызовом,
+не делает pixel-producing prewarm и отбрасывает отменённые, неполные,
+дублированные и превышающие `120ms` multi-display batch.
+
+Доставка получила монотонный `CaptureSequence`. Старый crop/encode больше не
+может перезаписать новый clipboard или изменить порядок карточек.
+`CaptureArtifactStore` создаёт один preview, один encode и не более одного PNG
+на скриншот, переиспользует их для copy/Copy All/drag/pin/save, владеет
+pasteboard/card/drag/pin leases, удаляет crash leftovers и ограничивает сессию
+100 карточками или 1 GiB.
+
+Tray order и viewport вынесены в `ThumbnailCollectionModel`. Width clamp
+считается для текущего экрана, overflow следует к newest детерминированно, а
+pointer routing обновляется после каждого layout/state/animation commit, чтобы
+невидимая часть host-окна не удерживала рабочий стол.
+
+Production и все тестовые бинарники переведены на Swift 6,
+`-strict-concurrency=complete` и `-warnings-as-errors`. AppKit-владельцы
+помечены `@MainActor`, а передаваемые между executor пиксели имеют явную
+immutable Sendable-границу.
+
+Native UI Design System опубликована как отдельный приватный репозиторий
+`i-iii4/native-ui-design-system`. QuickShot фиксирует ревизию
+`b2e7cb0ad13a05d39dfc8e6ded91ab86817b9869` и SDK `0.4.0` в
+`NativeUIDependencies.lock`; build/test принимают один разрешённый путь и больше
+не зависят от неявного sibling `node_modules`. GitHub Actions получает только
+read-only deploy key.
+
+`build.sh` теперь компилирует, подписывает и проверяет staging bundle. Только
+после этого `renameatx_np(RENAME_SWAP)` атомарно заменяет приложение. Отдельные
+прогоны с принудительным compiler, codesign и pre-install failure подтвердили,
+что предыдущий валидный `QuickShot.app` остаётся байт-в-байт неизменным.
+
+Первый чистый CI-run выявил toolchain-разницу, которую локальный linker не
+показывал: Zig 0.16 создавал archive member без требуемого Apple linker
+8-byte alignment. После каждого Zig build архив теперь канонически
+пересобирается системным `libtool`; локальный и CI link используют одинаковую
+Mach-O упаковку вместо зависимости от терпимости конкретной версии linker.
+
+Локально прошли:
+
+- полный headless `scripts/test.sh`;
+- 100 случайных порядков crop/encode completion;
+- 100 fake-backend lifecycle;
+- 100-artifact resource/cleanup stress;
+- Native SDK contract и ReleaseFast render/dispatch gates;
+- production Swift 6 build и `codesign --verify --deep --strict`;
+- atomic replacement и три failure-preservation сценария.
+
+Ручные проверки cursor appearance, fullscreen Spaces, реальных конфигураций
+дисплеев и p50/p95 latency намеренно не запускались автоматически: они
+перехватывают ввод и показывают capture UI на активном экране. Они остаются
+последним release-gate для точной финальной сборки.
+
+---
+
 ## 24.07.2026 — архитектурный аудит и полный план стабилизации
 
 Проведён полный read-only аудит baseline `d54b267`: capture lifecycle,
