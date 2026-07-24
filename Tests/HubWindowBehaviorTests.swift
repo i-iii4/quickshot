@@ -646,8 +646,11 @@ struct HubWindowBehaviorTests {
         harness.hub.debugSetExpansionProgress(0.8)
         let remainder = harness.hub.debugTransitionDuration(toExpanded: true)
 
-        try require(abs(full - 0.12) <= 0.001, "Full House reveal must use the 120ms fast token")
-        try require(abs(remainder - 0.024) <= 0.001,
+        let expectedFull: CFTimeInterval =
+            NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.12
+        try require(abs(full - expectedFull) <= 0.001,
+                    "Full House reveal must use the active motion token")
+        try require(abs(remainder - expectedFull * 0.2) <= 0.001,
                     "The last 20% must take 20% of the duration, not restart a full reveal: \(remainder)")
     }
 
