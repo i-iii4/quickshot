@@ -85,6 +85,7 @@ struct HubWindowBehaviorTests {
         let harness = Harness(position: .right, count: 1)
         let baseline = harness.hub.debugSnapshot().coreCountFrame
         let baselineGlobalX = harness.hub.view.frame.minX + baseline.maxX
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
 
         harness.hub.debugTransitionCount(to: 2)
         harness.hub.setOrigin(NSPoint(x: 300, y: 40))
@@ -93,8 +94,13 @@ struct HubWindowBehaviorTests {
         let increasingGlobalX = harness.hub.view.frame.minX + increasingStart.maxX
         try require(abs(increasingGlobalX - baselineGlobalX) <= 1,
                     "Odometer changed right-edge alignment: baseline=\(baselineGlobalX) transition=\(increasingGlobalX)")
-        try require(increasingStart.minY < baseline.minY,
-                    "Increasing count must enter from below")
+        if reduceMotion {
+            try require(abs(increasingStart.minY - baseline.minY) <= 0.001,
+                        "Reduce Motion must crossfade increasing count on its baseline")
+        } else {
+            try require(increasingStart.minY < baseline.minY,
+                        "Increasing count must enter from below")
+        }
         harness.hub.debugSetCountTransitionProgress(1)
         let increasingEnd = harness.hub.debugSnapshot().coreCountFrame
         try require(abs(increasingEnd.minY - baseline.minY) <= 0.001,
@@ -104,8 +110,13 @@ struct HubWindowBehaviorTests {
         harness.hub.setOrigin(NSPoint(x: 300, y: 40))
         harness.hub.debugSetCountTransitionProgress(0)
         let decreasingStart = harness.hub.debugSnapshot().coreCountFrame
-        try require(decreasingStart.minY > baseline.minY,
-                    "Decreasing count must enter from above")
+        if reduceMotion {
+            try require(abs(decreasingStart.minY - baseline.minY) <= 0.001,
+                        "Reduce Motion must crossfade decreasing count on its baseline")
+        } else {
+            try require(decreasingStart.minY > baseline.minY,
+                        "Decreasing count must enter from above")
+        }
         harness.hub.debugSetCountTransitionProgress(1)
         let decreasingEnd = harness.hub.debugSnapshot().coreCountFrame
         try require(abs(decreasingEnd.minY - baseline.minY) <= 0.001,

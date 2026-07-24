@@ -52,6 +52,12 @@ read-only deploy key.
 пересобирается системным `libtool`; локальный и CI link используют одинаковую
 Mach-O упаковку вместо зависимости от терпимости конкретной версии linker.
 
+Runner также запускает AppKit с Reduce Motion. Интеграционный odometer-тест
+раньше безусловно требовал вертикальный roll и поэтому противоречил самому
+accessibility-контракту. Теперь он проверяет stationary crossfade при Reduce
+Motion, а направление обычного roll независимо закреплено чистым
+`odometerMotionState`-тестом.
+
 Локально прошли:
 
 - полный headless `scripts/test.sh`;
