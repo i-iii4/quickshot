@@ -468,7 +468,6 @@ final class OverlayController {
     private var backdropWindows: [OverlayWindow] = []
     private var localEscapeMonitor: Any?
     private var globalEscapeMonitor: Any?
-    private let escapeHotKey = SessionEscapeHotKey()
     private var spaceObserver: Any?
     private var globalDragMonitor: Any?
     private let presentation = SelectionPresentationCoordinator()
@@ -486,7 +485,7 @@ final class OverlayController {
 
     func beginFrozenSelection(screens: [NSScreen],
                               backdrops: [CGDirectDisplayID: CGImage],
-                              pendingMouseDownAt: @escaping () -> NSPoint?,
+                              pendingGesture: @escaping () -> CaptureGestureResolution,
                               onReady: @escaping () -> Void,
                               onComplete: @escaping (NSRect, NSScreen) -> Void,
                               onCancel: @escaping () -> Void) {
@@ -495,7 +494,7 @@ final class OverlayController {
               onReady: onReady,
               onComplete: onComplete,
               onCancel: onCancel,
-              pendingMouseDownAt: pendingMouseDownAt)
+              pendingGesture: pendingGesture)
     }
 
     private func begin(screens: [NSScreen],
@@ -503,7 +502,7 @@ final class OverlayController {
                        onReady: @escaping () -> Void,
                        onComplete: @escaping (NSRect, NSScreen) -> Void,
                        onCancel: @escaping () -> Void,
-                       pendingMouseDownAt: @escaping () -> NSPoint?) {
+                       pendingGesture: @escaping () -> CaptureGestureResolution) {
         self.onComplete = onComplete
         self.onCancel = onCancel
         let sourceApplication = NSWorkspace.shared.frontmostApplication
@@ -553,10 +552,8 @@ final class OverlayController {
         windows.first?.makeKeyAndOrderFront(nil)
         Self.log.info("overlay begin screens=\(self.windows.count, privacy: .public) mode=frozen-activating")
 
-        // Carbon owns Escape while QuickShot intentionally remains inactive. The NSEvent
-        // monitors are fallback paths for environments that reject the Carbon registration.
-        let escapeRegistered = escapeHotKey.register { [weak self] in self?.onCancel?() }
-        if !escapeRegistered { Self.log.error("overlay escape hotkey registration failed") }
+        // CaptureSession owns the session-scoped Carbon Escape registration from
+        // hotkey acceptance. These monitors are local/global fallback paths.
         localEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             if e.keyCode == 53 { self?.onCancel?(); return nil }
             return e
@@ -576,7 +573,7 @@ final class OverlayController {
             onAcquired: { [weak self] in
                 guard let self, !self.isDismissed else { return }
                 Self.log.info("overlay cursor lease acquired")
-                self.presentAfterOwnership(pendingMouseDownAt: pendingMouseDownAt(),
+                self.presentAfterOwnership(pendingGesture: pendingGesture(),
                                            onReady: onReady)
             },
             onFailure: { [weak self] failure in
@@ -622,9 +619,14 @@ final class OverlayController {
         return window
     }
 
-    private func presentAfterOwnership(pendingMouseDownAt: NSPoint?,
+    private func presentAfterOwnership(pendingGesture: CaptureGestureResolution,
                                        onReady: () -> Void) {
         guard !isDismissed, !isPresented, presentation.ownsCursor else { return }
+        if case .cancelled = pendingGesture {
+            onReady()
+            onCancel?()
+            return
+        }
         isPresented = true
         windows.first?.makeKey()
         if let first = selectionViews.first {
@@ -644,16 +646,26 @@ final class OverlayController {
             }
         }
 
-        selectionView(containing: NSEvent.mouseLocation)?.moveCrosshair(atGlobalPoint: NSEvent.mouseLocation)
         globalDragMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .mouseMoved]) {
                 [weak self] event in self?.handleGlobalMouse(event)
             }
-        if CGEventSource.buttonState(.combinedSessionState, button: .left) {
-            beginGlobalSelection(at: pendingMouseDownAt ?? NSEvent.mouseLocation)
-            activeGlobalSelection?.updateSelection(atGlobalPoint: NSEvent.mouseLocation)
-        } else {
-            selectionView(containing: NSEvent.mouseLocation)?.moveCrosshair(atGlobalPoint: NSEvent.mouseLocation)
+
+        switch pendingGesture {
+        case .idle(let pointer):
+            selectionView(containing: pointer.point)?.moveCrosshair(atGlobalPoint: pointer.point)
+        case .dragging(let start, let current):
+            beginGlobalSelection(at: start.point)
+            activeGlobalSelection?.updateSelection(atGlobalPoint: current.point)
+        case .completed(let start, let end):
+            // The user released during the activation handoff. Transfer monitor
+            // ownership first, then complete from the buffered coordinates.
+            onReady()
+            beginGlobalSelection(at: start.point)
+            activeGlobalSelection?.finishSelection(atGlobalPoint: end.point)
+            return
+        case .cancelled:
+            return
         }
 
         Self.log.info("overlay activation completed")
@@ -721,7 +733,6 @@ final class OverlayController {
         guard !isDismissed else { return }
         isDismissed = true
         Self.log.info("overlay dismiss screens=\(self.windows.count, privacy: .public)")
-        escapeHotKey.unregister()
         if let localEscapeMonitor {
             NSEvent.removeMonitor(localEscapeMonitor)
             self.localEscapeMonitor = nil

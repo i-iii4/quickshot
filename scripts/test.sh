@@ -37,7 +37,18 @@ CURSOR_LEASE_OUT="$(mktemp -t quickshot-cursor-lease-tests)"
 PRESENTATION_OUT="$(mktemp -t quickshot-selection-presentation-tests)"
 DIRECT_CAPTURE_OUT="$(mktemp -t quickshot-direct-capture-tests)"
 CAPTURE_HOT_PATH_OUT="$(mktemp -t quickshot-capture-hot-path-tests)"
-trap 'rm -f "$OUT" "$SURFACE_OUT" "$STATUS_LAYOUT_OUT" "$TRAY_POINTER_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT"' EXIT
+CAPTURE_GESTURE_OUT="$(mktemp -t quickshot-capture-gesture-tests)"
+trap 'rm -f "$OUT" "$SURFACE_OUT" "$STATUS_LAYOUT_OUT" "$TRAY_POINTER_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT"' EXIT
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 5 \
+  Sources/CaptureGestureBuffer.swift \
+  Tests/CaptureGestureBufferTests.swift \
+  -o "$CAPTURE_GESTURE_OUT"
+
+"$CAPTURE_GESTURE_OUT"
 
 # Pixel timing is a product contract, so exercise the same optimized Native SDK
 # renderer that ships in QuickShot instead of measuring the debug reference path.
@@ -215,6 +226,7 @@ xcrun swiftc \
   -framework CoreGraphics \
   Sources/WindowCaptureProtection.swift \
   Sources/CursorLease.swift \
+  Sources/CaptureGestureBuffer.swift \
   Sources/SelectionPresentationCoordinator.swift \
   Sources/CaptureWindowLevels.swift \
   Sources/SessionEscapeHotKey.swift \

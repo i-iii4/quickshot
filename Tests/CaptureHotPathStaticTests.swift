@@ -6,6 +6,7 @@ struct CaptureHotPathStaticTests {
         do {
             let capture = try source("Sources/CaptureController.swift")
             let provider = try source("Sources/DirectScreenSnapshotProvider.swift")
+            let gestureBuffer = try source("Sources/CaptureGestureBuffer.swift")
             let overlay = try source("Sources/Overlay.swift")
             let presentation = try source("Sources/SelectionPresentationCoordinator.swift")
             let cursorLease = try source("Sources/CursorLease.swift")
@@ -21,9 +22,12 @@ struct CaptureHotPathStaticTests {
             let thumbnailWindow = try source("Sources/ThumbnailWindow.swift")
             let pinnedWindow = try source("Sources/PinnedWindow.swift")
 
-            try testDirectSnapshotPrecedesOverlay(capture: capture, provider: provider)
+            try testDirectSnapshotPrecedesOverlay(capture: capture,
+                                                  provider: provider,
+                                                  gestureBuffer: gestureBuffer)
             try testSessionOwnsImmutablePixels(provider: provider, types: types)
-            try testFrozenOverlayContract(overlay: overlay,
+            try testFrozenOverlayContract(capture: capture,
+                                          overlay: overlay,
                                           presentation: presentation,
                                           cursorLease: cursorLease,
                                           windowLevels: windowLevels,
@@ -55,7 +59,8 @@ struct CaptureHotPathStaticTests {
     }
 
     private static func testDirectSnapshotPrecedesOverlay(capture: String,
-                                                          provider: String) throws {
+                                                          provider: String,
+                                                          gestureBuffer: String) throws {
         let start = try functionBody(named: "start", in: capture,
                                      after: "private final class CaptureSession")
         try require(start.contains("startSnapshotTask(displays: displays)"),
@@ -74,9 +79,14 @@ struct CaptureHotPathStaticTests {
 
         let beginOverlay = try functionBody(named: "beginOverlay", in: capture,
                                             after: "private final class CaptureSession")
-        try require(beginOverlay.contains("pendingMouseDownAt: { [weak self]")
-                    && beginOverlay.contains("self.preOverlayMouseTracker?.stop()"),
+        try require(beginOverlay.contains("pendingGesture: { [weak self]")
+                    && beginOverlay.contains("self.inputTracker?.stopMouseMonitoring()"),
                     "Pre-overlay gesture tracking must remain live until selector readiness")
+        try require(capture.contains("CaptureInputTracker")
+                    && capture.contains("CaptureGestureBuffer")
+                    && gestureBuffer.contains("case completed")
+                    && gestureBuffer.contains("recordMouseUp"),
+                    "A typed gesture buffer must retain completed pre-overlay gestures")
 
         try require(provider.contains("CGWindowListCreateImage"),
                     "Direct provider must resolve the CoreGraphics one-shot symbol")
@@ -110,7 +120,8 @@ struct CaptureHotPathStaticTests {
         }
     }
 
-    private static func testFrozenOverlayContract(overlay: String,
+    private static func testFrozenOverlayContract(capture: String,
+                                                  overlay: String,
                                                   presentation: String,
                                                   cursorLease: String,
                                                   windowLevels: String,
@@ -187,8 +198,9 @@ struct CaptureHotPathStaticTests {
                     && overlay.contains("CaptureWindowLevels.selectionChrome"),
                     "Backdrop, protected interface, and selection chrome need explicit z-order")
         try require(escapeHotKey.contains("RegisterEventHotKey(UInt32(kVK_Escape)")
-                    && overlay.contains("escapeHotKey.register"),
-                    "Escape must remain session-scoped across selector windows")
+                    && capture.contains("escapeHotKey.register")
+                    && capture.contains("escapeHotKey.unregister"),
+                    "Escape must remain session-scoped from capture acceptance through teardown")
         try require(overlay.contains("onPointerActivity")
                     && overlay.contains("selection !== active"),
                     "All displays must share one visible custom crosshair owner")
@@ -351,7 +363,7 @@ struct CaptureHotPathStaticTests {
                                    after: "private final class CaptureSession")
         try require(end.contains("snapshotTask?.cancel()")
                     && end.contains("cropTask?.cancel()")
-                    && end.contains("preOverlayMouseTracker?.stop()")
+                    && end.contains("inputTracker?.stop()")
                     && end.contains("overlay?.dismiss()")
                     && end.contains("frozen.removeAll()")
                     && end.contains("onEnd(id)"),

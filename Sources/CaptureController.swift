@@ -222,8 +222,7 @@ private final class CaptureSession {
     private var screens: [NSScreen] = []
     private var snapshotTask: Task<Void, Never>?
     private var cropTask: Task<Void, Never>?
-    private var gestureSnapshot: CaptureGestureSnapshot?
-    private var preOverlayMouseTracker: PreOverlayMouseTracker?
+    private var inputTracker: CaptureInputTracker?
     private var didEnd = false
     private var endOutcome = "unknown"
 
@@ -242,14 +241,15 @@ private final class CaptureSession {
     }
 
     func start() {
-        let gesture = CaptureGestureSnapshot()
-        gestureSnapshot = gesture
-        preOverlayMouseTracker = PreOverlayMouseTracker(
-            initialMouseDownAt: gesture.initialMouseDownAt,
-            onEscape: { [weak self] in self?.cancel() })
+        let inputTracker = CaptureInputTracker(onEscape: { [weak self] in self?.cancel() })
+        guard inputTracker.escapeIsRegistered else {
+            fail(CaptureError.captureStackUnavailable("Escape hotkey registration failed"))
+            return
+        }
+        self.inputTracker = inputTracker
         Self.log.info("capture hot path gesture snapshot ready ms=\(self.elapsedMs, privacy: .public)")
 
-        let orderedScreens = Self.captureScreens(pointer: gesture.preferredStartPoint)
+        let orderedScreens = Self.captureScreens(pointer: inputTracker.initialPointer)
         guard !orderedScreens.isEmpty else {
             fail(CaptureError.noDisplay)
             return
@@ -301,8 +301,32 @@ private final class CaptureSession {
 
         frozen = Dictionary(uniqueKeysWithValues: batch.screens.map { ($0.displayID, $0) })
         phase = .selecting
+        if completeBufferedGestureIfNeeded() { return }
         beginOverlay(backdrops: Dictionary(uniqueKeysWithValues:
             batch.screens.map { ($0.displayID, $0.image) }))
+    }
+
+    private func completeBufferedGestureIfNeeded() -> Bool {
+        guard let resolution = inputTracker?.resolution else { return false }
+        switch resolution {
+        case .completed(let start, let end):
+            guard let screen = Self.screen(containing: start.point) else {
+                fail(CaptureError.noDisplay)
+                return true
+            }
+            inputTracker?.stopMouseMonitoring()
+            let rect = CGRect(x: min(start.point.x, end.point.x),
+                              y: min(start.point.y, end.point.y),
+                              width: abs(end.point.x - start.point.x),
+                              height: abs(end.point.y - start.point.y))
+            selectionCompleted(rect, screen)
+            return true
+        case .cancelled:
+            cancel()
+            return true
+        case .idle, .dragging:
+            return false
+        }
     }
 
     private func beginOverlay(backdrops: [CGDirectDisplayID: CGImage]) {
@@ -312,13 +336,13 @@ private final class CaptureSession {
         overlay.beginFrozenSelection(
             screens: screens,
             backdrops: backdrops,
-            pendingMouseDownAt: { [weak self] in
-                self?.preOverlayMouseTracker?.mouseDownSeedPoint()
+            pendingGesture: { [weak self] in
+                self?.inputTracker?.resolution
+                    ?? .cancelled
             },
             onReady: { [weak self] in
                 guard let self else { return }
-                self.preOverlayMouseTracker?.stop()
-                self.preOverlayMouseTracker = nil
+                self.inputTracker?.stopMouseMonitoring()
                 let overlayMs = (CFAbsoluteTimeGetCurrent() - overlayStartedAt) * 1000
                 Self.log.info("capture frozen overlay constructed ms=\(overlayMs, privacy: .public)")
                 Self.log.info("capture overlay ready ms=\(self.elapsedMs, privacy: .public)")
@@ -427,12 +451,11 @@ private final class CaptureSession {
         snapshotTask = nil
         cropTask?.cancel()
         cropTask = nil
-        preOverlayMouseTracker?.stop()
-        preOverlayMouseTracker = nil
+        inputTracker?.stop()
+        inputTracker = nil
         overlay?.dismiss()
         overlay = nil
         frozen.removeAll()
-        gestureSnapshot = nil
         Self.log.info("capture end outcome=\(self.endOutcome, privacy: .public) phase=\(self.phase.rawValue, privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
         onEnd(id)
     }
@@ -468,63 +491,70 @@ private final class CaptureSession {
     private static func screen(forDisplayID displayID: CGDirectDisplayID) -> NSScreen? {
         NSScreen.screens.first { Self.displayID(of: $0) == displayID }
     }
+
+    private static func screen(containing point: CGPoint) -> NSScreen? {
+        NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) }
+    }
 }
 
 @MainActor
-private final class PreOverlayMouseTracker {
+private final class CaptureInputTracker {
     private var monitor: Any?
-    private var firstMouseDownAt: NSPoint?
-    private var latestPoint: NSPoint
-    private let onEscape: () -> Void
+    private var gestureBuffer: CaptureGestureBuffer
+    private let escapeHotKey = SessionEscapeHotKey()
+    let initialPointer: NSPoint
+    let escapeIsRegistered: Bool
 
-    init(initialMouseDownAt: NSPoint?, onEscape: @escaping () -> Void) {
-        firstMouseDownAt = initialMouseDownAt
-        latestPoint = NSEvent.mouseLocation
-        self.onEscape = onEscape
+    init(onEscape: @escaping () -> Void) {
+        let pointer = NSEvent.mouseLocation
+        initialPointer = pointer
+        gestureBuffer = CaptureGestureBuffer(
+            initialPointer: pointer,
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            leftButtonDown: CGEventSource.buttonState(.combinedSessionState, button: .left))
+        escapeIsRegistered = escapeHotKey.register(onEscape)
         monitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .keyDown]) { [weak self] event in
+            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .mouseMoved]) { [weak self] event in
                 let type = event.type
-                let keyCode = event.keyCode
                 let point = NSEvent.mouseLocation
+                let timestamp = event.timestamp
                 Task { @MainActor [weak self] in
-                    self?.record(type: type, keyCode: keyCode, point: point)
+                    self?.record(type: type, point: point, timestamp: timestamp)
                 }
             }
     }
 
-    func mouseDownSeedPoint() -> NSPoint? {
-        guard CGEventSource.buttonState(.combinedSessionState, button: .left) else { return nil }
-        return firstMouseDownAt ?? latestPoint
+    var resolution: CaptureGestureResolution {
+        gestureBuffer.resolution
     }
 
-    func stop() {
+    func stopMouseMonitoring() {
         if let monitor {
             NSEvent.removeMonitor(monitor)
             self.monitor = nil
         }
     }
 
-    private func record(type: NSEvent.EventType, keyCode: UInt16, point: NSPoint) {
-        if type == .keyDown, keyCode == 53 {
-            onEscape()
-            return
-        }
-        latestPoint = point
-        if type == .leftMouseDown, firstMouseDownAt == nil {
-            firstMouseDownAt = point
+    func stop() {
+        stopMouseMonitoring()
+        escapeHotKey.unregister()
+    }
+
+    private func record(type: NSEvent.EventType,
+                        point: NSPoint,
+                        timestamp: TimeInterval) {
+        switch type {
+        case .leftMouseDown:
+            gestureBuffer.recordMouseDown(at: point, timestamp: timestamp)
+        case .leftMouseDragged:
+            gestureBuffer.recordMouseDragged(to: point, timestamp: timestamp)
+        case .leftMouseUp:
+            gestureBuffer.recordMouseUp(at: point, timestamp: timestamp)
+        case .mouseMoved:
+            gestureBuffer.updateIdlePointer(to: point, timestamp: timestamp)
+        default:
+            break
         }
     }
-}
 
-private struct CaptureGestureSnapshot {
-    let preferredStartPoint: NSPoint
-    let initialMouseDownAt: NSPoint?
-
-    init() {
-        let point = NSEvent.mouseLocation
-        preferredStartPoint = point
-        initialMouseDownAt = CGEventSource.buttonState(.combinedSessionState, button: .left)
-            ? point
-            : nil
-    }
 }
