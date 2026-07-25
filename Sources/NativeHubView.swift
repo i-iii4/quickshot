@@ -695,6 +695,32 @@ private final class NativeHubRenderView: NSView {
             (UInt32(rgbaBytes[index + 2]) << 8) |
             UInt32(rgbaBytes[index + 3])
     }
+
+    func debugInkPixelCount(in rect: NSRect) -> Int {
+        renderNow()
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let width = Int((bounds.width * scale).rounded())
+        let height = Int((bounds.height * scale).rounded())
+        guard width > 0, height > 0 else { return 0 }
+        let pixelRect = CGRect(x: rect.minX * scale,
+                               y: rect.minY * scale,
+                               width: rect.width * scale,
+                               height: rect.height * scale).integral
+            .intersection(CGRect(x: 0, y: 0, width: width, height: height))
+        guard !pixelRect.isNull, pixelRect.width > 0, pixelRect.height > 0 else { return 0 }
+        var count = 0
+        for y in Int(pixelRect.minY)..<Int(pixelRect.maxY) {
+            for x in Int(pixelRect.minX)..<Int(pixelRect.maxX) {
+                let index = (y * width + x) * 4
+                guard index + 3 < rgbaBytes.count else { continue }
+                let luminance = max(rgbaBytes[index], rgbaBytes[index + 1], rgbaBytes[index + 2])
+                if rgbaBytes[index + 3] > 0, luminance > 96 {
+                    count += 1
+                }
+            }
+        }
+        return count
+    }
 #endif
 
     private func logNativeError(_ stage: String) {
@@ -1036,6 +1062,7 @@ final class NativeHubShellView: NSView {
     private var revealedCountMaskFrame: NSRect = .zero
     private var revealedIconMaskFrame: NSRect = .zero
     private var revealedLabelNativeFrame: NSRect = .zero
+    private var revealedForegroundCoreFrame: NSRect = .zero
     private var measuredExpandedWidth: CGFloat?
     private var actionWidths: [String: CGFloat] = [:]
     private var hasCountTransition = false
@@ -1484,7 +1511,16 @@ final class NativeHubShellView: NSView {
                             coreRevealed: true,
                             actionsAfter: expandsRight)
         nativeView.renderNow()
-        revealedLabelView.frame = nativeView.frame
+        let targetCoreFrame = NSRect(x: nativeX + revealedCoreNativeFrame.minX,
+                                     y: revealedCoreNativeFrame.minY,
+                                     width: revealedCoreNativeFrame.width,
+                                     height: revealedCoreNativeFrame.height)
+        revealedLabelView.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: revealedCoreNativeFrame.width + NativeHubMetrics.shellInset * 2,
+            height: compactHeight
+        )
         revealedLabelView.setCoreWidth(revealedCoreNativeFrame.width)
         revealedLabelView.setState(count: count,
                                     collapsed: collapsed,
@@ -1494,11 +1530,15 @@ final class NativeHubShellView: NSView {
                                     actionsAfter: expandsRight)
         revealedLabelView.setSurface(.hubCoreForeground)
         revealedLabelView.renderNow()
-
-        let targetCoreFrame = NSRect(x: nativeX + revealedCoreNativeFrame.minX,
-                                     y: revealedCoreNativeFrame.minY,
-                                     width: revealedCoreNativeFrame.width,
-                                     height: revealedCoreNativeFrame.height)
+        revealedForegroundCoreFrame = revealedLabelView.buttonNodes().first?.frame
+            ?? NSRect(x: NativeHubMetrics.shellInset,
+                      y: NativeHubMetrics.shellInset,
+                      width: revealedCoreNativeFrame.width,
+                      height: revealedCoreNativeFrame.height)
+        revealedLabelView.frame.origin = NSPoint(
+            x: targetCoreFrame.minX - revealedForegroundCoreFrame.minX,
+            y: targetCoreFrame.minY - revealedForegroundCoreFrame.minY
+        )
         let backgroundWidth = backgroundCoreNativeFrame.width + NativeHubMetrics.shellInset * 2
         let backgroundX = targetCoreFrame.minX - backgroundCoreNativeFrame.minX
         coreBackgroundView.frame = NSRect(x: backgroundX,
@@ -1566,14 +1606,17 @@ final class NativeHubShellView: NSView {
             .insetBy(dx: -NativeHubMetrics.countBleed, dy: 0)
             .intersection(compactCoreView.bounds)
         let compactIconRect = compactSlices.icon
-        let revealedContentWidth = max(1, revealedIntrinsicCoreWidth - NativeHubMetrics.controlInset * 2)
+        let revealedContentWidth = max(
+            1,
+            revealedIntrinsicCoreWidth - NativeHubMetrics.controlInset * 2
+        )
         let revealedTextWidth = max(compactCountRect.width,
                                     revealedContentWidth - NativeHubMetrics.iconSide - NativeHubMetrics.iconGap)
-        let revealedStartX = revealedCoreNativeFrame.midX - revealedContentWidth / 2
+        let revealedStartX = revealedForegroundCoreFrame.midX - revealedContentWidth / 2
         let revealedCountRect = NSRect(x: revealedStartX,
-                                       y: revealedCoreNativeFrame.minY + 4,
+                                       y: revealedForegroundCoreFrame.minY + 4,
                                        width: compactCountRect.width,
-                                       height: max(1, revealedCoreNativeFrame.height - 8))
+                                       height: max(1, revealedForegroundCoreFrame.height - 8))
         let revealedLabelRect = NSRect(x: revealedCountRect.maxX,
                                        y: revealedCountRect.minY,
                                        width: max(1, revealedTextWidth - stableCompactCountFrame.width),
@@ -1656,7 +1699,7 @@ final class NativeHubShellView: NSView {
             ? nil
             : contentMaskPath(outer: compactCoreNativeFrame, holes: [compactIconMaskFrame])
         revealedLabelMaskLayer.path = contentMaskPath(
-            outer: revealedCoreNativeFrame,
+            outer: revealedForegroundCoreFrame,
             holes: [revealedIconMaskFrame] + (hasCountTransition ? [revealedCountMaskFrame] : [])
         )
     }
@@ -1979,6 +2022,10 @@ final class NativeHubShellView: NSView {
                                 compactForegroundPerimeterAlpha: compactForegroundPerimeterAlpha,
                                 revealedForegroundPerimeterAlpha: revealedForegroundPerimeterAlpha,
                                 revealedForegroundHovered: revealedLabelView.buttonNodes().contains(where: \.isHovered),
+                                revealedCountInkPixelCount:
+                                    revealedLabelView.debugInkPixelCount(in: revealedCountMaskFrame),
+                                revealedLabelInkPixelCount:
+                                    revealedLabelView.debugInkPixelCount(in: revealedLabelNativeFrame),
                                 coreFrame: coreFrame,
                                 coreBackgroundFrame: coreBackgroundFrame,
                                 coreCountFrame: coreCountFrame,
@@ -2003,7 +2050,7 @@ final class NativeHubShellView: NSView {
                                 compactTextUsesCompleteNativeRender:
                                     compactContentMaskLayer.path?.boundingBox == compactCoreNativeFrame,
                                 revealedTextUsesCompleteNativeRender:
-                                    revealedLabelMaskLayer.path?.boundingBox == revealedCoreNativeFrame,
+                                    revealedLabelMaskLayer.path?.boundingBox == revealedForegroundCoreFrame,
                                 odometerHiddenAtRest: !hasCountTransition && odometerView.isHidden,
                                 coreCornerRadius: NativeHubMetrics.radius,
                                 actionClipFrame: actionClipFrame,

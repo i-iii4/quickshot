@@ -404,6 +404,9 @@ struct HubWindowBehaviorTests {
                     let expanded = harness.hub.debugSnapshot()
                     try require(expanded.revealedTextUsesCompleteNativeRender,
                                 "\(position) count \(count): expanded text must use the complete Native button render")
+                    try require(expanded.revealedCountInkPixelCount > 0 &&
+                                expanded.revealedLabelInkPixelCount > 0,
+                                "\(position) count \(count): expanded foreground pixels missing; count=\(expanded.revealedCountInkPixelCount), label=\(expanded.revealedLabelInkPixelCount)")
                     try require(expanded.odometerHiddenAtRest,
                                 "\(position) count \(count): odometer must not replace static text")
                 }

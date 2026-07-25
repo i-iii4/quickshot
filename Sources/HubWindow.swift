@@ -30,6 +30,8 @@ struct HubDebugSnapshot {
     let compactForegroundPerimeterAlpha: UInt8
     let revealedForegroundPerimeterAlpha: UInt8
     let revealedForegroundHovered: Bool
+    let revealedCountInkPixelCount: Int
+    let revealedLabelInkPixelCount: Int
     let coreFrame: NSRect
     let coreBackgroundFrame: NSRect
     let coreCountFrame: NSRect
