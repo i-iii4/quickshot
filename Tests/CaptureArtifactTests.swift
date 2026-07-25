@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
 
 private final class PreparationCounter: @unchecked Sendable {
     private let lock = NSLock()
@@ -15,6 +16,35 @@ private final class PreparationCounter: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return value
+    }
+}
+
+private final class PreparationGate: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var started = false
+    private var released = false
+
+    var hasStarted: Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return started
+    }
+
+    func waitUntilReleased() {
+        condition.lock()
+        started = true
+        condition.broadcast()
+        while !released {
+            condition.wait()
+        }
+        condition.unlock()
+    }
+
+    func release() {
+        condition.lock()
+        released = true
+        condition.broadcast()
+        condition.unlock()
     }
 }
 
@@ -51,6 +81,18 @@ struct CaptureArtifactTests {
         require(counter.count == 1, "one artifact must encode exactly once")
         require(FileManager.default.fileExists(atPath: first.fileURL.path),
                 "prepared artifact file must exist while leased")
+        guard let readyDrag = store.beginDrag(of: first) else {
+            fail("a prepared screenshot must start dragging")
+        }
+        require(!readyDrag.usesFilePromise,
+                "a prepared screenshot must expose its direct image pasteboard item")
+        guard let readyItem = readyDrag.pasteboardWriter as? NSPasteboardItem else {
+            fail("a prepared screenshot must use NSPasteboardItem")
+        }
+        require(readyItem.types.contains(.png), "prepared drag item must contain PNG")
+        require(readyItem.types.contains(.tiff), "prepared drag item must contain TIFF")
+        require(readyItem.types.contains(.fileURL), "prepared drag item must contain a file URL")
+        store.finishDrag(readyDrag)
 
         store.copy(first)
         await waitUntil { recorder.publications.count == 2 }
@@ -81,8 +123,91 @@ struct CaptureArtifactTests {
 
         store.releaseCard(second)
         store.shutdown()
+        await testImmediateDragWhilePreparing()
         await testHundredArtifactResourceLifecycle()
         print("CaptureArtifactTests: passed")
+    }
+
+    @MainActor
+    private static func testImmediateDragWhilePreparing() async {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("QuickShotImmediateDrag-\(UUID().uuidString)",
+                                    isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let gate = PreparationGate()
+        let counter = PreparationCounter()
+        let store = CaptureArtifactStore(
+            rootURL: root,
+            preparer: { payload, url in
+                counter.increment()
+                gate.waitUntilReleased()
+                return Clipboard.prepareImage(cgImage: payload.image, fileURL: url)
+            },
+            currentPasteboardFiles: { [] },
+            publishClipboard: { _ in })
+
+        let artifact = try! store.admit(
+            sequence: CaptureSequence(rawValue: 41),
+            image: makeImage(red: 0.4))
+        await waitUntil { gate.hasStarted }
+
+        guard let payload = store.beginDrag(of: artifact) else {
+            fail("drag must begin while image preparation is still running")
+        }
+        require(payload.usesFilePromise,
+                "an unprepared screenshot must use a non-blocking file promise")
+        guard let provider = payload.pasteboardWriter as? NSFilePromiseProvider else {
+            fail("unprepared drag must expose NSFilePromiseProvider")
+        }
+        require(provider.fileType == UTType.png.identifier,
+                "file promise must advertise PNG")
+        guard let delegate = provider.delegate else {
+            fail("file promise delegate must remain retained")
+        }
+        require(delegate.filePromiseProvider(provider, fileNameForType: provider.fileType)
+            .hasSuffix(".png"),
+                "promised drag filename must use the PNG extension")
+
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(
+            "QuickShotImmediateDrag-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        require(pasteboard.writeObjects([provider]),
+                "AppKit refused to publish the file promise")
+        guard let receiver = pasteboard.readObjects(
+            forClasses: [NSFilePromiseReceiver.self],
+            options: nil)?.first as? NSFilePromiseReceiver else {
+            fail("AppKit could not read the published file promise")
+        }
+        require(receiver.fileTypes == [UTType.png.identifier],
+                "file-promise receiver did not preserve the PNG type")
+
+        gate.release()
+        let destination = root.appendingPathComponent("PromisedScreenshot.png")
+        let promiseError: Error? = await withCheckedContinuation { continuation in
+            delegate.filePromiseProvider(
+                provider,
+                writePromiseTo: destination,
+                completionHandler: { error in
+                    continuation.resume(returning: error)
+                })
+        }
+        require(promiseError == nil, "file promise failed: \(String(describing: promiseError))")
+        require(FileManager.default.fileExists(atPath: destination.path),
+                "file promise did not write the dragged PNG")
+        require((try? Data(contentsOf: destination).isEmpty) == false,
+                "file promise wrote an empty PNG")
+        require(counter.count == 1,
+                "file promise must reuse automatic preparation instead of encoding again")
+
+        store.releaseCard(artifact)
+        require(FileManager.default.fileExists(atPath: artifact.fileURL.path),
+                "active drag must retain the artifact after its card is removed")
+        store.finishDrag(payload)
+        require(!FileManager.default.fileExists(atPath: artifact.fileURL.path),
+                "finishing the last drag lease must remove the source artifact file")
+        store.finishDrag(payload)
+        store.shutdown()
     }
 
     @MainActor

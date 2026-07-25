@@ -100,7 +100,10 @@ per-display backdrops. Mouse-up crops that same image; there is no stream cache,
 system capture subprocess, temporary PNG pixel source, or second screenshot.
 Post-crop clipboard files are sequence-owned delivery artifacts with explicit
 card, pasteboard, drag, and pin leases. Encoding happens once per screenshot;
-unleased files are removed on replacement, shutdown, or crash recovery.
+unleased files are removed on replacement, shutdown, or crash recovery. Drag-out
+works from the first visible frame: prepared cards publish PNG/TIFF/file URL
+directly, while a card that is still encoding publishes a standard AppKit PNG
+file promise backed by the same one-time preparation task.
 
 After frozen pixels are ready, the selector acquires foreground ownership and one
 session-owned AppKit cursor lease before revealing its custom crosshair. The

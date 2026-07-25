@@ -70,6 +70,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
 
     private var startMouse: NSPoint = .zero
     private var movedFar = false
+    private var activeDragPayload: CaptureArtifactDragPayload?
     private var titleResetWork: DispatchWorkItem?
 
     init(artifact: CaptureArtifact) {
@@ -193,8 +194,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         guard !collapsed, !movedFar else { return }
         let now = NSEvent.mouseLocation
         guard hypot(now.x - startMouse.x, now.y - startMouse.y) > ThumbStyle.dragThreshold else { return }
-        movedFar = true
-        beginDragOut(with: event)
+        movedFar = beginDragOut(with: event)
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -258,12 +258,14 @@ private final class ThumbnailView: NSView, NSDraggingSource {
 
     // MARK: drag-out
 
-    private func beginDragOut(with event: NSEvent) {
+    private func beginDragOut(with event: NSEvent) -> Bool {
         guard let owner,
-              let item = manager?.preparedDragItem(for: owner) else { return }
-        let dragItem = NSDraggingItem(pasteboardWriter: item)
+              let payload = manager?.beginDrag(owner) else { return false }
+        activeDragPayload = payload
+        let dragItem = NSDraggingItem(pasteboardWriter: payload.pasteboardWriter)
         dragItem.setDraggingFrame(displayView.frame, contents: displayNSImage)
         beginDraggingSession(with: [dragItem], event: event, source: self)
+        return true
     }
 
     func draggingSession(_ session: NSDraggingSession,
@@ -272,8 +274,9 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession,
                          endedAt screenPoint: NSPoint,
                          operation: NSDragOperation) {
-        guard let owner else { return }
-        manager?.finishDrag(owner)
+        guard let payload = activeDragPayload else { return }
+        activeDragPayload = nil
+        manager?.finishDrag(payload)
     }
 }
 

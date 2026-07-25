@@ -799,12 +799,12 @@ final class ThumbnailManager {
                                     artifactStore: artifactStore)
     }
 
-    func preparedDragItem(for t: ThumbnailWindow) -> NSPasteboardItem? {
-        artifactStore.preparedPasteboardItem(for: t.artifact)
+    func beginDrag(_ t: ThumbnailWindow) -> CaptureArtifactDragPayload? {
+        artifactStore.beginDrag(of: t.artifact)
     }
 
-    func finishDrag(_ t: ThumbnailWindow) {
-        artifactStore.finishDrag(of: t.artifact)
+    func finishDrag(_ payload: CaptureArtifactDragPayload) {
+        artifactStore.finishDrag(payload)
     }
 
     func shutdown() {

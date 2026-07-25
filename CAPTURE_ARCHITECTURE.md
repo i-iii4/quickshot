@@ -218,6 +218,17 @@ Encoding is performed once and reused by automatic copy, per-card copy, drag,
 save, pin, and Copy All. A clipboard temporary PNG is a post-crop delivery
 representation; it is never a pixel source for the screenshot.
 
+Drag-out is available from the moment a card is visible:
+
+- a prepared artifact exposes one direct pasteboard item containing PNG, TIFF,
+  and its temporary file URL;
+- an artifact that is still encoding exposes an `NSFilePromiseProvider`
+  immediately and fulfills the promised PNG from the same preparation task;
+- the drag gesture is consumed only after a payload and dragging session exist;
+- each session owns one idempotently released drag lease;
+- drag never starts a second encode and never waits synchronously on the main
+  actor.
+
 Cleanup rules:
 
 - superseded pasteboard files are removed after their pasteboard lease ends;
@@ -364,6 +375,9 @@ Required tests:
 - newer capture remains the clipboard result;
 - card order follows capture order;
 - copy, drag, pin, save, and Copy All reuse the same artifact;
+- dragging a newly visible, still-encoding card immediately yields a valid PNG
+  file promise and performs exactly one encode;
+- prepared drag-out retains PNG, TIFF, and file URL compatibility;
 - delete one, Delete All, pasteboard replacement, shutdown, and startup cleanup;
 - 100 sequential captures produce bounded memory and no unleased temp files.
 

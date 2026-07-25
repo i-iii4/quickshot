@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import ImageIO
 import OSLog
+import UniformTypeIdentifiers
 
 struct CaptureImagePayload: @unchecked Sendable {
     let image: CGImage
@@ -112,6 +113,87 @@ final class CaptureArtifact {
         context.interpolationQuality = .high
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         return context.makeImage() ?? image
+    }
+}
+
+@MainActor
+final class CaptureArtifactDragPayload {
+    let pasteboardWriter: any NSPasteboardWriting
+    let usesFilePromise: Bool
+
+    fileprivate let artifact: CaptureArtifact
+    fileprivate var hasFinished = false
+
+    fileprivate init(artifact: CaptureArtifact,
+                     pasteboardWriter: any NSPasteboardWriting,
+                     usesFilePromise: Bool) {
+        self.artifact = artifact
+        self.pasteboardWriter = pasteboardWriter
+        self.usesFilePromise = usesFilePromise
+    }
+}
+
+private final class CaptureArtifactPromiseCompletion: @unchecked Sendable {
+    private let handler: (Error?) -> Void
+
+    init(_ handler: @escaping (Error?) -> Void) {
+        self.handler = handler
+    }
+
+    func callAsFunction(_ error: Error?) {
+        handler(error)
+    }
+}
+
+private final class CaptureArtifactFilePromiseDelegate: NSObject,
+    NSFilePromiseProviderDelegate,
+    @unchecked Sendable {
+    typealias Prepare = @MainActor @Sendable () async -> Clipboard.PreparedImage
+
+    private let promisedFileName: String
+    private let prepare: Prepare
+
+    @MainActor
+    init(artifact: CaptureArtifact) {
+        promisedFileName = "QuickShot-\(artifact.sequence.rawValue).png"
+        prepare = { [artifact] in
+            await artifact.preparedImage()
+        }
+        super.init()
+    }
+
+    @MainActor
+    func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider,
+                             fileNameForType fileType: String) -> String {
+        promisedFileName
+    }
+
+    nonisolated func filePromiseProvider(
+        _ filePromiseProvider: NSFilePromiseProvider,
+        writePromiseTo url: URL,
+        completionHandler: @escaping (Error?) -> Void
+    ) {
+        let completion = CaptureArtifactPromiseCompletion(completionHandler)
+        let prepare = prepare
+        Task { @MainActor in
+            let prepared = await prepare()
+            guard let png = prepared.png else {
+                completion(NSError(
+                    domain: "com.iiii.quickshot.drag",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Screenshot PNG is unavailable"]))
+                return
+            }
+
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try png.write(to: url, options: .atomic)
+                }.value
+                completion(nil)
+            } catch {
+                completion(error)
+            }
+        }
     }
 }
 
@@ -253,16 +335,40 @@ final class CaptureArtifactStore {
         }
     }
 
-    func preparedPasteboardItem(for artifact: CaptureArtifact) -> NSPasteboardItem? {
-        guard artifacts[artifact.sequence] === artifact,
-              let prepared = artifact.preparedImageIfReady else {
-            return nil
+    func beginDrag(of artifact: CaptureArtifact) -> CaptureArtifactDragPayload? {
+        guard artifacts[artifact.sequence] === artifact else { return nil }
+
+        let writer: any NSPasteboardWriting
+        let usesFilePromise: Bool
+        if let prepared = artifact.preparedImageIfReady {
+            guard let item = Clipboard.pasteboardItem(preparedImage: prepared) else {
+                return nil
+            }
+            writer = item
+            usesFilePromise = false
+        } else {
+            let delegate = CaptureArtifactFilePromiseDelegate(artifact: artifact)
+            let provider = NSFilePromiseProvider(
+                fileType: UTType.png.identifier,
+                delegate: delegate)
+            // The provider's delegate is weak. Retain it for the complete
+            // drag and destination-write lifecycle through userInfo.
+            provider.userInfo = delegate
+            writer = provider
+            usesFilePromise = true
         }
+
         artifact.dragLeaseCount += 1
-        return Clipboard.pasteboardItem(preparedImage: prepared)
+        return CaptureArtifactDragPayload(
+            artifact: artifact,
+            pasteboardWriter: writer,
+            usesFilePromise: usesFilePromise)
     }
 
-    func finishDrag(of artifact: CaptureArtifact) {
+    func finishDrag(_ payload: CaptureArtifactDragPayload) {
+        guard !payload.hasFinished else { return }
+        payload.hasFinished = true
+        let artifact = payload.artifact
         artifact.dragLeaseCount = max(0, artifact.dragLeaseCount - 1)
         removeIfUnused(artifact.sequence)
     }
