@@ -2,8 +2,9 @@ import AppKit
 
 func trayHostIgnoresMouseEvents(isVisible: Bool,
                                 captureActive: Bool,
+                                dragActive: Bool,
                                 pointerOverContent: Bool) -> Bool {
-    !isVisible || captureActive || !pointerOverContent
+    !isVisible || captureActive || dragActive || !pointerOverContent
 }
 
 /// Content view полноэкранного прозрачного tray-host окна.

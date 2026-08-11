@@ -68,6 +68,7 @@ final class ThumbnailManager {
     private weak var collapsedPeekItem: ThumbnailWindow?
     private var trayHoverActive = false
     private var capturePresentationSessions: Set<UUID> = []
+    private var activeDragPayloads: Set<ObjectIdentifier> = []
     private var viewportScrollAccumulator: CGFloat = 0
 
     private let defaults = UserDefaults.standard
@@ -249,6 +250,7 @@ final class ThumbnailManager {
 
     private func scheduleCollapsedPresentationExit() {
         guard trayHoverActive || (collapsed && collapsedPeekItem != nil) else { return }
+        guard activeDragPayloads.isEmpty else { return }
         cancelHoverExit()
         let generation = hoverExitGeneration
         let work = DispatchWorkItem { [weak self] in
@@ -313,6 +315,7 @@ final class ThumbnailManager {
         let ignores = trayHostIgnoresMouseEvents(
             isVisible: host.isVisible,
             captureActive: !capturePresentationSessions.isEmpty,
+            dragActive: !activeDragPayloads.isEmpty,
             pointerOverContent: host.isVisible && mouseOverTray())
         guard host.ignoresMouseEvents != ignores else { return }
         host.ignoresMouseEvents = ignores
@@ -803,15 +806,31 @@ final class ThumbnailManager {
         artifactStore.beginDrag(of: t.artifact)
     }
 
-    func finishDrag(_ payload: CaptureArtifactDragPayload) {
-        artifactStore.finishDrag(payload)
+    func dragSessionWillBegin(_ payload: CaptureArtifactDragPayload) {
+        activeDragPayloads.insert(ObjectIdentifier(payload))
+        cancelHoverExit()
+        refreshHostPointerRouting()
     }
+
+    func finishDrag(_ payload: CaptureArtifactDragPayload) {
+        activeDragPayloads.remove(ObjectIdentifier(payload))
+        artifactStore.finishDrag(payload)
+        refreshHostPointerRouting()
+        if trayHoverActive || (collapsed && collapsedPeekItem != nil) {
+            scheduleCollapsedPresentationExit()
+        }
+    }
+
+#if TESTING
+    var debugActiveDragSessionCount: Int { activeDragPayloads.count }
+#endif
 
     func shutdown() {
         finishCollectionMotion()
         finishTrayMotion()
         cancelCollapsedPeekDismiss()
         cancelHoverExit()
+        activeDragPayloads.removeAll()
         for item in items { closeAndRelease(item) }
         collectionModel.removeAll()
         itemByID.removeAll()
