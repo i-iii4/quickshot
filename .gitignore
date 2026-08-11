@@ -14,3 +14,6 @@ zig-out/
 # Прочее
 *.swiftmodule
 *.o
+
+# Рабочие worktree агентов — не часть проекта
+.claude/worktrees/
