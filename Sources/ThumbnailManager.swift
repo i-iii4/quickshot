@@ -67,6 +67,7 @@ final class ThumbnailManager {
     private var hoverExitGeneration: UInt = 0
     private weak var collapsedPeekItem: ThumbnailWindow?
     private var trayHoverActive = false
+    private var pointerInsideHoverIsland = false
     private var capturePresentationSessions: Set<UUID> = []
     private var viewportScrollAccumulator: CGFloat = 0
 
@@ -184,14 +185,38 @@ final class ThumbnailManager {
         }
     }
 
-    /// Курсор над картой/хабом (в глобальных координатах)? Хост полноэкранный, поэтому проверяем
-    /// именно интерактивные сабвью, а не весь хост.
+    /// Видимая геометрия острова в координатах хоста: раскрытый хаб и каждая
+    /// показанная карточка. Зазоры между ними замыкает `TrayHover.bridge`.
+    private func trayIslandRects() -> [NSRect] {
+        var rects: [NSRect] = []
+        if !hub.view.isHidden, hub.view.alphaValue > 0.01 {
+            rects.append(hub.visibleFrame)
+        }
+        for item in items where !item.hostView.isHidden && item.hostView.alphaValue > 0.01 {
+            rects.append(contentsOf: item.interactiveFramesInHost)
+        }
+        return rects
+    }
+
+    /// Указатель над содержимым трея? Ответ решает, принимает ли полноэкранный
+    /// хост события вообще, поэтому внешнего запаса здесь нет: клик рядом с
+    /// треем обязан уходить в приложение под ним. Зазоры внутри острова при
+    /// этом замкнуты — проход между командами и карточками не роняет окно.
     private func mouseOverTray() -> Bool {
-        let m = NSEvent.mouseLocation
-        let o = host.frame.origin
-        let localMouse = NSPoint(x: m.x - o.x, y: m.y - o.y)
-        if !hub.view.isHidden, hub.contains(localMouse) { return true }
-        return hostContent.hitTest(localMouse) != nil
+        trayHoverRegionContains(toLocal(NSEvent.mouseLocation),
+                                rects: trayIslandRects(),
+                                shield: 0,
+                                bridge: TrayHover.bridge)
+    }
+
+    /// Указатель внутри hover-острова? Здесь запас есть, и выход считается по
+    /// большему порогу, чем вход: этот ответ удерживает раскрытый трей.
+    private func mouseInsideHoverIsland() -> Bool {
+        let inside = trayPointerRemainsInside(toLocal(NSEvent.mouseLocation),
+                                              rects: trayIslandRects(),
+                                              wasInside: pointerInsideHoverIsland)
+        pointerInsideHoverIsland = inside
+        return inside
     }
 
     private var cardsAreCollapsed: Bool {
@@ -256,7 +281,7 @@ final class ThumbnailManager {
                   self.trayHoverActive || (self.collapsed && self.collapsedPeekItem != nil) else { return }
             guard self.hoverExitGeneration == generation else { return }
             self.hoverExitWorkItem = nil
-            guard !self.mouseOverTray() else { return }
+            guard !self.mouseInsideHoverIsland() else { return }
             if self.trayHoverActive {
                 self.endTrayHoverSession()
             } else if let peek = self.collapsedPeekItem {
@@ -310,13 +335,29 @@ final class ThumbnailManager {
     /// Global movement opens the interactive island; local movement closes it as
     /// soon as the pointer leaves. Capture mode always remains fully passive.
     private func refreshHostPointerRouting() {
+        let overContent = host.isVisible && mouseOverTray()
+        _ = mouseInsideHoverIsland()          // гистерезис живёт по движению, не по таймеру
         let ignores = trayHostIgnoresMouseEvents(
             isVisible: host.isVisible,
             captureActive: !capturePresentationSessions.isEmpty,
-            pointerOverContent: host.isVisible && mouseOverTray())
-        guard host.ignoresMouseEvents != ignores else { return }
-        host.ignoresMouseEvents = ignores
-        if ignores, host.isKeyWindow { host.resignKey() }
+            pointerOverContent: overContent)
+        if host.ignoresMouseEvents != ignores {
+            host.ignoresMouseEvents = ignores
+            if ignores, host.isKeyWindow { host.resignKey() }
+        }
+        syncHubPointer()
+    }
+
+    /// Позицией указателя владеет трей: его мониторы живут всегда, а tracking
+    /// areas хаба молчат, пока хост прозрачен для мыши. Без этого hover не
+    /// восстанавливается, если указатель остановился на кнопке и больше не
+    /// двигается.
+    private func syncHubPointer() {
+        guard host.isVisible,
+              !hub.view.isHidden,
+              capturePresentationSessions.isEmpty,
+              !items.isEmpty else { return }
+        hub.updatePointer(at: toLocal(NSEvent.mouseLocation))
     }
 
     /// Keeps the capture-excluded tray visible between the frozen backdrop and

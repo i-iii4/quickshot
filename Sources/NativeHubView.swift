@@ -219,6 +219,10 @@ private final class NativeHubRenderView: NSView {
     var acceptsPointerInteraction = true {
         didSet {
             if oldValue != acceptsPointerInteraction {
+                if !acceptsPointerInteraction {
+                    cancelHoverClear()
+                    clearHoverNow()
+                }
                 updateTrackingAreas()
             }
         }
@@ -250,6 +254,7 @@ private final class NativeHubRenderView: NSView {
     private var compact = false
     private var copied = false
     private var hoveredNodeID: UInt64?
+    private var hoverClearWorkItem: DispatchWorkItem?
     private var trackingArea: NSTrackingArea?
     private var lastAppearance: (dark: Bool, highContrast: Bool, reduceMotion: Bool)?
     private var accessibilityObserver: NSObjectProtocol?
@@ -542,6 +547,35 @@ private final class NativeHubRenderView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         guard acceptsPointerInteraction else { return }
+        scheduleHoverClear()
+    }
+
+    /// Указатель, ведомый от одной команды к соседней, проходит через зазор
+    /// ряда. Мгновенное снятие подсветки превращает этот проход в мигание,
+    /// поэтому цель отпускается только если за grace-период не нашлась новая.
+    private func scheduleHoverClear() {
+        guard hoveredNodeID != nil, hoverClearWorkItem == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.hoverClearWorkItem = nil
+            self.clearHoverNow()
+        }
+        hoverClearWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + TrayHover.controlGrace, execute: work)
+    }
+
+    private func cancelHoverClear() {
+        hoverClearWorkItem?.cancel()
+        hoverClearWorkItem = nil
+    }
+
+    /// Немедленно отпустить подсветку: трей скрывается или выходит из hover.
+    func clearPointerHover() {
+        cancelHoverClear()
+        clearHoverNow()
+    }
+
+    private func clearHoverNow() {
         guard hoveredNodeID != nil else { return }
         hoveredNodeID = nil
         quickshot_native_ui_pointer_move(nativeApp, -1, -1)
@@ -603,11 +637,15 @@ private final class NativeHubRenderView: NSView {
     }
 
     private func forwardPointerMove(_ point: NSPoint) {
-        let target = button(at: point)
-        guard target?.id != hoveredNodeID else { return }
-        hoveredNodeID = target?.id
+        guard let target = button(at: point) else {
+            scheduleHoverClear()
+            return
+        }
+        cancelHoverClear()
+        guard target.id != hoveredNodeID else { return }
+        hoveredNodeID = target.id
         quickshot_native_ui_pointer_move(nativeApp, Float(point.x), Float(point.y))
-        sendInteraction(.hover, action: target?.action ?? .none)
+        sendInteraction(.hover, action: target.action)
         renderNow()
     }
 
@@ -1157,11 +1195,17 @@ final class NativeHubShellView: NSView {
                 y: collapsedOrigin.y + compactHeight / 2)
     }
 
-    func containsVisiblePointInSuperview(_ point: NSPoint) -> Bool {
+    /// Текущая видимая геометрия хаба в координатах хоста: компактное ядро или
+    /// раскрытый ряд команд, в зависимости от прогресса раскрытия.
+    var visibleFrameInSuperview: NSRect {
         NSRect(x: frame.minX + visibleBounds.minX,
                y: frame.minY + visibleBounds.minY,
                width: visibleBounds.width,
-               height: visibleBounds.height).contains(point)
+               height: visibleBounds.height)
+    }
+
+    func containsVisiblePointInSuperview(_ point: NSPoint) -> Bool {
+        visibleFrameInSuperview.contains(point)
     }
 
     private var actionWidth: CGFloat {
@@ -1714,11 +1758,26 @@ final class NativeHubShellView: NSView {
         return path
     }
 
+    /// Область удержания уже открытого hover: раскрытый ряд плюс защитный
+    /// запас. Вход считается по видимой геометрии, выход — по этой рамке,
+    /// иначе граница дребезжит при движении вдоль края.
     private func expandedHoverFrame() -> NSRect {
         return NSRect(x: collapsedOrigin.x - compactShellX,
                       y: collapsedOrigin.y,
                       width: expandedWidth,
-                      height: compactHeight).insetBy(dx: -2, dy: -2)
+                      height: compactHeight)
+            .insetBy(dx: -TrayHover.shield, dy: -TrayHover.shield)
+    }
+
+    /// Внешнее обновление указателя. Владелец позиции — трей: его мониторы
+    /// живут всегда, а собственные tracking areas хаба глохнут, как только
+    /// окно-хост становится прозрачным для мыши.
+    func updatePointer(at pointInSuperview: NSPoint) {
+        if !pointerHoverActive, containsVisiblePointInSuperview(pointInSuperview) {
+            setPointerHover(true)
+            return
+        }
+        updateHover(at: pointInSuperview)
     }
 
     private func updateHover(at pointInSuperview: NSPoint) {
@@ -1763,6 +1822,8 @@ final class NativeHubShellView: NSView {
         if pointerHoverActive { onHoverChanged?(false) }
         pointerHoverActive = false
         trayHoverHeld = false
+        nativeView.clearPointerHover()
+        coreBackgroundView.clearPointerHover()
         geometryAnimator.synchronize(0)
         stopHoverMonitoring()
         targetProgress = 0

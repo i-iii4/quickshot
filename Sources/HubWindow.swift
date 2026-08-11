@@ -106,6 +106,8 @@ final class HubWindow {
     func setTrayHoverActive(_ active: Bool) { shell.setTrayHoverHeld(active) }
     func setCountTransitionProgress(_ progress: CGFloat) { shell.setCountTransitionProgress(progress) }
     func contains(_ pointInHost: NSPoint) -> Bool { shell.containsVisiblePointInSuperview(pointInHost) }
+    var visibleFrame: NSRect { shell.visibleFrameInSuperview }
+    func updatePointer(at pointInHost: NSPoint) { shell.updatePointer(at: pointInHost) }
     func show() { shell.isHidden = false }
     func hide() {
         shell.resetHoverState()

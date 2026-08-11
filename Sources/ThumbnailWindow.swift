@@ -349,6 +349,20 @@ final class ThumbnailWindow {
     var hostView: NSView { container }
     var cardSize: NSSize { NSSize(width: cardWidth, height: cardHeight) }
     var layoutFrame: NSRect { container.frame }
+
+    /// Интерактивная геометрия карточки в координатах хоста: сама карточка и
+    /// краевая ручка. Поля контейнера сюда не входят — они пропускают клики
+    /// насквозь, и остров наведения обязан повторять это, а не расширять.
+    var interactiveFramesInHost: [NSRect] {
+        let outer = container.frame
+        let card = outer.insetBy(dx: band, dy: band)
+        guard card.width > 0, card.height > 0 else { return [] }
+        var frames = [card]
+        if !edgeHandle.isHidden, edgeHandle.alphaValue > 0.01 {
+            frames.append(edgeHandle.frame.offsetBy(dx: outer.minX, dy: outer.minY))
+        }
+        return frames
+    }
     var onHoverChanged: ((Bool) -> Void)? {
         get { container.onHoverChanged }
         set { container.onHoverChanged = newValue }

@@ -12,7 +12,9 @@ APP="QuickShot"
 BUNDLE="${APP}.app"
 ARCH="$(uname -m)"
 DEPLOY="26.0"
-SDK="$(xcrun --show-sdk-path)"
+                                        # Без --sdk macosx xcrun отдаёт SDK из CommandLineTools,
+                                        # который может быть новее Swift-компилятора Xcode.
+SDK="$(xcrun --sdk macosx --show-sdk-path)"
 STAGING_ROOT="$(mktemp -d "$PWD/.QuickShot-build.XXXXXX")"
 STAGING_BUNDLE="$STAGING_ROOT/$BUNDLE"
 ATOMIC_REPLACE="$STAGING_ROOT/atomic-replace"

@@ -4,7 +4,9 @@ cd "$(dirname "$0")/.."
 
 ARCH="$(uname -m)"
 DEPLOY="26.0"
-SDK="$(xcrun --show-sdk-path)"
+                                        # Без --sdk macosx xcrun отдаёт SDK из CommandLineTools,
+                                        # который может быть новее Swift-компилятора Xcode.
+SDK="$(xcrun --sdk macosx --show-sdk-path)"
 ZIG_BIN="${QUICKSHOT_ZIG:-$(command -v zig || true)}"
 if [ -z "$ZIG_BIN" ] && [ -x "$HOME/.native/toolchains/zig-0.16.0/zig" ]; then
   ZIG_BIN="$HOME/.native/toolchains/zig-0.16.0/zig"
@@ -25,6 +27,7 @@ OUT="$(mktemp -t quickshot-hub-tests)"
 SURFACE_OUT="$(mktemp -t quickshot-native-surface-tests)"
 STATUS_LAYOUT_OUT="$(mktemp -t quickshot-status-menu-layout-tests)"
 TRAY_POINTER_OUT="$(mktemp -t quickshot-tray-pointer-tests)"
+TRAY_HOVER_OUT="$(mktemp -t quickshot-tray-hover-region-tests)"
 THUMBNAIL_LAYOUT_OUT="$(mktemp -t quickshot-thumbnail-layout-tests)"
 THUMBNAIL_MOTION_OUT="$(mktemp -t quickshot-thumbnail-motion-tests)"
 THUMBNAIL_COLLECTION_OUT="$(mktemp -t quickshot-thumbnail-collection-tests)"
@@ -40,7 +43,7 @@ CAPTURE_SEQUENCE_OUT="$(mktemp -t quickshot-capture-sequence-tests)"
 CAPTURE_ARTIFACT_OUT="$(mktemp -t quickshot-capture-artifact-tests)"
 WINDOW_PROTECTION_OUT="$(mktemp -t quickshot-window-protection-tests)"
 THUMBNAIL_MODEL_OUT="$(mktemp -t quickshot-thumbnail-model-tests)"
-trap 'rm -f "$OUT" "$SURFACE_OUT" "$STATUS_LAYOUT_OUT" "$TRAY_POINTER_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"' EXIT
+trap 'rm -f "$OUT" "$SURFACE_OUT" "$STATUS_LAYOUT_OUT" "$TRAY_POINTER_OUT" "$TRAY_HOVER_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"' EXIT
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -125,6 +128,7 @@ xcrun swiftc \
   Tests/HubWindowTestSupport.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
+  Sources/TrayHoverRegion.swift \
   Sources/NativeHubView.swift \
   Sources/HubWindow.swift \
   Tests/HubWindowBehaviorTests.swift \
@@ -145,6 +149,7 @@ xcrun swiftc \
   Tests/HubWindowTestSupport.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
+  Sources/TrayHoverRegion.swift \
   Sources/NativeHubView.swift \
   Sources/HubWindow.swift \
   Tests/NativeSurfaceBehaviorTests.swift \
@@ -178,6 +183,19 @@ xcrun swiftc \
   -o "$TRAY_POINTER_OUT"
 
 "$TRAY_POINTER_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
+  -framework AppKit \
+  Sources/TrayHoverRegion.swift \
+  Tests/TrayHoverRegionTests.swift \
+  -o "$TRAY_HOVER_OUT"
+
+"$TRAY_HOVER_OUT"
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -222,6 +240,7 @@ xcrun swiftc \
   Sources/Theme.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
+  Sources/TrayHoverRegion.swift \
   Sources/NativeHubView.swift \
   Sources/CaptureSequence.swift \
   Sources/ThumbnailCollectionModel.swift \
@@ -256,6 +275,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/TrayHostContentView.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
+  Sources/TrayHoverRegion.swift \
   Sources/NativeHubView.swift \
   Tests/HubWindowLiveClickTests.swift \
   Sources/HubWindow.swift \
@@ -279,6 +299,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/Theme.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
+  Sources/TrayHoverRegion.swift \
 	  Sources/NativeHubView.swift \
 	  Sources/CaptureSequence.swift \
 	  Sources/ThumbnailCollectionModel.swift \
@@ -484,7 +505,11 @@ rg -F -q "hub.setTrayHoverActive(true)" Sources/ThumbnailManager.swift
 rg -F -q "hub.setTrayHoverActive(false)" Sources/ThumbnailManager.swift
 rg -F -q "thumbnailHoverChanged" Sources/ThumbnailManager.swift
 rg -F -q "TrayAnim.hoverExitGrace" Sources/ThumbnailManager.swift
-rg -F -q "guard !self.mouseOverTray() else { return }" Sources/ThumbnailManager.swift
+rg -F -q "guard !self.mouseInsideHoverIsland() else { return }" Sources/ThumbnailManager.swift
+rg -F -q "trayHoverRegionContains(toLocal(NSEvent.mouseLocation)" Sources/ThumbnailManager.swift
+rg -F -q "item.interactiveFramesInHost" Sources/ThumbnailManager.swift
+rg -F -q "outer.insetBy(dx: band, dy: band)" Sources/ThumbnailWindow.swift
+rg -F -q "hub.updatePointer(at: toLocal(NSEvent.mouseLocation))" Sources/ThumbnailManager.swift
 rg -F -q "self.hoverExitGeneration == generation" Sources/ThumbnailManager.swift
 rg -F -q "self.collapsedPeekGeneration == generation" Sources/ThumbnailManager.swift
 rg -F -q "container.onHoverChanged" Sources/ThumbnailWindow.swift
