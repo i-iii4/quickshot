@@ -9,6 +9,7 @@ struct ThumbnailCollectionBehaviorTests {
         run("insertion uses one-axis fade and reaches resting state", testInsertion)
         run("hidden removal never restores an opaque frame", testHiddenRemovalTerminalState)
         run("tray transition preserves the orthogonal card anchor", testAxisLockedTrayTransition)
+        run("drag session pins and restores tray pointer routing", testDragSessionLifecycle)
         print("ThumbnailCollectionBehaviorTests: passed")
     }
 
@@ -78,6 +79,63 @@ struct ThumbnailCollectionBehaviorTests {
         let horizontalSnapshot = horizontal.debugCollectionSnapshot()
         try require(horizontalSnapshot.translationX > 0 && horizontalSnapshot.translationY == 0,
                     "Horizontal tray transition drifted off its layout axis")
+    }
+
+    private static func testDragSessionLifecycle() throws {
+        let fixture = try makeDragFixture()
+        guard let payload = fixture.manager.beginDrag(fixture.thumbnail) else {
+            throw Failure("Manager rejected a retained screenshot drag")
+        }
+        try require(fixture.manager.debugActiveDragSessionCount == 0,
+                    "Preparing drag data changed routing before AppKit began the session")
+        fixture.manager.dragSessionWillBegin(payload)
+        try require(fixture.manager.debugActiveDragSessionCount == 1,
+                    "Drag start did not pin tray pointer routing")
+
+        fixture.manager.finishDrag(payload)
+        try require(fixture.manager.debugActiveDragSessionCount == 0,
+                    "Drag completion left tray pointer routing pinned")
+
+        fixture.manager.finishDrag(payload)
+        try require(fixture.manager.debugActiveDragSessionCount == 0,
+                    "Duplicate drag completion corrupted routing state")
+        fixture.manager.shutdown()
+        fixture.store.shutdown()
+    }
+
+    private static func makeDragFixture() throws -> (
+        thumbnail: ThumbnailWindow,
+        manager: ThumbnailManager,
+        store: CaptureArtifactStore
+    ) {
+        guard let screen = NSScreen.main else { throw Failure("No screen available") }
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(data: nil,
+                                      width: 320,
+                                      height: 180,
+                                      bitsPerComponent: 8,
+                                      bytesPerRow: 320 * 4,
+                                      space: colorSpace,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let image = context.makeImage() else {
+            throw Failure("Could not create test image")
+        }
+        let sequence = CaptureSequence(rawValue: UInt64.random(in: 1...UInt64.max))
+        let store = CaptureArtifactStore(
+            rootURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("QuickShotDragTests-\(UUID().uuidString)"),
+            currentPasteboardFiles: { Set<URL>() },
+            publishClipboard: { _ in })
+        store.registerCapture(sequence)
+        let artifact = try store.admit(sequence: sequence, image: image)
+        let manager = ThumbnailManager(artifactStore: store)
+        let thumbnail = ThumbnailWindow(
+            artifact: artifact,
+            screen: screen,
+            manager: manager,
+            width: 240,
+            screenHeight: screen.frame.height)
+        return (thumbnail, manager, store)
     }
 
     private static func makeThumbnail() throws -> ThumbnailWindow {

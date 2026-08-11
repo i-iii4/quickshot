@@ -359,6 +359,8 @@ final class CaptureArtifactStore {
         }
 
         artifact.dragLeaseCount += 1
+        Self.log.info(
+            "capture drag payload ready sequence=\(artifact.sequence.rawValue, privacy: .public) mode=\(usesFilePromise ? "file-promise" : "direct", privacy: .public)")
         return CaptureArtifactDragPayload(
             artifact: artifact,
             pasteboardWriter: writer,
@@ -370,6 +372,8 @@ final class CaptureArtifactStore {
         payload.hasFinished = true
         let artifact = payload.artifact
         artifact.dragLeaseCount = max(0, artifact.dragLeaseCount - 1)
+        Self.log.info(
+            "capture drag payload released sequence=\(artifact.sequence.rawValue, privacy: .public)")
         removeIfUnused(artifact.sequence)
     }
 

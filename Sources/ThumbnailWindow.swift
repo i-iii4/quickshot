@@ -1,4 +1,5 @@
 import AppKit
+import OSLog
 import QuartzCore
 
 @MainActor
@@ -53,6 +54,8 @@ private final class EdgeHandle: NSView {
 @MainActor
 private final class ThumbnailView: NSView, NSDraggingSource {
 
+    nonisolated private static let log = Logger(subsystem: "com.iiii.quickshot",
+                                                category: "drag")
     static let feedbackHold: TimeInterval = 1.2     // сколько держать галочку «Скопировано»
     static let fade: TimeInterval = 0.09            // почти незаметный fade кнопок
 
@@ -272,11 +275,21 @@ private final class ThumbnailView: NSView, NSDraggingSource {
                          sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
 
     func draggingSession(_ session: NSDraggingSession,
+                         willBeginAt screenPoint: NSPoint) {
+        guard let payload = activeDragPayload else { return }
+        manager?.dragSessionWillBegin(payload)
+        Self.log.info(
+            "drag session began sequence=\(session.draggingSequenceNumber, privacy: .public)")
+    }
+
+    func draggingSession(_ session: NSDraggingSession,
                          endedAt screenPoint: NSPoint,
                          operation: NSDragOperation) {
         guard let payload = activeDragPayload else { return }
         activeDragPayload = nil
         manager?.finishDrag(payload)
+        Self.log.info(
+            "drag session ended sequence=\(session.draggingSequenceNumber, privacy: .public) operation=\(operation.rawValue, privacy: .public)")
     }
 }
 
