@@ -27,6 +27,8 @@ struct HubWindowBehaviorTests {
         run("action labels are never visibly clipped", testActionLabelsAreNeverVisiblyClipped)
         run("layout metrics stay mathematically consistent", testLayoutMetricsStayConsistent)
         run("hover bubble is concentric and fades in", testHoverBubbleGeometry)
+        run("bubble stroke surrounds the pill", testBubbleStrokeSurroundsPill)
+        run("action tooltip follows hover", testActionTooltipFollowsHover)
         run("action labels stay short and intentional", testActionLabelsStayShort)
         run("actions keep one visual order", testActionsKeepVisualOrder)
         run("reveal has no idle tail", testRevealHasNoIdleTail)
@@ -613,6 +615,66 @@ struct HubWindowBehaviorTests {
             snapshot = harness.hub.debugSnapshot()
             try require(abs(snapshot.bubbleAlpha - 1) <= 0.001,
                         "\(position): expanded bubble must finish opaque")
+        }
+    }
+
+    /// Ярлык команды-иконки: появляется после задержки над наведённой кнопкой,
+    /// перенацеливается на соседнюю, исчезает при закрытии ряда. Окно ярлыка
+    /// исключено из захвата экрана и прозрачно для мыши.
+    private static func testActionTooltipFollowsHover() throws {
+        let harness = Harness(position: .right)
+        harness.hub.debugSetExpansionProgress(1)
+        harness.hub.debugRequestExpanded(true)
+        harness.hub.debugHoverButton(title: "Delete")
+        try require(harness.hub.debugTooltipState() == nil,
+                    "Tooltip must wait out its delay, not flash instantly")
+        harness.hub.debugFlushTooltip()
+        guard let shown = harness.hub.debugTooltipState() else {
+            throw Failure("Tooltip did not appear for Delete after the delay")
+        }
+        try require(shown.text == "Delete", "Tooltip text mismatch: \(shown.text)")
+        try require(shown.sharingNone, "Tooltip window must be excluded from screen capture")
+        try require(shown.ignoresMouse, "Tooltip window must not intercept the pointer")
+
+        harness.hub.debugHoverButton(title: "Save As")
+        harness.hub.debugFlushTooltip()
+        try require(harness.hub.debugTooltipState()?.text == "Save As",
+                    "Tooltip must retarget to the next hovered command")
+
+        harness.hub.debugRequestExpanded(false)
+        try require(harness.hub.debugTooltipState() == nil,
+                    "Collapsing the row must dismiss the tooltip")
+    }
+
+    /// Обводка капсулы обязана окружать её целиком: цвет штриха в середине
+    /// каждой из четырёх сторон один и тот же и отличается от заливки.
+    private static func testBubbleStrokeSurroundsPill() throws {
+        for position in [TrayPosition.right, .left, .bottom, .top] {
+            let harness = Harness(position: position)
+            harness.hub.debugSetExpansionProgress(1)
+            let bounds = harness.hub.debugSnapshot().shellBounds
+            let inset: CGFloat = 0.75
+            let probes: [(edge: String, point: NSPoint)] = [
+                ("left", NSPoint(x: bounds.minX + inset, y: bounds.midY)),
+                ("right", NSPoint(x: bounds.maxX - inset, y: bounds.midY)),
+                ("top", NSPoint(x: bounds.midX, y: bounds.minY + inset)),
+                ("bottom", NSPoint(x: bounds.midX, y: bounds.maxY - inset)),
+            ]
+            let samples = probes.map {
+                (edge: $0.edge, pixel: harness.hub.debugBubblePixel(at: $0.point))
+            }
+            let fill = harness.hub.debugBubblePixel(
+                at: NSPoint(x: bounds.midX, y: bounds.midY))
+            for sample in samples {
+                try require(sample.pixel & 0xff > 0,
+                            "\(position): \(sample.edge) stroke sample is transparent")
+                try require(sample.pixel != fill,
+                            "\(position): \(sample.edge) edge shows fill instead of stroke; pixel=\(String(sample.pixel, radix: 16)) fill=\(String(fill, radix: 16))")
+            }
+            for sample in samples.dropFirst() {
+                try require(sample.pixel == samples[0].pixel,
+                            "\(position): \(sample.edge) stroke \(String(sample.pixel, radix: 16)) differs from left stroke \(String(samples[0].pixel, radix: 16))")
+            }
         }
     }
 

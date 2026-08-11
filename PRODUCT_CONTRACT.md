@@ -98,8 +98,10 @@ fullscreen behavior remain explicit runtime release checks.
    labels, 16pt icons, and 8pt gaps between independent command buttons.
 11. Hover reveal exposes three visible actions: `Delete`, `Save As`, and
    `Copy All`. They render as icon-only House commands; the command name
-   appears as a system tooltip on hover. The core `Hide`/`Show` button keeps
-   its icon+label form.
+   appears as a tooltip after a short hover. QuickShot draws the tooltip
+   itself (system help tags never fire for an inactive accessory app); its
+   window is excluded from screen capture and ignores the pointer. The core
+   `Hide`/`Show` button keeps its icon+label form.
 12. Per-thumbnail controls use independent House command buttons in a
    token-spaced row, not exclusive-choice `button-group` chrome or
    native Liquid Glass buttons.

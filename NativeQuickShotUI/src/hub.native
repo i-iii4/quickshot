@@ -33,7 +33,7 @@
     </if>
     <else>
       <if test="{hubBubbleSurface}">
-        <panel width="800" height="40" background="surface" radius="xl" label="QuickShot hub bubble"></panel>
+        <panel width="{bubbleWidth}" height="40" background="surface" radius="xl" label="QuickShot hub bubble"></panel>
       </if>
       <else>
         <if test="{thumbnailSurface}">

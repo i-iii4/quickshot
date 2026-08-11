@@ -130,6 +130,8 @@ xcrun swiftc \
   Sources/NativeSDKBridge.swift \
   Sources/TrayHoverRegion.swift \
   Sources/NativeHubView.swift \
+  Sources/HubTooltip.swift \
+  Sources/WindowCaptureProtection.swift \
   Sources/HubWindow.swift \
   Tests/HubWindowBehaviorTests.swift \
   "$NATIVE_UI_LIB" \
@@ -151,6 +153,8 @@ xcrun swiftc \
   Sources/NativeSDKBridge.swift \
   Sources/TrayHoverRegion.swift \
   Sources/NativeHubView.swift \
+  Sources/HubTooltip.swift \
+  Sources/WindowCaptureProtection.swift \
   Sources/HubWindow.swift \
   Tests/NativeSurfaceBehaviorTests.swift \
   "$NATIVE_UI_LIB" \
@@ -242,6 +246,7 @@ xcrun swiftc \
   Sources/NativeSDKBridge.swift \
   Sources/TrayHoverRegion.swift \
   Sources/NativeHubView.swift \
+  Sources/HubTooltip.swift \
   Sources/CaptureSequence.swift \
   Sources/ThumbnailCollectionModel.swift \
   Sources/Clipboard.swift \
@@ -277,6 +282,8 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/NativeSDKBridge.swift \
   Sources/TrayHoverRegion.swift \
   Sources/NativeHubView.swift \
+  Sources/HubTooltip.swift \
+  Sources/WindowCaptureProtection.swift \
   Tests/HubWindowLiveClickTests.swift \
   Sources/HubWindow.swift \
   "$NATIVE_UI_LIB" \
@@ -301,6 +308,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/NativeSDKBridge.swift \
   Sources/TrayHoverRegion.swift \
 	  Sources/NativeHubView.swift \
+  Sources/HubTooltip.swift \
 	  Sources/CaptureSequence.swift \
 	  Sources/ThumbnailCollectionModel.swift \
 	  Sources/Clipboard.swift \
@@ -645,7 +653,7 @@ if output="$(rg -n 'size="icon"' NativeQuickShotUI/src/hub.native)"; then
 fi
 rg -F -q "<button-group" NativeQuickShotUI/src/hub.native
 rg -F -q "<button size=\"sm\"" NativeQuickShotUI/src/hub.native
-rg -F -q '<panel width="800" height="40" background="surface" radius="xl" label="QuickShot hub bubble"></panel>' NativeQuickShotUI/src/hub.native
+rg -F -q '<panel width="{bubbleWidth}" height="40" background="surface" radius="xl" label="QuickShot hub bubble"></panel>' NativeQuickShotUI/src/hub.native
 rg -F -q '<row gap="8" cross="center" padding="6" label="QuickShot hub commands">' NativeQuickShotUI/src/hub.native
 rg -F -q 'variant="secondary"' NativeQuickShotUI/src/hub.native
 if output="$(rg -n 'variant="primary"' NativeQuickShotUI/src/hub.native)"; then
@@ -667,7 +675,15 @@ rg -F -q "stopHoverMonitoring()" Sources/NativeHubView.swift
 rg -F -q 'icon="trash" label="Delete" on-press="delete"></button>' NativeQuickShotUI/src/hub.native
 rg -F -q 'icon="download" label="Save As" on-press="save_as"></button>' NativeQuickShotUI/src/hub.native
 rg -F -q 'icon="copy" label="Copy All" on-press="copy_all"></button>' NativeQuickShotUI/src/hub.native
-rg -F -q "installActionToolTips()" Sources/NativeHubView.swift
+# Системный help tag не срабатывает у неактивного accessory-приложения:
+# ярлык рисует QuickShot, окно исключено из захвата и прозрачно для мыши.
+rg -F -q "HubTooltipWindow" Sources/HubTooltip.swift
+rg -F -q "WindowCaptureProtection.excludeFromScreenCapture(panel)" Sources/HubTooltip.swift
+rg -F -q "panel.ignoresMouseEvents = true" Sources/HubTooltip.swift
+rg -F -q "handleTooltipInteraction" Sources/NativeHubView.swift
+# Панель капсулы рендерится в фактическую ширину ряда: фикс срезанного штриха.
+rg -F -q 'width="{bubbleWidth}"' NativeQuickShotUI/src/hub.native
+rg -F -q "setBubbleWidth(width)" Sources/NativeHubView.swift
 if output="$(rg -n '>Delete</button>|>Save As</button>|>Copy All</button>' NativeQuickShotUI/src/hub.native)"; then
   echo "$output"
   echo "Hub regression: action commands must stay icon-only; names live in tooltips." >&2

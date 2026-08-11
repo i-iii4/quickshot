@@ -10,6 +10,7 @@ pub const Model = struct {
     expanded: bool = false,
     core_revealed: bool = false,
     core_width: f32 = 0,
+    bubble_width: f32 = 0,
     actions_after: bool = false,
     compact: bool = false,
     copied: bool = false,
@@ -40,6 +41,13 @@ pub const Model = struct {
 
     pub fn coreWidthSet(model: *const Model) bool {
         return model.core_width > 0;
+    }
+
+    /// Ширина капсулы-подложки. Панель обязана совпадать с фактической шириной
+    /// раскрытого ряда: растр рендерится в кадр этой ширины, и всё, что шире,
+    /// срезается вместе с правым штрихом обводки.
+    pub fn bubbleWidth(model: *const Model) f32 {
+        return if (model.bubble_width > 0) model.bubble_width else 800;
     }
 
     pub fn chevronIcon(model: *const Model) []const u8 {
@@ -164,6 +172,7 @@ pub const Msg = union(enum) {
     set_expanded: bool,
     set_core_revealed: bool,
     set_core_width: f32,
+    set_bubble_width: f32,
     set_actions_after: bool,
     set_surface: Surface,
     set_compact: bool,
@@ -181,6 +190,7 @@ const command_vertical_prefix = "hub.vertical:";
 const command_expanded_prefix = "hub.expanded:";
 const command_core_revealed_prefix = "hub.core_revealed:";
 const command_core_width_prefix = "hub.core_width:";
+const command_bubble_width_prefix = "hub.bubble_width:";
 const command_actions_after_prefix = "hub.actions_after:";
 const command_surface_prefix = "surface:";
 const command_compact_prefix = "control.compact:";
@@ -258,6 +268,7 @@ fn update(model: *Model, msg: Msg) void {
         .set_expanded => |expanded| model.expanded = expanded,
         .set_core_revealed => |revealed| model.core_revealed = revealed,
         .set_core_width => |width| model.core_width = @max(0, width),
+        .set_bubble_width => |width| model.bubble_width = @max(0, width),
         .set_actions_after => |actions_after| model.actions_after = actions_after,
         .set_surface => |surface| model.surface = surface,
         .set_compact => |compact| model.compact = compact,
@@ -289,6 +300,10 @@ fn onCommand(name: []const u8) ?Msg {
     if (std.mem.startsWith(u8, name, command_core_width_prefix)) {
         const raw = name[command_core_width_prefix.len..];
         return .{ .set_core_width = std.fmt.parseFloat(f32, raw) catch return null };
+    }
+    if (std.mem.startsWith(u8, name, command_bubble_width_prefix)) {
+        const raw = name[command_bubble_width_prefix.len..];
+        return .{ .set_bubble_width = std.fmt.parseFloat(f32, raw) catch return null };
     }
     if (std.mem.startsWith(u8, name, command_actions_after_prefix)) {
         return .{ .set_actions_after = parseBool(name[command_actions_after_prefix.len..]) orelse return null };

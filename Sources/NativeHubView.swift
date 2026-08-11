@@ -211,7 +211,7 @@ struct NativeControlDebugButtonSnapshot {
 }
 #endif
 
-private final class NativeHubRenderView: NSView, NSViewToolTipOwner {
+private final class NativeHubRenderView: NSView {
     var onButtonPressed: ((NativeHubPressedButton) -> Void)?
     var onInteractionChanged: ((NativeInteractionChannel, NativeHubPressedButton) -> Void)?
     var onRendered: (() -> Void)?
@@ -249,6 +249,7 @@ private final class NativeHubRenderView: NSView, NSViewToolTipOwner {
     private var expanded = false
     private var coreRevealed = false
     private var coreWidth: CGFloat?
+    private var bubbleWidth: CGFloat?
     private var actionsAfter = false
     private var surface: NativeControlSurface = .hub
     private var compact = false
@@ -362,6 +363,14 @@ private final class NativeHubRenderView: NSView, NSViewToolTipOwner {
         sendCommand("hub.core_width:\(normalized ?? 0)")
     }
 
+    /// Панель капсулы обязана совпадать по ширине с кадром рендера: всё, что
+    /// шире кадра, срезается вместе с правым штрихом обводки.
+    func setBubbleWidth(_ width: CGFloat) {
+        guard width > 0, bubbleWidth != width else { return }
+        bubbleWidth = width
+        sendCommand("hub.bubble_width:\(width)")
+    }
+
     func setSurface(_ surface: NativeControlSurface) {
         guard self.surface != surface else { return }
         self.surface = surface
@@ -470,22 +479,22 @@ private final class NativeHubRenderView: NSView, NSViewToolTipOwner {
         button(at: point) != nil
     }
 
-    /// Команды-иконки не несут текста, поэтому имя команды показывает системный
-    /// тултип. Владелец — сама вью: `addToolTip` не удерживает owner, и
-    /// строка-владелец была бы освобождена до первого показа.
-    func installActionToolTips() {
-        removeAllToolTips()
-        for node in buttonNodes()
-        where node.action == .delete || node.action == .saveAs || node.action == .copyAll {
-            addToolTip(node.frame, owner: self, userData: nil)
-        }
-    }
-
-    func view(_ view: NSView,
-              stringForToolTip tag: NSView.ToolTipTag,
-              point: NSPoint,
-              userData data: UnsafeMutableRawPointer?) -> String {
-        button(at: point)?.title ?? ""
+    /// Сырой RGBA-пиксель отрендеренного растра. Не отладочный: тултип берёт
+    /// отсюда цвета House-поверхности, а не дублирует токены в Swift.
+    func surfacePixel(at point: NSPoint) -> UInt32 {
+        renderNow()
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let width = Int((bounds.width * scale).rounded())
+        let height = Int((bounds.height * scale).rounded())
+        guard width > 0, height > 0 else { return 0 }
+        let x = min(width - 1, max(0, Int((point.x * scale).rounded(.down))))
+        let y = min(height - 1, max(0, Int((point.y * scale).rounded(.down))))
+        let index = (y * width + x) * 4
+        guard index + 3 < rgbaBytes.count else { return 0 }
+        return (UInt32(rgbaBytes[index]) << 24) |
+            (UInt32(rgbaBytes[index + 1]) << 16) |
+            (UInt32(rgbaBytes[index + 2]) << 8) |
+            UInt32(rgbaBytes[index + 3])
     }
 
     func buttonNodes() -> [NativeHubButtonNode] {
@@ -737,19 +746,7 @@ private final class NativeHubRenderView: NSView, NSViewToolTipOwner {
     }
 
     func debugPixel(at point: NSPoint) -> UInt32 {
-        renderNow()
-        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
-        let width = Int((bounds.width * scale).rounded())
-        let height = Int((bounds.height * scale).rounded())
-        guard width > 0, height > 0 else { return 0 }
-        let x = min(width - 1, max(0, Int((point.x * scale).rounded(.down))))
-        let y = min(height - 1, max(0, Int((point.y * scale).rounded(.down))))
-        let index = (y * width + x) * 4
-        guard index + 3 < rgbaBytes.count else { return 0 }
-        return (UInt32(rgbaBytes[index]) << 24) |
-            (UInt32(rgbaBytes[index + 1]) << 16) |
-            (UInt32(rgbaBytes[index + 2]) << 8) |
-            UInt32(rgbaBytes[index + 3])
+        surfacePixel(at: point)
     }
 
     func debugInkPixelCount(in rect: NSRect) -> Int {
@@ -1084,6 +1081,10 @@ final class NativeHubShellView: NSView {
     private var targetProgress: CGFloat = 0
     private var pointerHoverActive = false
     private var trayHoverHeld = false
+    private let tooltip = HubTooltipWindow()
+    private var tooltipWorkItem: DispatchWorkItem?
+    private var tooltipAction: NativeHubPressedButton = .none
+    var tooltipBelow = false
     private var chevronProgress: CGFloat = 0
     private var chevronTargetProgress: CGFloat = 0
     private var hasConfiguredChevron = false
@@ -1185,6 +1186,9 @@ final class NativeHubShellView: NSView {
         coreBackgroundView.onInteractionChanged = { [weak self] channel, action in
             self?.nativeView.mirrorInteraction(channel, action: action)
         }
+        nativeView.onInteractionChanged = { [weak self] channel, action in
+            self?.handleTooltipInteraction(channel, action)
+        }
         coreBackgroundView.onRendered = { [weak self] in
             self?.refreshCoreChromeSource()
         }
@@ -1224,6 +1228,65 @@ final class NativeHubShellView: NSView {
 
     func containsVisiblePointInSuperview(_ point: NSPoint) -> Bool {
         visibleFrameInSuperview.contains(point)
+    }
+
+    // MARK: тултип команды-иконки
+
+    /// Показ откладывается: проезд курсора через ряд не должен мигать ярлыками.
+    /// Смена цели до срабатывания перезапускает таймер; любой не-hover сигнал
+    /// и уход с командных кнопок прячут ярлык немедленно.
+    private func handleTooltipInteraction(_ channel: NativeInteractionChannel,
+                                          _ action: NativeHubPressedButton) {
+        guard channel == .hover else {
+            cancelTooltip()
+            return
+        }
+        let isIconCommand = action == .delete || action == .saveAs || action == .copyAll
+        guard isIconCommand else {
+            cancelTooltip()
+            return
+        }
+        guard action != tooltipAction else { return }
+        cancelTooltip()
+        tooltipAction = action
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.tooltipWorkItem = nil
+            self.presentTooltip(for: action)
+        }
+        tooltipWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + HubTooltipWindow.showDelay,
+                                      execute: work)
+    }
+
+    private func cancelTooltip() {
+        tooltipAction = .none
+        tooltipWorkItem?.cancel()
+        tooltipWorkItem = nil
+        tooltip.hide()
+    }
+
+    private func presentTooltip(for action: NativeHubPressedButton) {
+        guard let window,
+              let node = nativeView.buttonNodes().first(where: { $0.action == action }) else { return }
+        let inWindow = nativeView.convert(node.frame, to: nil)
+        let anchor = window.convertToScreen(inWindow)
+        let bubbleCenter = NSPoint(x: bubbleView.bounds.midX, y: bubbleView.bounds.midY)
+        let bubbleEdge = NSPoint(x: 0.75, y: bubbleView.bounds.midY)
+        tooltip.show(text: node.title,
+                     anchor: anchor,
+                     below: tooltipBelow,
+                     fill: nativeColor(bubbleView.surfacePixel(at: bubbleCenter)),
+                     stroke: nativeColor(bubbleView.surfacePixel(at: bubbleEdge)),
+                     radius: NativeHubMetrics.radius,
+                     screen: window.screen ?? NSScreen.main)
+    }
+
+    private func nativeColor(_ pixel: UInt32) -> NSColor {
+        NSColor(srgbRed: CGFloat((pixel >> 24) & 0xff) / 255,
+                green: CGFloat((pixel >> 16) & 0xff) / 255,
+                blue: CGFloat((pixel >> 8) & 0xff) / 255,
+                alpha: 1)
     }
 
     private var actionWidth: CGFloat {
@@ -1407,6 +1470,7 @@ final class NativeHubShellView: NSView {
 
     private func setExpanded(_ expanded: Bool) {
         if !expanded && (nativeView.isPressing || coreBackgroundView.isPressing) { return }
+        if !expanded { cancelTooltip() }
         let target: CGFloat = expanded ? 1 : 0
         guard target != targetProgress else { return }
         targetProgress = target
@@ -1561,6 +1625,7 @@ final class NativeHubShellView: NSView {
         bubbleView.frame = bounds
         coreChromeView.frame = bounds
         bubbleView.setSurface(.hubBubble)
+        bubbleView.setBubbleWidth(width)
         bubbleView.renderNow()
 
         let stableCompactButtonMaxX = compactCoreNativeFrame.minX + stableCompactButtonWidth
@@ -1573,7 +1638,6 @@ final class NativeHubShellView: NSView {
                             coreRevealed: true,
                             actionsAfter: expandsRight)
         nativeView.renderNow()
-        nativeView.installActionToolTips()
         let targetCoreFrame = NSRect(x: nativeX + revealedCoreNativeFrame.minX,
                                      y: revealedCoreNativeFrame.minY,
                                      width: revealedCoreNativeFrame.width,
@@ -1841,6 +1905,7 @@ final class NativeHubShellView: NSView {
         if pointerHoverActive { onHoverChanged?(false) }
         pointerHoverActive = false
         trayHoverHeld = false
+        cancelTooltip()
         nativeView.clearPointerHover()
         coreBackgroundView.clearPointerHover()
         geometryAnimator.synchronize(0)
@@ -2147,6 +2212,24 @@ final class NativeHubShellView: NSView {
 
     func debugHoverButton(title: String) {
         nativeDebugHover(title: title, nativeView: nativeView)
+    }
+
+    /// Сырой RGBA растра капсулы, без композита кнопок поверх: проба обводки
+    /// должна видеть цвет штриха, а не только итоговую прозрачность.
+    func debugBubblePixel(at point: NSPoint) -> UInt32 {
+        bubbleView.debugPixel(at: convert(point, to: bubbleView))
+    }
+
+    func debugFlushTooltip() {
+        guard tooltipWorkItem != nil, tooltipAction != .none else { return }
+        tooltipWorkItem?.cancel()
+        tooltipWorkItem = nil
+        presentTooltip(for: tooltipAction)
+    }
+
+    func debugTooltipState() -> (text: String, sharingNone: Bool, ignoresMouse: Bool)? {
+        guard let text = tooltip.debugVisibleText else { return nil }
+        return (text, tooltip.debugSharingIsNone, tooltip.debugIgnoresMouse)
     }
 
     func debugPixel(at point: NSPoint) -> UInt32 {

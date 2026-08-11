@@ -90,6 +90,7 @@ final class HubWindow {
                   collapsed: Bool,
                   animateChevron: Bool = true,
                   animateCount: Bool = false) {
+        shell.tooltipBelow = TrayPosition.current == .top
         shell.set(count: count,
                   collapsed: collapsed,
                   vertical: TrayPosition.current.isVertical,
@@ -125,6 +126,11 @@ final class HubWindow {
     func debugControlButtons() -> [NativeControlDebugButtonSnapshot] { shell.debugControlButtons() }
     func debugHoverButton(title: String) { shell.debugHoverButton(title: title) }
     func debugPixel(at point: NSPoint) -> UInt32 { shell.debugPixel(at: point) }
+    func debugBubblePixel(at point: NSPoint) -> UInt32 { shell.debugBubblePixel(at: point) }
+    func debugFlushTooltip() { shell.debugFlushTooltip() }
+    func debugTooltipState() -> (text: String, sharingNone: Bool, ignoresMouse: Bool)? {
+        shell.debugTooltipState()
+    }
     func debugTransitionDuration(toExpanded: Bool) -> CFTimeInterval {
         shell.debugTransitionDuration(toExpanded: toExpanded)
     }
