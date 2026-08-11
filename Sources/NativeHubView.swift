@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import OSLog
 import QuartzCore
 
 private enum NativeHubMetrics {
@@ -663,6 +664,13 @@ private final class NativeHubRenderView: NSView {
         invalidateRender()
     }
 
+    /// Внешняя подача позиции указателя (мониторы трея). Тот же путь, что и
+    /// у событий tracking area, поэтому повторные вызовы с той же целью дёшевы.
+    func syncPointer(at point: NSPoint) {
+        guard acceptsPointerInteraction else { return }
+        forwardPointerMove(point)
+    }
+
     private func forwardPointerMove(_ point: NSPoint) {
         guard let target = button(at: point) else {
             scheduleHoverClear()
@@ -1079,6 +1087,8 @@ final class NativeHubShellView: NSView {
     private var expandsRight = false
     private var progress: CGFloat = 0
     private var targetProgress: CGFloat = 0
+    nonisolated static let tooltipLog = Logger(subsystem: "com.iiii.quickshot",
+                                               category: "tooltip")
     private var pointerHoverActive = false
     private var trayHoverHeld = false
     private let tooltip = HubTooltipWindow()
@@ -1237,6 +1247,7 @@ final class NativeHubShellView: NSView {
     /// и уход с командных кнопок прячут ярлык немедленно.
     private func handleTooltipInteraction(_ channel: NativeInteractionChannel,
                                           _ action: NativeHubPressedButton) {
+        NativeHubShellView.tooltipLog.info("interaction \(channel.rawValue, privacy: .public) action=\(action.rawValue)")
         guard channel == .hover else {
             cancelTooltip()
             return
@@ -1268,7 +1279,10 @@ final class NativeHubShellView: NSView {
 
     private func presentTooltip(for action: NativeHubPressedButton) {
         guard let window,
-              let node = nativeView.buttonNodes().first(where: { $0.action == action }) else { return }
+              let node = nativeView.buttonNodes().first(where: { $0.action == action }) else {
+            NativeHubShellView.tooltipLog.error("present failed: window=\(self.window != nil) action=\(action.rawValue)")
+            return
+        }
         let inWindow = nativeView.convert(node.frame, to: nil)
         let anchor = window.convertToScreen(inWindow)
         let bubbleCenter = NSPoint(x: bubbleView.bounds.midX, y: bubbleView.bounds.midY)
@@ -1856,11 +1870,22 @@ final class NativeHubShellView: NSView {
     /// живут всегда, а собственные tracking areas хаба глохнут, как только
     /// окно-хост становится прозрачным для мыши.
     func updatePointer(at pointInSuperview: NSPoint) {
+        forwardPointerToRevealedRow(pointInSuperview)
         if !pointerHoverActive, containsVisiblePointInSuperview(pointInSuperview) {
             setPointerHover(true)
             return
         }
         updateHover(at: pointInSuperview)
+    }
+
+    /// Подсветка и тултип раскрытого ряда не могут полагаться на tracking
+    /// areas: mouseMoved у окна, которое не key, доставляется нерегулярно.
+    /// Мониторы трея видят каждое движение — с них и кормим кнопочную
+    /// поверхность.
+    private func forwardPointerToRevealedRow(_ pointInSuperview: NSPoint) {
+        guard progress > 0.5, nativeView.alphaValue > 0.01 else { return }
+        let local = convert(convert(pointInSuperview, from: superview), to: nativeView)
+        nativeView.syncPointer(at: local)
     }
 
     private func updateHover(at pointInSuperview: NSPoint) {

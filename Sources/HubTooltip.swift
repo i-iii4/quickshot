@@ -1,4 +1,5 @@
 import AppKit
+import OSLog
 
 /// Подпись команды-иконки. Системный help tag здесь не работает: его
 /// tracking-области живут только в активном приложении, а QuickShot —
@@ -14,6 +15,9 @@ final class HubTooltipWindow {
     private static let paddingX: CGFloat = 8
     private static let paddingY: CGFloat = 5
 
+    nonisolated private static let log = Logger(subsystem: "com.iiii.quickshot",
+                                                category: "tooltip")
+
     private let panel: NSPanel
     private let bubble = NSView()
     private let label = NSTextField(labelWithString: "")
@@ -28,6 +32,9 @@ final class HubTooltipWindow {
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.ignoresMouseEvents = true
+        // Панель прячется при деактивации приложения по умолчанию, а QuickShot
+        // неактивен почти всегда — как и у панели трея, выключаем явно.
+        panel.hidesOnDeactivate = false
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.appearance = NSAppearance(named: .darkAqua)
@@ -75,6 +82,7 @@ final class HubTooltipWindow {
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
         let firstShow = !panel.isVisible
         panel.orderFrontRegardless()
+        Self.log.info("show '\(text, privacy: .public)' at \(String(describing: NSRect(origin: origin, size: size)), privacy: .public) visible=\(self.panel.isVisible)")
         guard firstShow else { return }
         panel.alphaValue = 0
         NSAnimationContext.runAnimationGroup { context in
