@@ -96,7 +96,10 @@ fullscreen behavior remain explicit runtime release checks.
 10. The hub is a compact Vercel/Native-inspired icon+label command surface
    aligned to the House small-control register: 28pt height, 8pt radius, 14pt
    labels, 16pt icons, and 8pt gaps between independent command buttons.
-11. Hover reveal exposes three visible actions: `Delete`, `Save As`, and `Copy All`.
+11. Hover reveal exposes three visible actions: `Delete`, `Save As`, and
+   `Copy All`. They render as icon-only House commands; the command name
+   appears as a system tooltip on hover. The core `Hide`/`Show` button keeps
+   its icon+label form.
 12. Per-thumbnail controls use independent House command buttons in a
    token-spaced row, not exclusive-choice `button-group` chrome or
    native Liquid Glass buttons.

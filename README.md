@@ -64,7 +64,9 @@ visually stable instead of blinking out and back in at capture time.
 - The hub position is based on the full screen frame, not the Dock/menu-bar safe
   area.
 - Hover reveal exposes three independent House command buttons in a token-spaced row: `Delete`,
-  `Save As`, and `Copy All`.
+  `Save As`, and `Copy All`. They are icon-only; the command name appears as a
+  system tooltip on hover. The core `Hide`/`Show` button keeps its icon+label
+  form.
 - Hover fades in one rounded House Dark bubble around the complete command row;
   it is absent at rest. Its `14pt` radius and `6pt` inset are concentric with
   the buttons' `8pt` radius. Neutral commands use the dark `secondary` variant

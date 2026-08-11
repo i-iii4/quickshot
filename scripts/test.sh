@@ -663,6 +663,16 @@ rg -F -q "setSurface(.settings)" Sources/NativeHubView.swift
 rg -F -q "targetProgress" Sources/NativeHubView.swift
 rg -F -q "addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged])" Sources/NativeHubView.swift
 rg -F -q "stopHoverMonitoring()" Sources/NativeHubView.swift
+# Команды хаба — иконки без текста; имя показывает системный тултип по ховеру.
+rg -F -q 'icon="trash" label="Delete" on-press="delete"></button>' NativeQuickShotUI/src/hub.native
+rg -F -q 'icon="download" label="Save As" on-press="save_as"></button>' NativeQuickShotUI/src/hub.native
+rg -F -q 'icon="copy" label="Copy All" on-press="copy_all"></button>' NativeQuickShotUI/src/hub.native
+rg -F -q "installActionToolTips()" Sources/NativeHubView.swift
+if output="$(rg -n '>Delete</button>|>Save As</button>|>Copy All</button>' NativeQuickShotUI/src/hub.native)"; then
+  echo "$output"
+  echo "Hub regression: action commands must stay icon-only; names live in tooltips." >&2
+  exit 1
+fi
 test -f PRODUCT_CONTRACT.md
 test -x scripts/verify-capture-observed.sh
 test -x scripts/probe-screen-capture-stack.sh

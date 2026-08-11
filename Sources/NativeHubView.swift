@@ -211,7 +211,7 @@ struct NativeControlDebugButtonSnapshot {
 }
 #endif
 
-private final class NativeHubRenderView: NSView {
+private final class NativeHubRenderView: NSView, NSViewToolTipOwner {
     var onButtonPressed: ((NativeHubPressedButton) -> Void)?
     var onInteractionChanged: ((NativeInteractionChannel, NativeHubPressedButton) -> Void)?
     var onRendered: (() -> Void)?
@@ -468,6 +468,24 @@ private final class NativeHubRenderView: NSView {
 
     func hasInteractiveButton(at point: NSPoint) -> Bool {
         button(at: point) != nil
+    }
+
+    /// Команды-иконки не несут текста, поэтому имя команды показывает системный
+    /// тултип. Владелец — сама вью: `addToolTip` не удерживает owner, и
+    /// строка-владелец была бы освобождена до первого показа.
+    func installActionToolTips() {
+        removeAllToolTips()
+        for node in buttonNodes()
+        where node.action == .delete || node.action == .saveAs || node.action == .copyAll {
+            addToolTip(node.frame, owner: self, userData: nil)
+        }
+    }
+
+    func view(_ view: NSView,
+              stringForToolTip tag: NSView.ToolTipTag,
+              point: NSPoint,
+              userData data: UnsafeMutableRawPointer?) -> String {
+        button(at: point)?.title ?? ""
     }
 
     func buttonNodes() -> [NativeHubButtonNode] {
@@ -1555,6 +1573,7 @@ final class NativeHubShellView: NSView {
                             coreRevealed: true,
                             actionsAfter: expandsRight)
         nativeView.renderNow()
+        nativeView.installActionToolTips()
         let targetCoreFrame = NSRect(x: nativeX + revealedCoreNativeFrame.minX,
                                      y: revealedCoreNativeFrame.minY,
                                      width: revealedCoreNativeFrame.width,

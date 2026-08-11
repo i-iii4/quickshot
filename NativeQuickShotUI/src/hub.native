@@ -84,18 +84,18 @@
                     </else>
                     <if test="{expanded}">
                       <row gap="8" cross="center" label="Screenshot actions">
-                        <button size="sm" variant="destructive" icon="trash" on-press="delete">Delete</button>
-                        <button size="sm" variant="secondary" icon="download" on-press="save_as">Save As</button>
-                        <button size="sm" variant="secondary" icon="copy" on-press="copy_all">Copy All</button>
+                        <button size="sm" variant="destructive" icon="trash" label="Delete" on-press="delete"></button>
+                        <button size="sm" variant="secondary" icon="download" label="Save As" on-press="save_as"></button>
+                        <button size="sm" variant="secondary" icon="copy" label="Copy All" on-press="copy_all"></button>
                       </row>
                     </if>
                   </if>
                   <else>
                     <if test="{expanded}">
                       <row gap="8" cross="center" label="Screenshot actions">
-                        <button size="sm" variant="destructive" icon="trash" on-press="delete">Delete</button>
-                        <button size="sm" variant="secondary" icon="download" on-press="save_as">Save As</button>
-                        <button size="sm" variant="secondary" icon="copy" on-press="copy_all">Copy All</button>
+                        <button size="sm" variant="destructive" icon="trash" label="Delete" on-press="delete"></button>
+                        <button size="sm" variant="secondary" icon="download" label="Save As" on-press="save_as"></button>
+                        <button size="sm" variant="secondary" icon="copy" label="Copy All" on-press="copy_all"></button>
                       </row>
                     </if>
                     <if test="{coreWidthSet}">
