@@ -52,7 +52,12 @@ visually stable instead of blinking out and back in at capture time.
   changing its click-owned collapsed state. The hub and every visible card
   form one hover session, so moving the pointer from the command row onto a
   screenshot keeps both the row and the cards expanded.
-- Leaving the complete hover region starts a `180ms` grace period. Returning
+- The hover region is one continuous island: the visible hub row, every
+  visible card, and the gaps between them (up to `20pt`) are bridged, with an
+  `8pt` shield around the geometry and extra exit hysteresis. Moving slowly
+  across a gap never drops the session, and pointer routing for the
+  full-screen host follows the same island, so tracking never dies mid-path.
+- Leaving the complete hover island starts a `180ms` grace period. Returning
   to the hub or any card cancels the pending collapse.
 - A new screenshot does not permanently expand a collapsed tray. It fades into
   the nearest slot, remains fully visible for `1.2s`, and fades out again. Hover
