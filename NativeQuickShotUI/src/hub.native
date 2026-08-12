@@ -75,7 +75,7 @@
                     </else>
                     <if test="{expanded}">
                       <row gap="8" cross="center" label="Screenshot actions">
-                        <button size="sm" variant="destructive" icon="trash" label="Delete" on-press="delete"></button>
+                        <button size="sm" variant="destructive" icon="x" label="Close" on-press="delete"></button>
                         <button size="sm" variant="secondary" icon="download" label="Save As" on-press="save_as"></button>
                         <button size="sm" variant="secondary" icon="copy" label="Copy All" on-press="copy_all"></button>
                       </row>
@@ -84,7 +84,7 @@
                   <else>
                     <if test="{expanded}">
                       <row gap="8" cross="center" label="Screenshot actions">
-                        <button size="sm" variant="destructive" icon="trash" label="Delete" on-press="delete"></button>
+                        <button size="sm" variant="destructive" icon="x" label="Close" on-press="delete"></button>
                         <button size="sm" variant="secondary" icon="download" label="Save As" on-press="save_as"></button>
                         <button size="sm" variant="secondary" icon="copy" label="Copy All" on-press="copy_all"></button>
                       </row>

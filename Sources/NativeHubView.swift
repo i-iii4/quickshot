@@ -726,7 +726,7 @@ private final class NativeHubRenderView: NSView {
         default: break
         }
         switch title {
-        case "Delete": return .delete
+        case "Close": return .delete
         case "Save As": return .saveAs
         case "Copy All": return .copyAll
         default:
@@ -1328,7 +1328,7 @@ final class NativeHubShellView: NSView {
     }
 
     private var actionWidth: CGFloat {
-        let widths = ["Delete", "Save As", "Copy All"].map { actionWidths[$0] ?? NativeHubMetrics.height }
+        let widths = ["Close", "Save As", "Copy All"].map { actionWidths[$0] ?? NativeHubMetrics.height }
         return widths.reduce(0, +) + NativeHubMetrics.groupGap * CGFloat(max(0, widths.count - 1))
     }
 
@@ -2013,7 +2013,7 @@ final class NativeHubShellView: NSView {
                             actionsAfter: expandsRight)
         nativeView.renderNow()
         let hideCoreNode = nativeView.buttonNodes().first { node in
-            !(node.title == "Delete" || node.title == "Save As" || node.title == "Copy All")
+            !(node.title == "Close" || node.title == "Save As" || node.title == "Copy All")
         }
         nativeView.setState(count: 100,
                             collapsed: true,
@@ -2023,7 +2023,7 @@ final class NativeHubShellView: NSView {
                             actionsAfter: expandsRight)
         nativeView.renderNow()
         let showCoreNode = nativeView.buttonNodes().first { node in
-            !(node.title == "Delete" || node.title == "Save As" || node.title == "Copy All")
+            !(node.title == "Close" || node.title == "Save As" || node.title == "Copy All")
         }
         let fixedCoreWidth = ceil(max(hideCoreNode?.frame.width ?? 0, showCoreNode?.frame.width ?? 0))
 
@@ -2036,7 +2036,7 @@ final class NativeHubShellView: NSView {
                             actionsAfter: expandsRight)
         nativeView.renderNow()
         let intrinsicCurrentCoreNode = nativeView.buttonNodes().first { node in
-            !(node.title == "Delete" || node.title == "Save As" || node.title == "Copy All")
+            !(node.title == "Close" || node.title == "Save As" || node.title == "Copy All")
         }
         revealedIntrinsicCoreWidth = intrinsicCurrentCoreNode?.frame.width ?? NativeHubMetrics.height
 
@@ -2063,10 +2063,10 @@ final class NativeHubShellView: NSView {
                             actionsAfter: expandsRight)
         nativeView.renderNow()
         let revealedNodes = nativeView.buttonNodes()
-        let actionNodes = revealedNodes.filter { $0.title == "Delete" || $0.title == "Save As" || $0.title == "Copy All" }
+        let actionNodes = revealedNodes.filter { $0.title == "Close" || $0.title == "Save As" || $0.title == "Copy All" }
         revealedActionNativeFrames = actionNodes.map(\.frame)
         let revealedCoreNode = revealedNodes.first { node in
-            !(node.title == "Delete" || node.title == "Save As" || node.title == "Copy All")
+            !(node.title == "Close" || node.title == "Save As" || node.title == "Copy All")
         }
         if let revealedCoreNode { revealedCoreNativeFrame = revealedCoreNode.frame }
         for node in actionNodes {
@@ -2121,7 +2121,7 @@ final class NativeHubShellView: NSView {
         let buttons = nativeView.buttonNodes()
         let shellBounds = visibleBounds
         let actionRects = buttons.compactMap { node -> NSRect? in
-            guard node.title == "Delete" || node.title == "Save As" || node.title == "Copy All" else { return nil }
+            guard node.title == "Close" || node.title == "Save As" || node.title == "Copy All" else { return nil }
             return nativeView.convert(node.frame, to: self)
         }
         let actionClipFrame = union(actionRects) ?? currentActionClipFrame()
@@ -2176,7 +2176,7 @@ final class NativeHubShellView: NSView {
 
         let actionSnapshots = buttons.compactMap { node -> HubDebugPillSnapshot? in
             let title: String
-            if node.title == "Delete" || node.title == "Save As" || node.title == "Copy All" {
+            if node.title == "Close" || node.title == "Save As" || node.title == "Copy All" {
                 title = node.title
             } else {
                 return nil

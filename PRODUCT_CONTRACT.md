@@ -100,8 +100,9 @@ fullscreen behavior remain explicit runtime release checks.
 11. The hub is a compact Vercel/Native-inspired icon+label command surface
    aligned to the House small-control register: 28pt height, 8pt radius, 14pt
    labels, 16pt icons, and 8pt gaps between independent command buttons.
-12. Hover reveal exposes three visible actions: `Delete`, `Save As`, and
-   `Copy All`. They render as icon-only House commands; the command name
+12. Hover reveal exposes three visible actions: `Close`, `Save As`, and
+   `Copy All`. `Close` uses the `x` glyph and clears the tray; it is a
+   dismissal, not a destructive file operation. They render as icon-only House commands; the command name
    appears as a tooltip. QuickShot draws the tooltip itself (system help
    tags never fire for an inactive accessory app); its window is excluded
    from screen capture and ignores the pointer. The core `Hide`/`Show`
@@ -119,7 +120,7 @@ fullscreen behavior remain explicit runtime release checks.
    native Liquid Glass buttons.
 16. Empty transparent tray space does not steal pointer events from controls.
 17. The tray must not blink during capture completion.
-18. The left-to-right action order is always `Delete`, `Save As`, `Copy All`,
+18. The left-to-right action order is always `Close`, `Save As`, `Copy All`,
     regardless of the screen edge.
 19. Hover reveal uses the House fast-motion token (`120ms`, or `0ms` under
     Reduce Motion), scales interrupted transitions by the remaining distance,

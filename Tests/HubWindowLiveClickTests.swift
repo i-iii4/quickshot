@@ -78,7 +78,7 @@ private final class HubWindowLiveClickTests: NSObject, NSApplicationDelegate {
 
     private func run() {
         for position in [TrayPosition.right, .left, .bottom, .top] {
-            for title in ["Delete", "Save As", "Copy All"] {
+            for title in ["Close", "Save As", "Copy All"] {
                 runLiveClick(position: position, title: title)
             }
         }
@@ -152,7 +152,7 @@ private final class HubWindowLiveClickTests: NSObject, NSApplicationDelegate {
         postMouse(.leftMouseUp, at: actionPoint, panel: panel)
         spin(0.12)
 
-        let counts = ["Delete": deleteCount, "Save As": saveCount, "Copy All": copyCount]
+        let counts = ["Close": deleteCount, "Save As": saveCount, "Copy All": copyCount]
         if counts[title] != 1 {
             failures.append("\(position) \(title): expected one live click callback, got \(counts); \(hitDescription(atWindowPoint: actionPoint, root: root, hub: hub))")
         }

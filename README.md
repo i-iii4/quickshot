@@ -68,7 +68,7 @@ visually stable instead of blinking out and back in at capture time.
   the stack.
 - The hub position is based on the full screen frame, not the Dock/menu-bar safe
   area.
-- Hover reveal exposes three independent House command buttons in a token-spaced row: `Delete`,
+- Hover reveal exposes three independent House command buttons in a token-spaced row: `Close`,
   `Save As`, and `Copy All`. They are icon-only; the command name appears as a
   tooltip — `500ms` cold, instant warm retargeting between neighbouring
   commands. QuickShot draws the tooltip itself — system help tags never fire

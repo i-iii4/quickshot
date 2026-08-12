@@ -35,11 +35,11 @@ struct TrayHoverRegionTests {
         }
     }
 
-    /// Зазор между командами Hide и Delete равен 8pt и лежит внутри хаба:
+    /// Зазор между командами Hide и Close равен 8pt и лежит внутри хаба:
     /// маршрутизация указателя не должна о нём знать вовсе.
     private static func hubInteriorIsSolid() {
-        let betweenHideAndDelete = NSPoint(x: 174, y: 120)
-        expect(trayHoverRegionContains(betweenHideAndDelete,
+        let betweenHideAndClose = NSPoint(x: 174, y: 120)
+        expect(trayHoverRegionContains(betweenHideAndClose,
                                        rects: trayRects,
                                        shield: 0,
                                        bridge: 0),

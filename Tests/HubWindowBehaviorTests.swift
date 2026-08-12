@@ -255,7 +255,7 @@ struct HubWindowBehaviorTests {
 
     private static func testEveryActionPillIsClickable() throws {
         for position in [TrayPosition.right, .left] {
-            for title in ["Delete", "Save As", "Copy All"] {
+            for title in ["Close", "Save As", "Copy All"] {
                 let harness = Harness(position: position)
                 harness.hub.debugSetExpansionProgress(1)
                 let point = try harness.actionPoint(title: title)
@@ -265,7 +265,7 @@ struct HubWindowBehaviorTests {
                 try require(harness.toggleCount == 0,
                             "\(position) \(title): action click must not toggle tray")
                 switch title {
-                case "Delete":
+                case "Close":
                     try require(harness.deleteCount == 1, "\(position): Delete did not fire")
                     try require(harness.saveAsCount == 0 && harness.copyAllCount == 0,
                                 "\(position): Delete fired another action")
@@ -587,7 +587,7 @@ struct HubWindowBehaviorTests {
         let harness = Harness(position: .right)
         harness.hub.debugSetExpansionProgress(1)
         let titles = harness.hub.debugSnapshot().actionPills.map(\.title)
-        try require(Set(titles) == Set(["Delete", "Save As", "Copy All"]), "Unexpected action labels: \(titles)")
+        try require(Set(titles) == Set(["Close", "Save As", "Copy All"]), "Unexpected action labels: \(titles)")
         try require(titles.allSatisfy { $0.count <= 8 }, "Action labels must stay compact but explicit: \(titles)")
     }
 
@@ -627,14 +627,14 @@ struct HubWindowBehaviorTests {
         let harness = Harness(position: .right)
         harness.hub.debugSetExpansionProgress(1)
         harness.hub.debugRequestExpanded(true)
-        harness.hub.debugHoverButton(title: "Delete")
+        harness.hub.debugHoverButton(title: "Close")
         try require(harness.hub.debugTooltipState() == nil,
                     "Tooltip must wait out its delay, not flash instantly")
         harness.hub.debugFlushTooltip()
         guard let shown = harness.hub.debugTooltipState() else {
-            throw Failure("Tooltip did not appear for Delete after the delay")
+            throw Failure("Tooltip did not appear for Close after the delay")
         }
-        try require(shown.text == "Delete", "Tooltip text mismatch: \(shown.text)")
+        try require(shown.text == "Close", "Tooltip text mismatch: \(shown.text)")
         try require(shown.sharingNone, "Tooltip window must be excluded from screen capture")
         try require(shown.ignoresMouse, "Tooltip window must not intercept the pointer")
 
@@ -655,7 +655,7 @@ struct HubWindowBehaviorTests {
         let harness = Harness(position: .right)
         harness.hub.debugSetExpansionProgress(1)
         harness.hub.debugRequestExpanded(true)
-        harness.hub.debugHoverButton(title: "Delete")
+        harness.hub.debugHoverButton(title: "Close")
         harness.hub.debugFlushTooltip()
         try require(harness.hub.debugTooltipState() != nil, "Tooltip did not appear")
         harness.hub.debugTransitionCount(to: 42)
@@ -714,8 +714,8 @@ struct HubWindowBehaviorTests {
             harness.hub.debugSetExpansionProgress(1)
             let snapshot = harness.hub.debugSnapshot()
             let leftToRight = snapshot.actionPills.sorted { $0.frame.minX < $1.frame.minX }.map(\.title)
-            try require(leftToRight == ["Delete", "Save As", "Copy All"],
-                        "\(position): actions must stay Delete, Save As, Copy All from left to right; got \(leftToRight)")
+            try require(leftToRight == ["Close", "Save As", "Copy All"],
+                        "\(position): actions must stay Close, Save As, Copy All from left to right; got \(leftToRight)")
         }
     }
 
@@ -868,10 +868,10 @@ struct HubWindowBehaviorTests {
     private static func testNativeRuntimeOwnsHover() throws {
         let harness = Harness(position: .right)
         harness.hub.debugSetExpansionProgress(1)
-        harness.hub.debugHoverButton(title: "Delete")
+        harness.hub.debugHoverButton(title: "Close")
         let buttons = harness.hub.debugControlButtons()
         let hovered = buttons.filter(\.isHovered).map(\.title)
-        try require(hovered == ["Delete"], "Native SDK hover state should belong only to Delete, got \(hovered)")
+        try require(hovered == ["Close"], "Native SDK hover state should belong only to Close, got \(hovered)")
     }
 
     private static func testCompactShellUsesOneStroke() throws {
@@ -940,7 +940,7 @@ struct HubWindowBehaviorTests {
         for position in [TrayPosition.right, .left, .bottom, .top] {
             var partialTitles = Set<String>()
             for progress in progressFrames {
-                for title in ["Delete", "Save As", "Copy All"] {
+                for title in ["Close", "Save As", "Copy All"] {
                     let harness = Harness(position: position)
                     harness.hub.debugSetExpansionProgress(progress)
                     let snapshot = harness.hub.debugSnapshot()
@@ -955,7 +955,7 @@ struct HubWindowBehaviorTests {
                 }
             }
 
-            let nearestTitle = position == .left ? "Delete" : "Copy All"
+            let nearestTitle = position == .left ? "Close" : "Copy All"
             try require(partialTitles.contains(nearestTitle),
                         "\(position): the nearest action \(nearestTitle) must become clickable before the fully expanded frame, got \(partialTitles)")
         }
@@ -963,7 +963,7 @@ struct HubWindowBehaviorTests {
 
     private static func testActionPressSurvivesShellMouseExit() throws {
         for position in [TrayPosition.right, .left, .bottom, .top] {
-            for title in ["Delete", "Save As", "Copy All"] {
+            for title in ["Close", "Save As", "Copy All"] {
                 let harness = Harness(position: position)
                 harness.hub.debugSetExpansionProgress(1)
                 let point = try harness.actionPoint(title: title)
@@ -999,7 +999,7 @@ struct HubWindowBehaviorTests {
     private static func requireOnlyAction(_ title: String, in harness: Harness, context: String) throws {
         try require(harness.toggleCount == 0, "\(context): action click must not toggle tray")
         switch title {
-        case "Delete":
+        case "Close":
             try require(harness.deleteCount == 1, "\(context): Delete did not fire once")
             try require(harness.saveAsCount == 0 && harness.copyAllCount == 0,
                         "\(context): Delete fired another action")
@@ -1112,7 +1112,7 @@ struct HubWindowBehaviorTests {
         }
 
         func firstActionPoint() throws -> NSPoint {
-            try actionPoint(title: "Delete")
+            try actionPoint(title: "Close")
         }
 
         func renderedCoreFrameInRoot() -> NSRect {
