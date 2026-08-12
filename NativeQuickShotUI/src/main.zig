@@ -79,10 +79,6 @@ pub const Model = struct {
         return model.surface == .settings;
     }
 
-    pub fn statusMenuSurface(model: *const Model) bool {
-        return model.surface == .status_menu;
-    }
-
     pub fn copyIcon(model: *const Model) []const u8 {
         return if (model.copied) "check" else "copy";
     }
@@ -109,7 +105,6 @@ pub const Surface = enum {
     thumbnail,
     pinned,
     settings,
-    status_menu,
 };
 
 pub const TrayPosition = enum {
@@ -131,10 +126,6 @@ pub const Action = enum {
     position_right,
     position_bottom,
     position_top,
-    menu_capture,
-    menu_settings,
-    menu_access,
-    menu_quit,
 };
 
 pub const Metric = enum(c_int) {
@@ -162,10 +153,6 @@ pub const Msg = union(enum) {
     position_right,
     position_bottom,
     position_top,
-    menu_capture,
-    menu_settings,
-    menu_access,
-    menu_quit,
     set_count: u32,
     set_collapsed: bool,
     set_vertical: bool,
@@ -258,10 +245,6 @@ fn update(model: *Model, msg: Msg) void {
             model.position = .top;
             model.last_action = .position_top;
         },
-        .menu_capture => model.last_action = .menu_capture,
-        .menu_settings => model.last_action = .menu_settings,
-        .menu_access => model.last_action = .menu_access,
-        .menu_quit => model.last_action = .menu_quit,
         .set_count => |count| model.count = count,
         .set_collapsed => |collapsed| model.collapsed = collapsed,
         .set_vertical => |vertical| model.vertical = vertical,
@@ -317,7 +300,6 @@ fn onCommand(name: []const u8) ?Msg {
         if (std.mem.eql(u8, raw, "thumbnail")) return .{ .set_surface = .thumbnail };
         if (std.mem.eql(u8, raw, "pinned")) return .{ .set_surface = .pinned };
         if (std.mem.eql(u8, raw, "settings")) return .{ .set_surface = .settings };
-        if (std.mem.eql(u8, raw, "status_menu")) return .{ .set_surface = .status_menu };
         return null;
     }
     if (std.mem.startsWith(u8, name, command_compact_prefix)) {
@@ -354,7 +336,7 @@ fn parsePosition(raw: []const u8) ?TrayPosition {
 
 fn parseAction(raw: []const u8) ?Action {
     const value = std.fmt.parseUnsigned(u8, raw, 10) catch return null;
-    if (value > @intFromEnum(Action.menu_quit)) return null;
+    if (value > @intFromEnum(Action.position_top)) return null;
     return @enumFromInt(value);
 }
 
@@ -395,10 +377,6 @@ fn actionForMessage(msg: Msg) Action {
         .position_right => .position_right,
         .position_bottom => .position_bottom,
         .position_top => .position_top,
-        .menu_capture => .menu_capture,
-        .menu_settings => .menu_settings,
-        .menu_access => .menu_access,
-        .menu_quit => .menu_quit,
         else => .none,
     };
 }

@@ -25,7 +25,6 @@ NATIVE_DESIGN_SYSTEM_ZIG="$ZIG_BIN" \
 NATIVE_UI_LIB="$PWD/NativeQuickShotUI/zig-out/lib/libquickshot-native-ui.a"
 OUT="$(mktemp -t quickshot-hub-tests)"
 SURFACE_OUT="$(mktemp -t quickshot-native-surface-tests)"
-STATUS_LAYOUT_OUT="$(mktemp -t quickshot-status-menu-layout-tests)"
 TRAY_POINTER_OUT="$(mktemp -t quickshot-tray-pointer-tests)"
 TRAY_HOVER_OUT="$(mktemp -t quickshot-tray-hover-region-tests)"
 THUMBNAIL_LAYOUT_OUT="$(mktemp -t quickshot-thumbnail-layout-tests)"
@@ -43,7 +42,7 @@ CAPTURE_SEQUENCE_OUT="$(mktemp -t quickshot-capture-sequence-tests)"
 CAPTURE_ARTIFACT_OUT="$(mktemp -t quickshot-capture-artifact-tests)"
 WINDOW_PROTECTION_OUT="$(mktemp -t quickshot-window-protection-tests)"
 THUMBNAIL_MODEL_OUT="$(mktemp -t quickshot-thumbnail-model-tests)"
-trap 'rm -f "$OUT" "$SURFACE_OUT" "$STATUS_LAYOUT_OUT" "$TRAY_POINTER_OUT" "$TRAY_HOVER_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"' EXIT
+trap 'rm -f "$OUT" "$SURFACE_OUT" "$TRAY_POINTER_OUT" "$TRAY_HOVER_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"' EXIT
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -161,19 +160,6 @@ xcrun swiftc \
   -o "$SURFACE_OUT"
 
 "$SURFACE_OUT"
-
-xcrun swiftc \
-  -sdk "$SDK" \
-  -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 6 \
-  -strict-concurrency=complete \
-  -warnings-as-errors \
-  -framework AppKit \
-  Sources/StatusMenuLayout.swift \
-  Tests/StatusMenuLayoutTests.swift \
-  -o "$STATUS_LAYOUT_OUT"
-
-"$STATUS_LAYOUT_OUT"
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -630,16 +616,24 @@ if output="$(rg -n "NSSegmentedControl|NSButton|DesignSystemButton|DesignSystemB
   echo "Settings UI regression: settings controls must use Native SDK-rendered button-group, not AppKit controls." >&2
   exit 1
 fi
-if output="$(rg -n "NSMenu\\b|NSMenuItem\\b|NSSegmentedControl|NSButton|DesignSystemButton|DesignSystemButtonGroup" Sources/StatusItemController.swift)"; then
+if output="$(rg -n "NSSegmentedControl|NSButton\\b|DesignSystemButton|DesignSystemButtonGroup" Sources/StatusItemController.swift)"; then
   echo "$output"
-  echo "Status menu regression: visible menu controls must use Native SDK-rendered buttons, not AppKit menu controls." >&2
+  echo "Status item regression: the menu bar entry uses a system NSMenu; custom control replicas are prohibited." >&2
   exit 1
 fi
 rg -F -q "NativeHubShellView(frame: .zero)" Sources/HubWindow.swift
 rg -F -q "NativeThumbnailControlsView(frame: .zero)" Sources/ThumbnailWindow.swift
 rg -F -q "NativePinnedCopyButtonView(frame: .zero)" Sources/PinnedWindow.swift
 rg -F -q "NativeSettingsContentView(frame:" Sources/SettingsWindow.swift
-rg -F -q "NativeStatusMenuContentView(frame:" Sources/StatusItemController.swift
+# Меню строки меню — системное NSMenu, а не собственная поверхность:
+# клавиатура, VoiceOver и позиционирование приходят от системы.
+rg -F -q "statusItem.menu = makeMenu()" Sources/StatusItemController.swift
+rg -F -q "NSMenuDelegate" Sources/StatusItemController.swift
+if output="$(rg -n "NativeStatusMenuContentView|status_menu" Sources NativeQuickShotUI/src 2>/dev/null)"; then
+  echo "$output"
+  echo "Status-menu regression: the menu bar menu must stay a system NSMenu." >&2
+  exit 1
+fi
 rg -F -q "native_sdk_app_create" Sources/NativeSDKBridge.swift
 rg -F -q "native_sdk_app_touch" Sources/NativeSDKBridge.swift
 rg -F -q "quickshot_native_ui_pointer_move" Sources/NativeSDKBridge.swift

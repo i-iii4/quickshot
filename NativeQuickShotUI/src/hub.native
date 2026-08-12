@@ -48,15 +48,6 @@
           </row>
         </if>
         <else>
-          <if test="{statusMenuSurface}">
-            <column gap="6" padding="8" background="background" label="QuickShot menu">
-              <button size="sm" variant="ghost" label="Menu capture" on-press="menu_capture">Сделать снимок</button>
-              <button size="sm" variant="ghost" label="Menu settings" on-press="menu_settings">Настройки...</button>
-              <button size="sm" variant="ghost" label="Menu access" on-press="menu_access">Открыть доступ к записи экрана</button>
-              <button size="sm" variant="destructive" label="Menu quit" on-press="menu_quit">Выйти из QuickShot</button>
-            </column>
-          </if>
-          <else>
             <if test="{settingsSurface}">
               <column gap="10" padding="20" background="background" label="QuickShot settings">
                 <text>Положение трея миниатюр</text>
@@ -108,7 +99,6 @@
                 </row>
               </else>
             </else>
-          </else>
         </else>
       </else>
     </else>

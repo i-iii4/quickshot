@@ -160,22 +160,29 @@ fullscreen behavior remain explicit runtime release checks.
    are prohibited from the primary path.
 6. Selection rendering reuses the established QuickShot cursor/frame geometry;
    it must not be rebuilt as a visually approximate replacement.
-7. Every visible command control on hub, thumbnail, pinned, settings, and
-   status-menu surfaces uses an official Native SDK primitive. Local AppKit
-   control replicas and SDK-owned color/radius/state overrides are prohibited.
-8. AppKit owns window hosting, the system status item, traffic-light controls,
-   image presentation, and resize/drag integration. Native SDK owns command
-   geometry, tokens, hover, pressed state, hit testing, and typed dispatch.
-9. Swift reads control and motion metrics from the pinned House Dark token pack and
+7. Every visible command control on hub, thumbnail, pinned, and settings
+   surfaces uses an official Native SDK primitive. Local AppKit control
+   replicas and SDK-owned color/radius/state overrides are prohibited.
+8. The design system covers surfaces QuickShot creates — floating chrome it
+   owns over other applications. Surfaces the system owns keep the system's
+   own behavior, because there predictability outweighs brand: the menu bar
+   entry opens a plain `NSMenu`, so keyboard navigation, VoiceOver, press-drag
+   selection, status-item highlight, material, and multi-display placement come
+   from AppKit rather than being reimplemented.
+9. AppKit owns window hosting, the system status item and its menu,
+   traffic-light controls, image presentation, and resize/drag integration.
+   Native SDK owns command geometry, tokens, hover, pressed state, hit testing,
+   and typed dispatch on the surfaces listed in 7.
+10. Swift reads control and motion metrics from the pinned House Dark token pack and
    fitting geometry from runtime semantics. It must not maintain approximate
    duplicate widths or unexplained padding reserves.
-10. The visual scheme is fixed to House Dark. High Contrast and Reduce Motion
+11. The visual scheme is fixed to House Dark. High Contrast and Reduce Motion
    changes are forwarded from macOS into the embedded Native SDK runtime and
    must repaint the complete surface in one transition.
-11. Production and the default headless regression suite link a `ReleaseFast`
+12. Production and the default headless regression suite link a `ReleaseFast`
    Native UI library so timing gates exercise the shipped renderer path. Debug
    is reserved for explicit diagnostics.
-12. Native SDK `button-group` is reserved for model-owned exclusive choices.
+13. Native SDK `button-group` is reserved for model-owned exclusive choices.
    Independent commands use a `row`; House `button-group` provides the attached
    segmented treatment only for exclusive selection.
 

@@ -13,7 +13,6 @@ struct NativeSurfaceBehaviorTests {
         run("compact thumbnail controls fit and click", testCompactThumbnailControls)
         run("pinned copy control fits, hovers, and clicks", testPinnedControl)
         run("settings controls fit, hover, and dispatch", testSettingsControls)
-        run("status menu controls fit, hover, and dispatch", testStatusMenuControls)
 
         print("NativeSurfaceBehaviorTests: passed")
     }
@@ -72,11 +71,6 @@ struct NativeSurfaceBehaviorTests {
         _ = Host(view: settings, size: settings.fittingSize)
         try require(alpha(settings.debugPixel(at: NSPoint(x: 1, y: 1))) == 255,
                     "Settings canvas must remain an opaque application surface")
-
-        let status = NativeStatusMenuContentView(frame: .zero)
-        _ = Host(view: status, size: status.fittingSize)
-        try require(alpha(status.debugPixel(at: NSPoint(x: 1, y: 1))) == 255,
-                    "Status-menu canvas must remain an opaque application surface")
     }
 
     private static func testThumbnailControls() throws {
@@ -186,36 +180,6 @@ struct NativeSurfaceBehaviorTests {
         let restored = points.map(view.debugPixel)
         try require(darkWhileSystemIsLight == dark && dark == restored,
                     "House Dark must remain fixed across system Light/Dark changes")
-    }
-
-    private static func testStatusMenuControls() throws {
-        let view = NativeStatusMenuContentView(frame: .zero)
-        var actions: [String] = []
-        view.onAction = { action in
-            switch action {
-            case .capture: actions.append("capture")
-            case .settings: actions.append("settings")
-            case .access: actions.append("access")
-            case .quit: actions.append("quit")
-            }
-        }
-        let host = Host(view: view, size: view.fittingSize)
-        let expectedIdentifiers = ["Menu capture", "Menu settings", "Menu access", "Menu quit"]
-
-        try require(view.debugButtons().map(\.identifier) == expectedIdentifiers,
-                    "Status-menu identifiers are not stable")
-        try requireContainedAndSeparated(view.debugButtons(), in: view.bounds, context: "status menu")
-        let hoverTitle = view.debugButtons()[0].title
-        view.debugHoverButton(title: hoverTitle)
-        try require(view.debugButtons().filter(\.isHovered).map(\.title) == [hoverTitle],
-                    "Native SDK did not own status-menu hover")
-
-        for identifier in expectedIdentifiers {
-            let button = view.debugButtons().first { $0.identifier == identifier }!
-            try host.click(button.frame, in: view)
-        }
-        try require(actions == ["capture", "settings", "access", "quit"],
-                    "Status menu dispatch order is wrong: \(actions)")
     }
 
     private static func requireContainedAndSeparated(_ buttons: [NativeControlDebugButtonSnapshot],

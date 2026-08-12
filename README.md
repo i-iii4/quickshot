@@ -80,9 +80,13 @@ visually stable instead of blinking out and back in at capture time.
   it is absent at rest. Its `14pt` radius and `6pt` inset are concentric with
   the buttons' `8pt` radius. Neutral commands use the dark `secondary` variant
   instead of the light dark-theme `primary` variant.
-- Hub, thumbnail, pinned, settings, and status-menu commands are real Native
+- Hub, thumbnail, pinned, and settings commands are real Native
   SDK controls rendered from one fixed House Dark token register. AppKit owns only window
   hosting and system chrome.
+- The menu bar entry opens a plain system `NSMenu`. The design system covers
+  the floating chrome QuickShot puts over other applications; on a surface the
+  system owns, platform behavior — keyboard navigation, VoiceOver, press-drag
+  selection, status-item highlight, placement — is worth more than brand.
 - Every rounded control has exactly one Native SDK chrome owner. The hub's
   animated core stretches that owner's raster with preserved caps; transparent,
   pointer-free foreground slices carry only its icon and text. Stroke geometry

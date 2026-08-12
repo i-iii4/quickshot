@@ -156,10 +156,6 @@ private enum NativeHubPressedButton: Int32 {
     case positionRight
     case positionBottom
     case positionTop
-    case menuCapture
-    case menuSettings
-    case menuAccess
-    case menuQuit
 }
 
 private enum NativeControlSurface: String {
@@ -170,7 +166,6 @@ private enum NativeControlSurface: String {
     case thumbnail
     case pinned
     case settings
-    case statusMenu = "status_menu"
 }
 
 private enum NativeInteractionChannel: String {
@@ -728,10 +723,6 @@ private final class NativeHubRenderView: NSView {
         case "Tray right": return .positionRight
         case "Tray bottom": return .positionBottom
         case "Tray top": return .positionTop
-        case "Menu capture": return .menuCapture
-        case "Menu settings": return .menuSettings
-        case "Menu access": return .menuAccess
-        case "Menu quit": return .menuQuit
         default: break
         }
         switch title {
@@ -1206,8 +1197,8 @@ final class NativeHubShellView: NSView {
             case .delete: self.onDelete?()
             case .saveAs: self.onSaveAs?()
             case .copyAll: self.onCopyAll?()
-            case .none, .copy, .dismiss, .positionLeft, .positionRight, .positionBottom, .positionTop,
-                 .menuCapture, .menuSettings, .menuAccess, .menuQuit: break
+            case .none, .copy, .dismiss, .positionLeft, .positionRight, .positionBottom, .positionTop:
+                break
             }
         }
         nativeView.onButtonPressed = handlePress
@@ -2624,78 +2615,6 @@ final class NativeSettingsContentView: NSView {
 
     func debugPixel(at point: NSPoint) -> UInt32 {
         nativeView.debugPixel(at: point)
-    }
-#endif
-}
-
-enum NativeStatusMenuAction {
-    case capture
-    case settings
-    case access
-    case quit
-}
-
-final class NativeStatusMenuContentView: NSView {
-    var onAction: ((NativeStatusMenuAction) -> Void)?
-
-    private let nativeView = NativeHubRenderView(frame: .zero)
-    private var measuredFittingSize = NSSize(width: 260, height: 184)
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.clear.cgColor
-        nativeView.setSurface(.statusMenu)
-        nativeView.onButtonPressed = { [weak self] pressed in
-            switch pressed {
-            case .menuCapture:
-                self?.onAction?(.capture)
-            case .menuSettings:
-                self?.onAction?(.settings)
-            case .menuAccess:
-                self?.onAction?(.access)
-            case .menuQuit:
-                self?.onAction?(.quit)
-            default:
-                break
-            }
-        }
-        addSubview(nativeView)
-        let contentSize = nativeView.measureSemanticContentSize(width: 800)
-        measuredFittingSize = NSSize(width: max(260, contentSize.width),
-                                     height: contentSize.height)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    override var fittingSize: NSSize { measuredFittingSize }
-    override var intrinsicContentSize: NSSize { fittingSize }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden, alphaValue > 0.01, bounds.contains(point) else { return nil }
-        let p = convert(point, to: nativeView)
-        return nativeView.hasInteractiveButton(at: p) ? nativeView : nil
-    }
-
-    override func layout() {
-        super.layout()
-        nativeView.frame = bounds
-        nativeView.setSurface(.statusMenu)
-        nativeView.renderNow()
-    }
-
-#if TESTING
-    func debugButtons() -> [NativeControlDebugButtonSnapshot] {
-        nativeDebugButtons(nativeView, in: self)
-    }
-
-    func debugHoverButton(title: String) {
-        nativeDebugHover(title: title, nativeView: nativeView)
-    }
-
-    func debugPixel(at point: NSPoint) -> UInt32 {
-        nativeView.debugPixel(at: convert(point, to: nativeView))
     }
 #endif
 }
