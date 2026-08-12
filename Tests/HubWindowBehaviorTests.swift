@@ -29,6 +29,8 @@ struct HubWindowBehaviorTests {
         run("hover bubble is concentric and fades in", testHoverBubbleGeometry)
         run("bubble stroke surrounds the pill", testBubbleStrokeSurroundsPill)
         run("action tooltip follows hover", testActionTooltipFollowsHover)
+        run("tooltip dismisses on row relayout", testTooltipDismissesOnRowRelayout)
+        run("button semantics reads are cached", testButtonSemanticsAreCached)
         run("action labels stay short and intentional", testActionLabelsStayShort)
         run("actions keep one visual order", testActionsKeepVisualOrder)
         run("reveal has no idle tail", testRevealHasNoIdleTail)
@@ -636,14 +638,42 @@ struct HubWindowBehaviorTests {
         try require(shown.sharingNone, "Tooltip window must be excluded from screen capture")
         try require(shown.ignoresMouse, "Tooltip window must not intercept the pointer")
 
+        // Тёплое перенацеливание: пока ярлык виден, соседняя команда получает
+        // его мгновенно, без прятанья и повторной холодной задержки.
         harness.hub.debugHoverButton(title: "Save As")
-        harness.hub.debugFlushTooltip()
         try require(harness.hub.debugTooltipState()?.text == "Save As",
-                    "Tooltip must retarget to the next hovered command")
+                    "A warm tooltip must retarget instantly, without a second delay")
 
         harness.hub.debugRequestExpanded(false)
         try require(harness.hub.debugTooltipState() == nil,
                     "Collapsing the row must dismiss the tooltip")
+    }
+
+    /// Перекладка ряда (смена счётчика, позиции, ширины ядра) делает якорь
+    /// ярлыка недействительным — видимый ярлык обязан исчезнуть.
+    private static func testTooltipDismissesOnRowRelayout() throws {
+        let harness = Harness(position: .right)
+        harness.hub.debugSetExpansionProgress(1)
+        harness.hub.debugRequestExpanded(true)
+        harness.hub.debugHoverButton(title: "Delete")
+        harness.hub.debugFlushTooltip()
+        try require(harness.hub.debugTooltipState() != nil, "Tooltip did not appear")
+        harness.hub.debugTransitionCount(to: 42)
+        try require(harness.hub.debugTooltipState() == nil,
+                    "A row relayout must dismiss the anchored tooltip")
+    }
+
+    /// Мониторы трея запрашивают семантику кнопок на каждом движении мыши:
+    /// повторный запрос без команды и смены кадра обязан идти из кэша.
+    private static func testButtonSemanticsAreCached() throws {
+        let harness = Harness(position: .right)
+        harness.hub.debugSetExpansionProgress(1)
+        _ = harness.hub.debugControlButtons()
+        let passes = harness.hub.debugSemanticsPassCount
+        _ = harness.hub.debugControlButtons()
+        _ = harness.hub.debugControlButtons()
+        try require(harness.hub.debugSemanticsPassCount == passes,
+                    "Repeated semantics reads must hit the cache; passes grew from \(passes) to \(harness.hub.debugSemanticsPassCount)")
     }
 
     /// Обводка капсулы обязана окружать её целиком: цвет штриха в середине

@@ -131,6 +131,7 @@ final class HubWindow {
     func debugTooltipState() -> (text: String, sharingNone: Bool, ignoresMouse: Bool)? {
         shell.debugTooltipState()
     }
+    var debugSemanticsPassCount: Int { shell.debugSemanticsPassCount }
     func debugTransitionDuration(toExpanded: Bool) -> CFTimeInterval {
         shell.debugTransitionDuration(toExpanded: toExpanded)
     }

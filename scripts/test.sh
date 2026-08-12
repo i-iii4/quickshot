@@ -681,6 +681,11 @@ rg -F -q "HubTooltipWindow" Sources/HubTooltip.swift
 rg -F -q "WindowCaptureProtection.excludeFromScreenCapture(panel)" Sources/HubTooltip.swift
 rg -F -q "panel.ignoresMouseEvents = true" Sources/HubTooltip.swift
 rg -F -q "handleTooltipInteraction" Sources/NativeHubView.swift
+# Холодная задержка — именованный токен, тёплое перенацеливание мгновенно,
+# семантика кнопок на пути каждого движения мыши кэшируется.
+rg -F -q "TrayHover.tooltipDelay" Sources/NativeHubView.swift
+rg -F -q "let warm = tooltip.isVisible" Sources/NativeHubView.swift
+rg -F -q "cachedButtonNodes" Sources/NativeHubView.swift
 # Панель капсулы рендерится в фактическую ширину ряда: фикс срезанного штриха.
 rg -F -q 'width="{bubbleWidth}"' NativeQuickShotUI/src/hub.native
 rg -F -q "setBubbleWidth(width)" Sources/NativeHubView.swift

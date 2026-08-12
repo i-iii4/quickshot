@@ -13,6 +13,7 @@ private enum NativeHubMetrics {
     static let height = token(.controlHeight)
     static let radius = token(.controlRadius)
     static let controlInset = token(.controlInset)
+    static let buttonFontSize = token(.buttonFontSize)
     static let iconSide = token(.iconSide)
     static let iconGap = token(.iconGap)
     static let countBleed: CGFloat = 4
@@ -177,6 +178,11 @@ private enum NativeInteractionChannel: String {
     case pressed
 }
 
+private struct NativeButtonNodesCacheKey: Equatable {
+    let revision: UInt64
+    let size: NSSize
+}
+
 private struct NativeHubButtonNode {
     let id: UInt64
     let identifier: String
@@ -242,6 +248,8 @@ private final class NativeHubRenderView: NSView {
     private var lastRenderSignature: NativeHubRenderSignature?
     private var lastSurfaceSignature: NativeHubSurfaceSignature?
     private var renderRevision: UInt64 = 0
+    private var cachedButtonNodes: (key: NativeButtonNodesCacheKey, nodes: [NativeHubButtonNode])?
+    private(set) var semanticsPassCount = 0
     private(set) var renderPassCount = 0
     private(set) var totalRenderDuration: CFTimeInterval = 0
     private var count = -1
@@ -498,8 +506,22 @@ private final class NativeHubRenderView: NSView {
             UInt32(rgbaBytes[index + 3])
     }
 
+    /// Семантика кнопок пересчитывается только после команды или смены кадра:
+    /// мониторы трея зовут этот метод на каждом движении мыши, и без кэша
+    /// каждое движение платило бы за layout-проход и перечисление узлов.
     func buttonNodes() -> [NativeHubButtonNode] {
+        let key = NativeButtonNodesCacheKey(revision: renderRevision, size: bounds.size)
+        if let cachedButtonNodes, cachedButtonNodes.key == key {
+            return cachedButtonNodes.nodes
+        }
+        let nodes = computeButtonNodes()
+        cachedButtonNodes = (key, nodes)
+        return nodes
+    }
+
+    private func computeButtonNodes() -> [NativeHubButtonNode] {
         guard let nativeApp else { return [] }
+        semanticsPassCount += 1
         native_sdk_app_frame(nativeApp)
         let total = native_sdk_app_widget_semantics_count(nativeApp)
         guard total > 0 else { return [] }
@@ -1245,9 +1267,11 @@ final class NativeHubShellView: NSView {
     /// Показ откладывается: проезд курсора через ряд не должен мигать ярлыками.
     /// Смена цели до срабатывания перезапускает таймер; любой не-hover сигнал
     /// и уход с командных кнопок прячут ярлык немедленно.
+    /// Холодный показ ждёт `TrayHover.tooltipDelay`; пока ярлык виден, переход
+    /// на соседнюю команду перенацеливает его мгновенно — стандартное «тёплое»
+    /// поведение тултип-рядов, без прятанья и повторной задержки.
     private func handleTooltipInteraction(_ channel: NativeInteractionChannel,
                                           _ action: NativeHubPressedButton) {
-        NativeHubShellView.tooltipLog.info("interaction \(channel.rawValue, privacy: .public) action=\(action.rawValue)")
         guard channel == .hover else {
             cancelTooltip()
             return
@@ -1258,15 +1282,21 @@ final class NativeHubShellView: NSView {
             return
         }
         guard action != tooltipAction else { return }
-        cancelTooltip()
+        let warm = tooltip.isVisible
+        tooltipWorkItem?.cancel()
+        tooltipWorkItem = nil
         tooltipAction = action
+        if warm {
+            presentTooltip(for: action)
+            return
+        }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.tooltipWorkItem = nil
             self.presentTooltip(for: action)
         }
         tooltipWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + HubTooltipWindow.showDelay,
+        DispatchQueue.main.asyncAfter(deadline: .now() + TrayHover.tooltipDelay,
                                       execute: work)
     }
 
@@ -1293,6 +1323,9 @@ final class NativeHubShellView: NSView {
                      fill: nativeColor(bubbleView.surfacePixel(at: bubbleCenter)),
                      stroke: nativeColor(bubbleView.surfacePixel(at: bubbleEdge)),
                      radius: NativeHubMetrics.radius,
+                     controlHeight: NativeHubMetrics.height,
+                     fontSize: NativeHubMetrics.buttonFontSize,
+                     horizontalInset: NativeHubMetrics.controlInset,
                      screen: window.screen ?? NSScreen.main)
     }
 
@@ -1629,6 +1662,10 @@ final class NativeHubShellView: NSView {
     }
 
     private func configureStaticGeometry() {
+        // Любая перекладка ряда (счётчик, позиция трея, ширина ядра) делает
+        // якорь ярлыка недействительным — ярлык не должен висеть на старых
+        // координатах.
+        cancelTooltip()
         let width = expandedWidth
         let originX = collapsedOrigin.x - compactShellX
         frame = NSRect(x: originX,
@@ -2256,6 +2293,8 @@ final class NativeHubShellView: NSView {
         guard let text = tooltip.debugVisibleText else { return nil }
         return (text, tooltip.debugSharingIsNone, tooltip.debugIgnoresMouse)
     }
+
+    var debugSemanticsPassCount: Int { nativeView.semanticsPassCount }
 
     func debugPixel(at point: NSPoint) -> UInt32 {
         guard visibleBounds.contains(point) else { return 0 }

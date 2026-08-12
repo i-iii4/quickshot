@@ -9,11 +9,8 @@ import OSLog
 /// радиус — из токена контролов; Swift не держит собственных констант цвета.
 @MainActor
 final class HubTooltipWindow {
-    static let showDelay: TimeInterval = 0.6
     private static let fade: TimeInterval = 0.09
     private static let gap: CGFloat = 5
-    private static let paddingX: CGFloat = 8
-    private static let paddingY: CGFloat = 5
 
     nonisolated private static let log = Logger(subsystem: "com.iiii.quickshot",
                                                 category: "tooltip")
@@ -21,6 +18,8 @@ final class HubTooltipWindow {
     private let panel: NSPanel
     private let bubble = NSView()
     private let label = NSTextField(labelWithString: "")
+
+    var isVisible: Bool { panel.isVisible }
 
     init() {
         panel = NSPanel(contentRect: .zero,
@@ -48,28 +47,35 @@ final class HubTooltipWindow {
     }
 
     /// `anchor` — экранный frame кнопки. `below` — для трея у верхнего края,
-    /// где над рядом нет места.
+    /// где над рядом нет места. Геометрия и шрифт — House small-control
+    /// register: высота контрола, радиус контрола, размер подписи кнопки и
+    /// её горизонтальный отступ приходят токенами из Native SDK.
     func show(text: String,
               anchor: NSRect,
               below: Bool,
               fill: NSColor,
               stroke: NSColor,
               radius: CGFloat,
+              controlHeight: CGFloat,
+              fontSize: CGFloat,
+              horizontalInset: CGFloat,
               screen: NSScreen?) {
+        label.font = .systemFont(ofSize: fontSize)
         label.stringValue = text
         label.sizeToFit()
-        let size = NSSize(width: ceil(label.frame.width) + Self.paddingX * 2,
-                          height: ceil(label.frame.height) + Self.paddingY * 2)
-        label.frame = NSRect(x: Self.paddingX, y: Self.paddingY,
-                             width: size.width - Self.paddingX * 2,
-                             height: size.height - Self.paddingY * 2)
+        let size = NSSize(width: ceil(label.frame.width) + horizontalInset * 2,
+                          height: controlHeight)
+        label.frame = NSRect(x: horizontalInset,
+                             y: (controlHeight - ceil(label.frame.height)) / 2,
+                             width: size.width - horizontalInset * 2,
+                             height: ceil(label.frame.height))
 
         var origin = NSPoint(x: anchor.midX - size.width / 2,
                              y: below ? anchor.minY - Self.gap - size.height
                                       : anchor.maxY + Self.gap)
         if let bounds = screen?.frame {
-            origin.x = min(max(origin.x, bounds.minX + Self.paddingX),
-                           bounds.maxX - size.width - Self.paddingX)
+            origin.x = min(max(origin.x, bounds.minX + horizontalInset),
+                           bounds.maxX - size.width - horizontalInset)
             origin.y = min(max(origin.y, bounds.minY), bounds.maxY - size.height)
         }
 
@@ -82,7 +88,9 @@ final class HubTooltipWindow {
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
         let firstShow = !panel.isVisible
         panel.orderFrontRegardless()
-        Self.log.info("show '\(text, privacy: .public)' at \(String(describing: NSRect(origin: origin, size: size)), privacy: .public) visible=\(self.panel.isVisible)")
+        // Одна строка на показ, default-уровень: info в unified log не
+        // персистится и проверку на живом приложении не переживает.
+        Self.log.log("show '\(text, privacy: .public)' visible=\(self.panel.isVisible)")
         guard firstShow else { return }
         panel.alphaValue = 0
         NSAnimationContext.runAnimationGroup { context in

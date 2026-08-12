@@ -102,33 +102,41 @@ fullscreen behavior remain explicit runtime release checks.
    labels, 16pt icons, and 8pt gaps between independent command buttons.
 12. Hover reveal exposes three visible actions: `Delete`, `Save As`, and
    `Copy All`. They render as icon-only House commands; the command name
-   appears as a tooltip after a short hover. QuickShot draws the tooltip
-   itself (system help tags never fire for an inactive accessory app); its
-   window is excluded from screen capture and ignores the pointer. The core
-   `Hide`/`Show` button keeps its icon+label form.
-13. Per-thumbnail controls use independent House command buttons in a
+   appears as a tooltip. QuickShot draws the tooltip itself (system help
+   tags never fire for an inactive accessory app); its window is excluded
+   from screen capture and ignores the pointer. The core `Hide`/`Show`
+   button keeps its icon+label form.
+13. Tooltip timing: a cold show waits `500ms`; while a tooltip is visible,
+   moving to a neighbouring command retargets it instantly without a second
+   delay. Leaving the commands, pressing, collapsing the row, or any row
+   relayout dismisses it immediately.
+14. The tooltip is typeset on the House small-control register: control
+   height, control radius, button font size, and horizontal control inset
+   all come from Native SDK tokens; fill and stroke are sampled from the
+   rendered House bubble surface. The window shadow matches card elevation.
+15. Per-thumbnail controls use independent House command buttons in a
    token-spaced row, not exclusive-choice `button-group` chrome or
    native Liquid Glass buttons.
-14. Empty transparent tray space does not steal pointer events from controls.
-15. The tray must not blink during capture completion.
-16. The left-to-right action order is always `Delete`, `Save As`, `Copy All`,
+16. Empty transparent tray space does not steal pointer events from controls.
+17. The tray must not blink during capture completion.
+18. The left-to-right action order is always `Delete`, `Save As`, `Copy All`,
     regardless of the screen edge.
-17. Hover reveal uses the House fast-motion token (`120ms`, or `0ms` under
+19. Hover reveal uses the House fast-motion token (`120ms`, or `0ms` under
     Reduce Motion), scales interrupted transitions by the remaining distance,
     changes width through the final frame, and does not rerender Native SDK
     pixels on every display-link tick.
-18. At rest only the compact command button is visible. Hover fades in one
+20. At rest only the compact command button is visible. Hover fades in one
     token-owned House Dark bubble behind the complete command row; gaps inside
     the hub belong to that surface and pixels outside it remain transparent.
-19. Bubble and button corners are concentric: House `xl` outer radius `14pt`,
+21. Bubble and button corners are concentric: House `xl` outer radius `14pt`,
     House control radius `8pt`, and their difference is the `6pt` inset.
-20. Repeated `mouseMoved` events for an unchanged hover target never restart
+22. Repeated `mouseMoved` events for an unchanged hover target never restart
     the active reveal animation.
-21. While hover is active, cursor exit is evaluated against the stable fully
+23. While hover is active, cursor exit is evaluated against the stable fully
     expanded footprint independently of the resizing view. Leaving it always
     drives the bubble opacity back to zero, even if AppKit already stopped
     delivering events to the current view bounds.
-22. Tray cards, chevron rotation, opacity, and shadows derive from one
+24. Tray cards, chevron rotation, opacity, and shadows derive from one
     interruptible tray progress. Collection insertion/removal/reflow and the
     clipped vertical count odometer have explicit headless regression tests.
 
