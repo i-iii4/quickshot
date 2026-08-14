@@ -30,6 +30,8 @@ TRAY_HOVER_OUT="$(mktemp -t quickshot-tray-hover-region-tests)"
 LIBRARY_MODEL_OUT="$(mktemp -t quickshot-screenshot-library-tests)"
 ANNOTATION_DOC_OUT="$(mktemp -t quickshot-annotation-document-tests)"
 ANNOTATION_CANVAS_OUT="$(mktemp -t quickshot-annotation-canvas-tests)"
+ANNOTATION_HANDLE_OUT="$(mktemp -t quickshot-annotation-handle-tests)"
+ANNOTATION_RENDER_OUT="$(mktemp -t quickshot-annotation-render-tests)"
 THUMBNAIL_LAYOUT_OUT="$(mktemp -t quickshot-thumbnail-layout-tests)"
 THUMBNAIL_MOTION_OUT="$(mktemp -t quickshot-thumbnail-motion-tests)"
 THUMBNAIL_COLLECTION_OUT="$(mktemp -t quickshot-thumbnail-collection-tests)"
@@ -45,7 +47,7 @@ CAPTURE_SEQUENCE_OUT="$(mktemp -t quickshot-capture-sequence-tests)"
 CAPTURE_ARTIFACT_OUT="$(mktemp -t quickshot-capture-artifact-tests)"
 WINDOW_PROTECTION_OUT="$(mktemp -t quickshot-window-protection-tests)"
 THUMBNAIL_MODEL_OUT="$(mktemp -t quickshot-thumbnail-model-tests)"
-trap 'rm -f "$OUT" "$SURFACE_OUT" "$TRAY_POINTER_OUT" "$TRAY_HOVER_OUT" "$LIBRARY_MODEL_OUT" "$ANNOTATION_DOC_OUT" "$ANNOTATION_CANVAS_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"' EXIT
+trap 'rm -f "$OUT" "$SURFACE_OUT" "$TRAY_POINTER_OUT" "$TRAY_HOVER_OUT" "$LIBRARY_MODEL_OUT" "$ANNOTATION_DOC_OUT" "$ANNOTATION_CANVAS_OUT" "$ANNOTATION_HANDLE_OUT" "$ANNOTATION_RENDER_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"' EXIT
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -131,6 +133,8 @@ xcrun swiftc \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
   Sources/TrayHoverRegion.swift \
+  Sources/AnnotationDocument.swift \
+  Sources/AnnotationToolbar.swift \
   Sources/NativeHubView.swift \
   Sources/HubTooltip.swift \
   Sources/WindowCaptureProtection.swift \
@@ -154,6 +158,8 @@ xcrun swiftc \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
   Sources/TrayHoverRegion.swift \
+  Sources/AnnotationDocument.swift \
+  Sources/AnnotationToolbar.swift \
   Sources/NativeHubView.swift \
   Sources/HubTooltip.swift \
   Sources/WindowCaptureProtection.swift \
@@ -233,6 +239,33 @@ xcrun swiftc \
   -swift-version 6 \
   -strict-concurrency=complete \
   -warnings-as-errors \
+  Sources/AnnotationDocument.swift \
+  Sources/AnnotationHandle.swift \
+  Tests/AnnotationHandleTests.swift \
+  -o "$ANNOTATION_HANDLE_OUT"
+
+"$ANNOTATION_HANDLE_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
+  -framework AppKit \
+  Sources/AnnotationDocument.swift \
+  Sources/AnnotationRenderer.swift \
+  Tests/AnnotationRendererTests.swift \
+  -o "$ANNOTATION_RENDER_OUT"
+
+"$ANNOTATION_RENDER_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -framework AppKit \
   Sources/ThumbnailLayout.swift \
   Tests/ThumbnailLayoutTests.swift \
@@ -271,6 +304,8 @@ xcrun swiftc \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
   Sources/TrayHoverRegion.swift \
+  Sources/AnnotationDocument.swift \
+  Sources/AnnotationToolbar.swift \
   Sources/NativeHubView.swift \
   Sources/HubTooltip.swift \
   Sources/CaptureSequence.swift \
@@ -284,6 +319,14 @@ xcrun swiftc \
   Sources/ThumbnailMotion.swift \
   Sources/ThumbnailWindow.swift \
   Sources/ThumbnailLayout.swift \
+  Sources/ScreenshotLibraryModel.swift \
+  Sources/ScreenshotLibrary.swift \
+  Sources/AnnotationCanvas.swift \
+  Sources/AnnotationRenderer.swift \
+  Sources/AnnotationHandle.swift \
+  Sources/AnnotationCanvasView.swift \
+  Sources/AnnotationEditor.swift \
+  Sources/SettingsWindow.swift \
   Sources/ThumbnailManager.swift \
   Tests/ThumbnailCollectionBehaviorTests.swift \
   "$NATIVE_UI_LIB" \
@@ -307,6 +350,8 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
   Sources/TrayHoverRegion.swift \
+  Sources/AnnotationDocument.swift \
+  Sources/AnnotationToolbar.swift \
   Sources/NativeHubView.swift \
   Sources/HubTooltip.swift \
   Sources/WindowCaptureProtection.swift \
@@ -346,6 +391,14 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/ThumbnailMotion.swift \
   Sources/ThumbnailWindow.swift \
   Sources/ThumbnailLayout.swift \
+  Sources/ScreenshotLibraryModel.swift \
+  Sources/ScreenshotLibrary.swift \
+  Sources/AnnotationCanvas.swift \
+  Sources/AnnotationRenderer.swift \
+  Sources/AnnotationHandle.swift \
+  Sources/AnnotationCanvasView.swift \
+  Sources/AnnotationEditor.swift \
+  Sources/SettingsWindow.swift \
   Sources/ThumbnailManager.swift \
   Tests/ThumbnailWindowLiveClickTests.swift \
   "$NATIVE_UI_LIB" \
@@ -724,6 +777,15 @@ rg -F -q "cachedButtonNodes" Sources/NativeHubView.swift
 # трея (ST-9) и удаление карточки (ST-10), уборка удаляет мимо корзины (ST-6).
 # Объектная модель: история снимками, жест — один шаг, выделение в состоянии.
 rg -F -q "func beginGesture()" Sources/AnnotationDocument.swift
+# Редактор не трогает оверлей захвата (X-1) и живёт в собственном окне,
+# исключённом из захвата; плашка рисуется непрозрачной (E-1).
+rg -F -q "WindowCaptureProtection.excludeFromScreenCapture(window)" Sources/AnnotationEditor.swift
+rg -F -q "AnnotationPalette.redaction" Sources/AnnotationRenderer.swift
+if output="$(rg -n "CaptureSession|Overlay" Sources/AnnotationEditor.swift Sources/AnnotationCanvasView.swift)"; then
+  echo "$output"
+  echo "Editor regression: annotation must not reach into the capture overlay (X-1)." >&2
+  exit 1
+fi
 rg -F -q "var selection: Set<UUID>" Sources/AnnotationDocument.swift
 rg -F -q "func store(pngData:" Sources/ScreenshotLibrary.swift
 rg -F -q "fileManager.removeItem(at: url)" Sources/ScreenshotLibrary.swift

@@ -18,6 +18,9 @@ pub const Model = struct {
     last_action: Action = .none,
     interaction_hover: Action = .none,
     interaction_pressed: Action = .none,
+    tool: AnnotationTool = .select,
+    can_undo: bool = false,
+    can_redo: bool = false,
     retention: Retention = .week,
     autosave: bool = true,
     high_contrast: bool = false,
@@ -93,6 +96,24 @@ pub const Model = struct {
         return if (model.copied) "Copied screenshot" else "Copy screenshot";
     }
 
+    pub fn annotationToolbarSurface(model: *const Model) bool {
+        return model.surface == .annotation_toolbar;
+    }
+
+    pub fn toolSelect(model: *const Model) bool { return model.tool == .select; }
+    pub fn toolArrow(model: *const Model) bool { return model.tool == .arrow; }
+    pub fn toolBox(model: *const Model) bool { return model.tool == .box; }
+    pub fn toolEllipse(model: *const Model) bool { return model.tool == .ellipse; }
+    pub fn toolLine(model: *const Model) bool { return model.tool == .line; }
+    pub fn toolPen(model: *const Model) bool { return model.tool == .pen; }
+    pub fn toolText(model: *const Model) bool { return model.tool == .text; }
+    pub fn toolMark(model: *const Model) bool { return model.tool == .mark; }
+    pub fn toolStep(model: *const Model) bool { return model.tool == .step; }
+    pub fn toolHide(model: *const Model) bool { return model.tool == .hide; }
+    pub fn toolBlur(model: *const Model) bool { return model.tool == .blur; }
+    pub fn canUndo(model: *const Model) bool { return model.can_undo; }
+    pub fn canRedo(model: *const Model) bool { return model.can_redo; }
+
     pub fn retentionDay(model: *const Model) bool { return model.retention == .day; }
     pub fn retentionWeek(model: *const Model) bool { return model.retention == .week; }
     pub fn retentionMonth(model: *const Model) bool { return model.retention == .month; }
@@ -114,6 +135,7 @@ pub const Surface = enum {
     thumbnail,
     pinned,
     settings,
+    annotation_toolbar,
 };
 
 pub const TrayPosition = enum {
@@ -121,6 +143,20 @@ pub const TrayPosition = enum {
     right,
     bottom,
     top,
+};
+
+pub const AnnotationTool = enum {
+    select,
+    arrow,
+    box,
+    ellipse,
+    line,
+    pen,
+    text,
+    mark,
+    step,
+    hide,
+    blur,
 };
 
 pub const Retention = enum {
@@ -149,6 +185,22 @@ pub const Action = enum {
     autosave_on,
     autosave_off,
     open_folder,
+    tool_select,
+    tool_arrow,
+    tool_box,
+    tool_ellipse,
+    tool_line,
+    tool_pen,
+    tool_text,
+    tool_mark,
+    tool_step,
+    tool_hide,
+    tool_blur,
+    editor_undo,
+    editor_redo,
+    editor_save,
+    editor_copy,
+    editor_close,
 };
 
 pub const Metric = enum(c_int) {
@@ -183,6 +235,22 @@ pub const Msg = union(enum) {
     autosave_on,
     autosave_off,
     open_folder,
+    tool_select,
+    tool_arrow,
+    tool_box,
+    tool_ellipse,
+    tool_line,
+    tool_pen,
+    tool_text,
+    tool_mark,
+    tool_step,
+    tool_hide,
+    tool_blur,
+    editor_undo,
+    editor_redo,
+    editor_save,
+    editor_copy,
+    editor_close,
     set_count: u32,
     set_collapsed: bool,
     set_vertical: bool,
@@ -196,6 +264,9 @@ pub const Msg = union(enum) {
     set_copied: bool,
     set_position: TrayPosition,
     set_retention: Retention,
+    set_tool: AnnotationTool,
+    set_can_undo: bool,
+    set_can_redo: bool,
     set_autosave: bool,
     set_interaction_hover: Action,
     set_interaction_pressed: Action,
@@ -216,6 +287,9 @@ const command_compact_prefix = "control.compact:";
 const command_copied_prefix = "control.copied:";
 const command_position_prefix = "settings.position:";
 const command_retention_prefix = "settings.retention:";
+const command_tool_prefix = "editor.tool:";
+const command_can_undo_prefix = "editor.can_undo:";
+const command_can_redo_prefix = "editor.can_redo:";
 const command_autosave_prefix = "settings.autosave:";
 const command_interaction_hover_prefix = "ui.hover:";
 const command_interaction_pressed_prefix = "ui.pressed:";
@@ -304,6 +378,23 @@ fn update(model: *Model, msg: Msg) void {
             model.last_action = .autosave_off;
         },
         .open_folder => model.last_action = .open_folder,
+        .tool_select => { model.tool = .select; model.last_action = .tool_select; },
+        .tool_arrow => { model.tool = .arrow; model.last_action = .tool_arrow; },
+        .tool_box => { model.tool = .box; model.last_action = .tool_box; },
+        .tool_ellipse => { model.tool = .ellipse; model.last_action = .tool_ellipse; },
+        .tool_line => { model.tool = .line; model.last_action = .tool_line; },
+        .tool_pen => { model.tool = .pen; model.last_action = .tool_pen; },
+        .tool_text => { model.tool = .text; model.last_action = .tool_text; },
+        .tool_mark => { model.tool = .mark; model.last_action = .tool_mark; },
+        .tool_step => { model.tool = .step; model.last_action = .tool_step; },
+        .tool_hide => { model.tool = .hide; model.last_action = .tool_hide; },
+        .tool_blur => { model.tool = .blur; model.last_action = .tool_blur; },
+        .editor_undo => model.last_action = .editor_undo,
+        .editor_redo => model.last_action = .editor_redo,
+        .editor_save => model.last_action = .editor_save,
+        .editor_copy => model.last_action = .editor_copy,
+        .editor_close => model.last_action = .editor_close,
+
         .set_count => |count| model.count = count,
         .set_collapsed => |collapsed| model.collapsed = collapsed,
         .set_vertical => |vertical| model.vertical = vertical,
@@ -317,6 +408,9 @@ fn update(model: *Model, msg: Msg) void {
         .set_copied => |copied| model.copied = copied,
         .set_position => |position| model.position = position,
         .set_retention => |retention| model.retention = retention,
+        .set_tool => |tool| model.tool = tool,
+        .set_can_undo => |value| model.can_undo = value,
+        .set_can_redo => |value| model.can_redo = value,
         .set_autosave => |enabled| model.autosave = enabled,
         .set_interaction_hover => |action| model.interaction_hover = action,
         .set_interaction_pressed => |action| model.interaction_pressed = action,
@@ -361,6 +455,7 @@ fn onCommand(name: []const u8) ?Msg {
         if (std.mem.eql(u8, raw, "thumbnail")) return .{ .set_surface = .thumbnail };
         if (std.mem.eql(u8, raw, "pinned")) return .{ .set_surface = .pinned };
         if (std.mem.eql(u8, raw, "settings")) return .{ .set_surface = .settings };
+        if (std.mem.eql(u8, raw, "annotation_toolbar")) return .{ .set_surface = .annotation_toolbar };
         return null;
     }
     if (std.mem.startsWith(u8, name, command_compact_prefix)) {
@@ -374,6 +469,15 @@ fn onCommand(name: []const u8) ?Msg {
     }
     if (std.mem.startsWith(u8, name, command_retention_prefix)) {
         return .{ .set_retention = parseRetention(name[command_retention_prefix.len..]) orelse return null };
+    }
+    if (std.mem.startsWith(u8, name, command_tool_prefix)) {
+        return .{ .set_tool = parseTool(name[command_tool_prefix.len..]) orelse return null };
+    }
+    if (std.mem.startsWith(u8, name, command_can_undo_prefix)) {
+        return .{ .set_can_undo = parseBool(name[command_can_undo_prefix.len..]) orelse return null };
+    }
+    if (std.mem.startsWith(u8, name, command_can_redo_prefix)) {
+        return .{ .set_can_redo = parseBool(name[command_can_redo_prefix.len..]) orelse return null };
     }
     if (std.mem.startsWith(u8, name, command_autosave_prefix)) {
         return .{ .set_autosave = parseBool(name[command_autosave_prefix.len..]) orelse return null };
@@ -401,6 +505,21 @@ fn parsePosition(raw: []const u8) ?TrayPosition {
     return null;
 }
 
+fn parseTool(raw: []const u8) ?AnnotationTool {
+    if (std.mem.eql(u8, raw, "select")) return .select;
+    if (std.mem.eql(u8, raw, "arrow")) return .arrow;
+    if (std.mem.eql(u8, raw, "box")) return .box;
+    if (std.mem.eql(u8, raw, "ellipse")) return .ellipse;
+    if (std.mem.eql(u8, raw, "line")) return .line;
+    if (std.mem.eql(u8, raw, "pen")) return .pen;
+    if (std.mem.eql(u8, raw, "text")) return .text;
+    if (std.mem.eql(u8, raw, "mark")) return .mark;
+    if (std.mem.eql(u8, raw, "step")) return .step;
+    if (std.mem.eql(u8, raw, "hide")) return .hide;
+    if (std.mem.eql(u8, raw, "blur")) return .blur;
+    return null;
+}
+
 fn parseRetention(raw: []const u8) ?Retention {
     if (std.mem.eql(u8, raw, "day")) return .day;
     if (std.mem.eql(u8, raw, "week")) return .week;
@@ -411,7 +530,7 @@ fn parseRetention(raw: []const u8) ?Retention {
 
 fn parseAction(raw: []const u8) ?Action {
     const value = std.fmt.parseUnsigned(u8, raw, 10) catch return null;
-    if (value > @intFromEnum(Action.open_folder)) return null;
+    if (value > @intFromEnum(Action.editor_close)) return null;
     return @enumFromInt(value);
 }
 
@@ -459,6 +578,23 @@ fn actionForMessage(msg: Msg) Action {
         .autosave_on => .autosave_on,
         .autosave_off => .autosave_off,
         .open_folder => .open_folder,
+        .tool_select => .tool_select,
+        .tool_arrow => .tool_arrow,
+        .tool_box => .tool_box,
+        .tool_ellipse => .tool_ellipse,
+        .tool_line => .tool_line,
+        .tool_pen => .tool_pen,
+        .tool_text => .tool_text,
+        .tool_mark => .tool_mark,
+        .tool_step => .tool_step,
+        .tool_hide => .tool_hide,
+        .tool_blur => .tool_blur,
+        .editor_undo => .editor_undo,
+        .editor_redo => .editor_redo,
+        .editor_save => .editor_save,
+        .editor_copy => .editor_copy,
+        .editor_close => .editor_close,
+
         else => .none,
     };
 }

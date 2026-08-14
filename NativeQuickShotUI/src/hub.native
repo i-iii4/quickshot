@@ -48,6 +48,29 @@
           </row>
         </if>
         <else>
+          <if test="{annotationToolbarSurface}">
+            <row gap="8" cross="center" padding="6" label="Annotation toolbar">
+              <button-group gap="0" cross="center" label="Annotation tool">
+                <button size="sm" selected="{toolSelect}" label="Tool select" on-press="tool_select">Select</button>
+                <button size="sm" selected="{toolArrow}" label="Tool arrow" on-press="tool_arrow">Arrow</button>
+                <button size="sm" selected="{toolBox}" label="Tool box" on-press="tool_box">Box</button>
+                <button size="sm" selected="{toolEllipse}" label="Tool ellipse" on-press="tool_ellipse">Oval</button>
+                <button size="sm" selected="{toolLine}" label="Tool line" on-press="tool_line">Line</button>
+                <button size="sm" selected="{toolPen}" label="Tool pen" on-press="tool_pen">Pen</button>
+                <button size="sm" selected="{toolText}" label="Tool text" on-press="tool_text">Text</button>
+                <button size="sm" selected="{toolMark}" label="Tool mark" on-press="tool_mark">Mark</button>
+                <button size="sm" selected="{toolStep}" label="Tool step" on-press="tool_step">Step</button>
+                <button size="sm" selected="{toolHide}" label="Tool hide" on-press="tool_hide">Hide</button>
+                <button size="sm" selected="{toolBlur}" label="Tool blur" on-press="tool_blur">Blur</button>
+              </button-group>
+              <button size="sm" variant="secondary" icon="refresh-cw" label="Editor undo" on-press="editor_undo"></button>
+              <button size="sm" variant="secondary" icon="repeat" label="Editor redo" on-press="editor_redo"></button>
+              <button size="sm" variant="secondary" icon="save" label="Editor save" on-press="editor_save">Save</button>
+              <button size="sm" variant="secondary" icon="copy" label="Editor copy" on-press="editor_copy"></button>
+              <button size="sm" variant="destructive" icon="x" label="Editor close" on-press="editor_close"></button>
+            </row>
+          </if>
+          <else>
             <if test="{settingsSurface}">
               <column gap="10" padding="20" background="background" label="QuickShot settings">
                 <text>Thumbnail tray position</text>
@@ -124,4 +147,5 @@
       </else>
     </else>
   </else>
+          </else>
 </row>

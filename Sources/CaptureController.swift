@@ -25,6 +25,7 @@ final class CaptureController {
         let artifactStore = CaptureArtifactStore()
         self.artifactStore = artifactStore
         self.thumbnails = ThumbnailManager(artifactStore: artifactStore)
+        thumbnails.library = library
         library.start()
     }
 

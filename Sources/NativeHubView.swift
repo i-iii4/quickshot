@@ -163,6 +163,22 @@ private enum NativeHubPressedButton: Int32 {
     case autosaveOn
     case autosaveOff
     case openFolder
+    case toolSelect
+    case toolArrow
+    case toolBox
+    case toolEllipse
+    case toolLine
+    case toolPen
+    case toolText
+    case toolMark
+    case toolStep
+    case toolHide
+    case toolBlur
+    case editorUndo
+    case editorRedo
+    case editorSave
+    case editorCopy
+    case editorClose
 }
 
 private enum NativeControlSurface: String {
@@ -173,6 +189,7 @@ private enum NativeControlSurface: String {
     case thumbnail
     case pinned
     case settings
+    case annotationToolbar = "annotation_toolbar"
 }
 
 private enum NativeInteractionChannel: String {
@@ -398,6 +415,15 @@ private final class NativeHubRenderView: NSView {
         guard self.copied != copied else { return }
         self.copied = copied
         sendCommand("control.copied:\(copied ? 1 : 0)")
+    }
+
+    func sendEditorTool(_ rawValue: String) {
+        sendCommand("editor.tool:\(rawValue)")
+    }
+
+    func sendEditorHistory(canUndo: Bool, canRedo: Bool) {
+        sendCommand("editor.can_undo:\(canUndo ? 1 : 0)")
+        sendCommand("editor.can_redo:\(canRedo ? 1 : 0)")
     }
 
     func sendSettingsRetention(_ rawValue: String) {
@@ -745,6 +771,22 @@ private final class NativeHubRenderView: NSView {
         case "Autosave on": return .autosaveOn
         case "Autosave off": return .autosaveOff
         case "Open folder": return .openFolder
+        case "Tool select": return .toolSelect
+        case "Tool arrow": return .toolArrow
+        case "Tool box": return .toolBox
+        case "Tool ellipse": return .toolEllipse
+        case "Tool line": return .toolLine
+        case "Tool pen": return .toolPen
+        case "Tool text": return .toolText
+        case "Tool mark": return .toolMark
+        case "Tool step": return .toolStep
+        case "Tool hide": return .toolHide
+        case "Tool blur": return .toolBlur
+        case "Editor undo": return .editorUndo
+        case "Editor redo": return .editorRedo
+        case "Editor save": return .editorSave
+        case "Editor copy": return .editorCopy
+        case "Editor close": return .editorClose
         default: break
         }
         switch title {
@@ -1221,7 +1263,9 @@ final class NativeHubShellView: NSView {
             case .copyAll: self.onCopyAll?()
             case .none, .copy, .dismiss, .positionLeft, .positionRight, .positionBottom,
                  .positionTop, .retentionDay, .retentionWeek, .retentionMonth,
-                 .retentionForever, .autosaveOn, .autosaveOff, .openFolder:
+                 .retentionForever, .autosaveOn, .autosaveOff, .openFolder,
+                 .toolSelect, .toolArrow, .toolBox, .toolEllipse, .toolLine, .toolPen, .toolText, .toolMark, .toolStep, .toolHide, .toolBlur,
+                 .editorUndo, .editorRedo, .editorSave, .editorCopy, .editorClose:
                 break
             }
         }
@@ -2698,6 +2742,106 @@ final class NativeSettingsContentView: NSView {
 
     func debugPixel(at point: NSPoint) -> UInt32 {
         nativeView.debugPixel(at: point)
+    }
+#endif
+}
+
+/// Поверхность панели инструментов: Native SDK владеет геометрией, hover,
+/// нажатием и типизированной диспетчеризацией.
+@MainActor
+final class NativeAnnotationToolbarSurface: NSView {
+    var onCommand: ((AnnotationToolbarView.Command) -> Void)?
+
+    private let nativeView = NativeHubRenderView(frame: .zero)
+    private var measuredFittingSize = NSSize(width: 720, height: 40)
+    private var selectedTool: AnnotationTool = .select
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        nativeView.setSurface(.annotationToolbar)
+        nativeView.onButtonPressed = { [weak self] pressed in
+            guard let self, let command = Self.command(for: pressed) else { return }
+            if case let .tool(tool) = command { self.setSelectedTool(tool) }
+            self.onCommand?(command)
+        }
+        addSubview(nativeView)
+        remeasure()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var fittingSize: NSSize { measuredFittingSize }
+    override var intrinsicContentSize: NSSize { fittingSize }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// Пустое место панели не крадёт клики: события получают только кнопки.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden, alphaValue > 0.01, bounds.contains(point) else { return nil }
+        let local = convert(point, to: nativeView)
+        return nativeView.hasInteractiveButton(at: local) ? nativeView : nil
+    }
+
+    override func layout() {
+        super.layout()
+        nativeView.frame = bounds
+        nativeView.setSurface(.annotationToolbar)
+        nativeView.renderNow()
+    }
+
+    func setSelectedTool(_ tool: AnnotationTool) {
+        guard selectedTool != tool else { return }
+        selectedTool = tool
+        nativeView.setSurface(.annotationToolbar)
+        nativeView.sendEditorTool(tool.rawValue)
+        nativeView.renderNow()
+        needsDisplay = true
+    }
+
+    func setHistoryState(canUndo: Bool, canRedo: Bool) {
+        nativeView.setSurface(.annotationToolbar)
+        nativeView.sendEditorHistory(canUndo: canUndo, canRedo: canRedo)
+        nativeView.renderNow()
+        needsDisplay = true
+    }
+
+    private func remeasure() {
+        let contentSize = nativeView.measureSemanticContentSize(width: 1600)
+        measuredFittingSize = NSSize(width: max(720, contentSize.width),
+                                     height: max(40, contentSize.height))
+        invalidateIntrinsicContentSize()
+    }
+
+    private static func command(for pressed: NativeHubPressedButton) -> AnnotationToolbarView.Command? {
+        switch pressed {
+        case .toolSelect: return .tool(.select)
+        case .toolArrow: return .tool(.arrow)
+        case .toolBox: return .tool(.box)
+        case .toolEllipse: return .tool(.ellipse)
+        case .toolLine: return .tool(.line)
+        case .toolPen: return .tool(.pen)
+        case .toolText: return .tool(.text)
+        case .toolMark: return .tool(.mark)
+        case .toolStep: return .tool(.step)
+        case .toolHide: return .tool(.hide)
+        case .toolBlur: return .tool(.blur)
+        case .editorUndo: return .undo
+        case .editorRedo: return .redo
+        case .editorSave: return .save
+        case .editorCopy: return .copy
+        case .editorClose: return .close
+        default: return nil
+        }
+    }
+
+#if TESTING
+    func debugButtons() -> [NativeControlDebugButtonSnapshot] {
+        nativeDebugButtons(nativeView, in: self)
+    }
+
+    func debugHoverButton(title: String) {
+        nativeDebugHover(title: title, nativeView: nativeView)
     }
 #endif
 }

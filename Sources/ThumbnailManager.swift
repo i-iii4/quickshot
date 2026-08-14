@@ -66,6 +66,8 @@ final class ThumbnailManager {
     private var collapsedPeekGeneration: UInt = 0
     private var hoverExitGeneration: UInt = 0
     private weak var collapsedPeekItem: ThumbnailWindow?
+    /// Библиотека снимков: редактор перезаписывает через неё файл в папке.
+    weak var library: ScreenshotLibrary?
     private var trayHoverActive = false
     private var pointerInsideHoverIsland = false
     private var capturePresentationSessions: Set<UUID> = []
@@ -841,6 +843,27 @@ final class ThumbnailManager {
         PinnedWindowController.show(artifact: t.artifact,
                                     on: t.screen,
                                     artifactStore: artifactStore)
+    }
+
+    /// Открыть редактор аннотаций для карточки (`ED-1`).
+    func openEditor(_ t: ThumbnailWindow) {
+        AnnotationEditorController.present(artifact: t.artifact,
+                                           library: library) { [weak self] artifact, image in
+            self?.applyEditedImage(image, to: artifact)
+        }
+    }
+
+    /// Сохранение из редактора: файл в папке перезаписывается изменённой
+    /// версией (`ED-2`). Признак `Edited` на карточке и подмена версии для
+    /// выдачи — следующий пакет работ.
+    private func applyEditedImage(_ image: CGImage, to artifact: CaptureArtifact) {
+        guard let library, library.settings.autosaveEnabled,
+              let png = Clipboard.pngData(cgImage: image) else { return }
+        if let url = artifact.libraryURL {
+            artifact.libraryURL = library.update(url: url, with: png)
+        } else {
+            artifact.libraryURL = library.store(pngData: png)
+        }
     }
 
     func beginDrag(_ t: ThumbnailWindow) -> CaptureArtifactDragPayload? {

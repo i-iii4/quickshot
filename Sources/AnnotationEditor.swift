@@ -1,0 +1,215 @@
+import AppKit
+
+/// Окно редактора аннотаций.
+///
+/// Открывается для готового снимка — из карточки трея или закреплённого окна.
+/// Оверлей захвата редактор не трогает: смешение выделения области с рисованием
+/// отклонено (`X-1`), потому что рисковало бы главным сценарием продукта.
+@MainActor
+final class AnnotationEditorController: NSObject, NSWindowDelegate {
+    /// Открытые редакторы по идентификатору снимка: один снимок нельзя
+    /// открыть дважды (`ED-15`).
+    private static var open: [UUID: AnnotationEditorController] = [:]
+
+    private let artifact: CaptureArtifact
+    private let library: ScreenshotLibrary?
+    private let onSaved: (CaptureArtifact, CGImage) -> Void
+
+    private var window: NSWindow?
+    private let canvas = AnnotationCanvasView(frame: .zero)
+    private let toolbar = AnnotationToolbarView(frame: .zero)
+    private var textField: NSTextField?
+    private var editingObjectID: UUID?
+
+    static func present(artifact: CaptureArtifact,
+                        library: ScreenshotLibrary?,
+                        onSaved: @escaping (CaptureArtifact, CGImage) -> Void) {
+        if let existing = open[artifact.id] {
+            existing.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let controller = AnnotationEditorController(artifact: artifact,
+                                                    library: library,
+                                                    onSaved: onSaved)
+        open[artifact.id] = controller
+        controller.show()
+    }
+
+    private init(artifact: CaptureArtifact,
+                 library: ScreenshotLibrary?,
+                 onSaved: @escaping (CaptureArtifact, CGImage) -> Void) {
+        self.artifact = artifact
+        self.library = library
+        self.onSaved = onSaved
+        super.init()
+    }
+
+    private func show() {
+        let image = artifact.fullImage() ?? artifact.previewImage
+        canvas.image = image
+        canvas.onDocumentChanged = { [weak self] in self?.syncToolbar() }
+        canvas.onRequestTextEditing = { [weak self] id in self?.beginTextEditing(id) }
+        toolbar.onCommand = { [weak self] command in self?.handle(command) }
+
+        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let maximum = CGSize(width: screen.width * 0.9, height: screen.height * 0.9)
+        let fitted = Self.windowSize(for: CGSize(width: image.width, height: image.height),
+                                     maximum: maximum,
+                                     toolbarHeight: toolbar.fittingSize.height)
+
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: fitted),
+                              styleMask: [.titled, .closable, .resizable, .miniaturizable],
+                              backing: .buffered,
+                              defer: false)
+        window.title = "Annotate Screenshot"
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.titlebarAppearsTransparent = false
+        WindowCaptureProtection.excludeFromScreenCapture(window)
+
+        let container = NSView(frame: NSRect(origin: .zero, size: fitted))
+        container.autoresizingMask = [.width, .height]
+        canvas.autoresizingMask = [.width, .height]
+        container.addSubview(canvas)
+        container.addSubview(toolbar)
+        window.contentView = container
+        layoutContents(in: container)
+
+        // Файл, открытый в редакторе, не удаляется уборкой (`ST-18`).
+        if let url = artifact.libraryURL { library?.protect(url) }
+
+        self.window = window
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(canvas)
+        NSApp.activate(ignoringOtherApps: true)
+        syncToolbar()
+    }
+
+    /// Окно вмещает снимок целиком, пока он помещается на экран; иначе
+    /// ограничивается экраном, а холст сам вписывает изображение.
+    static func windowSize(for imageSize: CGSize,
+                           maximum: CGSize,
+                           toolbarHeight: CGFloat) -> CGSize {
+        let width = min(max(720, imageSize.width), maximum.width)
+        let height = min(max(480, imageSize.height + toolbarHeight), maximum.height)
+        return CGSize(width: width, height: height)
+    }
+
+    private func layoutContents(in container: NSView) {
+        let toolbarHeight = toolbar.fittingSize.height
+        toolbar.frame = NSRect(x: 0,
+                               y: container.bounds.maxY - toolbarHeight,
+                               width: container.bounds.width,
+                               height: toolbarHeight)
+        toolbar.autoresizingMask = [.width, .minYMargin]
+        canvas.frame = NSRect(x: 0, y: 0,
+                              width: container.bounds.width,
+                              height: container.bounds.height - toolbarHeight)
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        guard let container = window?.contentView else { return }
+        layoutContents(in: container)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        if let url = artifact.libraryURL { library?.unprotect(url) }
+        Self.open.removeValue(forKey: artifact.id)
+    }
+
+    // MARK: команды
+
+    private func handle(_ command: AnnotationToolbarView.Command) {
+        switch command {
+        case let .tool(tool):
+            canvas.tool = tool
+            window?.makeFirstResponder(canvas)
+        case .undo:
+            _ = canvas.document.undo()
+            canvas.needsDisplay = true
+            syncToolbar()
+        case .redo:
+            _ = canvas.document.redo()
+            canvas.needsDisplay = true
+            syncToolbar()
+        case .save:
+            save()
+        case .copy:
+            copyToClipboard()
+        case .close:
+            window?.performClose(nil)
+        }
+    }
+
+    private func syncToolbar() {
+        toolbar.setSelectedTool(canvas.tool)
+        toolbar.setHistoryState(canUndo: canvas.document.canUndo,
+                                canRedo: canvas.document.canRedo)
+    }
+
+    /// `ED-2`: сохранение перезаписывает файл в папке; при выключенном
+    /// автосохранении файла нет, и сохранение только фиксирует изменения на
+    /// карточке (`ED-12`).
+    private func save() {
+        commitTextEditing()
+        guard let flattened = canvas.flattenedImage() else { return }
+        onSaved(artifact, flattened)
+    }
+
+    private func copyToClipboard() {
+        commitTextEditing()
+        guard let flattened = canvas.flattenedImage() else { return }
+        Clipboard.copy(preparedImage: Clipboard.prepareImage(cgImage: flattened))
+    }
+
+    // MARK: текст
+
+    private func beginTextEditing(_ id: UUID) {
+        commitTextEditing()
+        guard let object = canvas.document.objects.first(where: { $0.id == id }) else { return }
+        let rect = canvas.convert(object.geometry.boundingBox, from: nil)
+        let field = NSTextField(frame: rect.insetBy(dx: -4, dy: -4))
+        field.stringValue = object.text ?? ""
+        field.font = .systemFont(ofSize: object.style.fontSize)
+        field.isBordered = true
+        field.backgroundColor = .white
+        field.focusRingType = .none
+        field.target = self
+        field.action = #selector(textFieldCommitted)
+        canvas.addSubview(field)
+        window?.makeFirstResponder(field)
+        textField = field
+        editingObjectID = id
+    }
+
+    @objc private func textFieldCommitted() {
+        commitTextEditing()
+    }
+
+    private func commitTextEditing() {
+        guard let field = textField, let id = editingObjectID else { return }
+        let value = field.stringValue
+        canvas.document.update(id: id) { object in
+            object.text = value
+            if case let .rect(rect, radius) = object.geometry {
+                let size = (value as NSString).size(withAttributes: [
+                    .font: NSFont.systemFont(ofSize: object.style.fontSize),
+                ])
+                object.geometry = .rect(CGRect(origin: rect.origin,
+                                               size: CGSize(width: max(size.width, 8),
+                                                            height: max(size.height, 8))),
+                                        cornerRadius: radius)
+            }
+        }
+        // Пустая подпись — это отказ от неё, а не пустой объект на снимке.
+        if value.isEmpty { canvas.document.remove(ids: [id]) }
+        field.removeFromSuperview()
+        textField = nil
+        editingObjectID = nil
+        canvas.needsDisplay = true
+        window?.makeFirstResponder(canvas)
+        syncToolbar()
+    }
+}

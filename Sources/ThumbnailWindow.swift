@@ -190,7 +190,11 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         movedFar = false
         startMouse = NSEvent.mouseLocation
         if collapsed { return }
-        if event.clickCount == 2 { openFull() }
+        // Двойной клик отдан редактору (`ED-1`); закрепление снимка переехало
+        // на Option — оно нужно реже, чем правка.
+        if event.clickCount == 2 {
+            if event.modifierFlags.contains(.option) { openFull() } else { openEditor() }
+        }
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -211,6 +215,11 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     private func openFull() {
         guard let owner else { return }
         manager?.pin(owner)
+    }
+
+    private func openEditor() {
+        guard let owner else { return }
+        manager?.openEditor(owner)
     }
 
     func flashCopied() {
