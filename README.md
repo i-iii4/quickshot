@@ -218,5 +218,7 @@ permission to the bundle.
 - `SYSTEM_REQUIREMENTS.md` - product requirements outside annotation: tray
   scrolling, on-disk storage with expiry, and the edited-screenshot lifecycle.
   Planned scope, not yet implemented.
+- `PLAN.md` - work plan for the requirements above: packages, dependencies,
+  and acceptance gates. No schedules, scope only.
 - `CAPTURE_ARCHITECTURE.md` - capture decision, transition status, and plan.
 - `DEVLOG.md` - dated engineering notes.
