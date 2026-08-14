@@ -215,5 +215,8 @@ permission to the bundle.
 - `PRODUCT_CONTRACT.md` - UX requirements that define regressions.
 - `ANNOTATION_REQUIREMENTS.md` - product requirements for the annotation
   feature, based on a market review. Planned scope, not yet implemented.
+- `SYSTEM_REQUIREMENTS.md` - product requirements outside annotation: tray
+  scrolling, on-disk storage with expiry, and the edited-screenshot lifecycle.
+  Planned scope, not yet implemented.
 - `CAPTURE_ARCHITECTURE.md` - capture decision, transition status, and plan.
 - `DEVLOG.md` - dated engineering notes.
