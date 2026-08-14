@@ -10,6 +10,7 @@ final class CaptureController {
 
     private let artifactStore: CaptureArtifactStore
     private let thumbnails: ThumbnailManager
+    let library = ScreenshotLibrary()
     private let snapshotProvider = DirectScreenSnapshotProvider()
     private var sequenceGenerator = CaptureSequenceGenerator()
     private var selectionSession: CaptureSession?
@@ -24,6 +25,7 @@ final class CaptureController {
         let artifactStore = CaptureArtifactStore()
         self.artifactStore = artifactStore
         self.thumbnails = ThumbnailManager(artifactStore: artifactStore)
+        library.start()
     }
 
     func prewarmCapturePipeline() {
@@ -140,12 +142,27 @@ final class CaptureController {
         do {
             let artifact = try artifactStore.admit(sequence: sequence, image: image)
             thumbnails.add(artifact: artifact, on: screen)
+            storeInLibrary(artifact)
             let mouseUpToCardMs = (CFAbsoluteTimeGetCurrent() - mouseUpAt) * 1000
             Self.log.info("capture thumbnail added sequence=\(sequence.rawValue, privacy: .public) width=\(image.width, privacy: .public) height=\(image.height, privacy: .public) mouseUpToCardMs=\(mouseUpToCardMs, privacy: .public)")
         } catch {
             artifactStore.markCaptureFailed(sequence)
             NSApp.requestUserAttention(.criticalRequest)
             Self.log.error("capture artifact rejected sequence=\(sequence.rawValue, privacy: .public) error=\(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// `ST-1`: снимок попадает на диск в момент захвата, а не при экспорте.
+    /// Запись идёт следом за уже запущенной подготовкой PNG, поэтому второго
+    /// кодирования не происходит и горячий путь захвата не удлиняется.
+    private func storeInLibrary(_ artifact: CaptureArtifact) {
+        guard library.settings.autosaveEnabled else { return }
+        let capturedAt = Date()
+        Task { @MainActor [weak self, weak artifact] in
+            guard let self, let artifact else { return }
+            let prepared = await artifact.preparedImage()
+            guard let png = prepared.png else { return }
+            artifact.libraryURL = self.library.store(pngData: png, capturedAt: capturedAt)
         }
     }
 

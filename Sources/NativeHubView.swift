@@ -156,6 +156,13 @@ private enum NativeHubPressedButton: Int32 {
     case positionRight
     case positionBottom
     case positionTop
+    case retentionDay
+    case retentionWeek
+    case retentionMonth
+    case retentionForever
+    case autosaveOn
+    case autosaveOff
+    case openFolder
 }
 
 private enum NativeControlSurface: String {
@@ -391,6 +398,14 @@ private final class NativeHubRenderView: NSView {
         guard self.copied != copied else { return }
         self.copied = copied
         sendCommand("control.copied:\(copied ? 1 : 0)")
+    }
+
+    func sendSettingsRetention(_ rawValue: String) {
+        sendCommand("settings.retention:\(rawValue)")
+    }
+
+    func sendSettingsAutosave(_ enabled: Bool) {
+        sendCommand("settings.autosave:\(enabled ? 1 : 0)")
     }
 
     func sendSettingsPosition(_ rawValue: String) {
@@ -723,6 +738,13 @@ private final class NativeHubRenderView: NSView {
         case "Tray right": return .positionRight
         case "Tray bottom": return .positionBottom
         case "Tray top": return .positionTop
+        case "Keep a day": return .retentionDay
+        case "Keep a week": return .retentionWeek
+        case "Keep a month": return .retentionMonth
+        case "Keep forever": return .retentionForever
+        case "Autosave on": return .autosaveOn
+        case "Autosave off": return .autosaveOff
+        case "Open folder": return .openFolder
         default: break
         }
         switch title {
@@ -1197,7 +1219,9 @@ final class NativeHubShellView: NSView {
             case .delete: self.onDelete?()
             case .saveAs: self.onSaveAs?()
             case .copyAll: self.onCopyAll?()
-            case .none, .copy, .dismiss, .positionLeft, .positionRight, .positionBottom, .positionTop:
+            case .none, .copy, .dismiss, .positionLeft, .positionRight, .positionBottom,
+                 .positionTop, .retentionDay, .retentionWeek, .retentionMonth,
+                 .retentionForever, .autosaveOn, .autosaveOff, .openFolder:
                 break
             }
         }
@@ -2537,10 +2561,16 @@ final class NativePinnedCopyButtonView: NSView {
 
 final class NativeSettingsContentView: NSView {
     var onPositionSelected: ((String) -> Void)?
+    var onRetentionSelected: ((String) -> Void)?
+    var onAutosaveChanged: ((Bool) -> Void)?
+    var onOpenFolder: (() -> Void)?
 
     private let nativeView = NativeHubRenderView(frame: .zero)
     private var selectedPosition = "right"
+    private var selectedRetention = "week"
+    private var autosaveEnabled = true
     private var measuredFittingSize = NSSize(width: 360, height: 140)
+    var onFittingSizeChanged: ((NSSize) -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -2557,6 +2587,20 @@ final class NativeSettingsContentView: NSView {
                 self?.select("bottom")
             case .positionTop:
                 self?.select("top")
+            case .retentionDay:
+                self?.selectRetention("day")
+            case .retentionWeek:
+                self?.selectRetention("week")
+            case .retentionMonth:
+                self?.selectRetention("month")
+            case .retentionForever:
+                self?.selectRetention("forever")
+            case .autosaveOn:
+                self?.setAutosave(true)
+            case .autosaveOff:
+                self?.setAutosave(false)
+            case .openFolder:
+                self?.onOpenFolder?()
             default:
                 break
             }
@@ -2598,6 +2642,45 @@ final class NativeSettingsContentView: NSView {
     private func select(_ rawValue: String) {
         setSelectedPosition(rawValue)
         onPositionSelected?(rawValue)
+    }
+
+    func setSelectedRetention(_ rawValue: String) {
+        guard selectedRetention != rawValue else { return }
+        selectedRetention = rawValue
+        nativeView.setSurface(.settings)
+        nativeView.sendSettingsRetention(rawValue)
+        nativeView.renderNow()
+        needsLayout = true
+    }
+
+    /// Выключение автосохранения убирает срок и папку из разметки, поэтому
+    /// высота окна пересчитывается вместе с состоянием.
+    func setAutosaveEnabled(_ enabled: Bool) {
+        guard autosaveEnabled != enabled else { return }
+        autosaveEnabled = enabled
+        nativeView.setSurface(.settings)
+        nativeView.sendSettingsAutosave(enabled)
+        nativeView.renderNow()
+        remeasure()
+        needsLayout = true
+    }
+
+    private func selectRetention(_ rawValue: String) {
+        setSelectedRetention(rawValue)
+        onRetentionSelected?(rawValue)
+    }
+
+    private func setAutosave(_ enabled: Bool) {
+        setAutosaveEnabled(enabled)
+        onAutosaveChanged?(enabled)
+    }
+
+    private func remeasure() {
+        let contentSize = nativeView.measureSemanticContentSize(width: 800)
+        measuredFittingSize = NSSize(width: max(360, contentSize.width),
+                                     height: contentSize.height)
+        invalidateIntrinsicContentSize()
+        onFittingSizeChanged?(measuredFittingSize)
     }
 
 #if TESTING

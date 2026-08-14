@@ -18,6 +18,8 @@ pub const Model = struct {
     last_action: Action = .none,
     interaction_hover: Action = .none,
     interaction_pressed: Action = .none,
+    retention: Retention = .week,
+    autosave: bool = true,
     high_contrast: bool = false,
     reduce_motion: bool = false,
 
@@ -91,6 +93,13 @@ pub const Model = struct {
         return if (model.copied) "Copied screenshot" else "Copy screenshot";
     }
 
+    pub fn retentionDay(model: *const Model) bool { return model.retention == .day; }
+    pub fn retentionWeek(model: *const Model) bool { return model.retention == .week; }
+    pub fn retentionMonth(model: *const Model) bool { return model.retention == .month; }
+    pub fn retentionForever(model: *const Model) bool { return model.retention == .forever; }
+    pub fn autosaveEnabled(model: *const Model) bool { return model.autosave; }
+    pub fn autosaveDisabled(model: *const Model) bool { return !model.autosave; }
+
     pub fn positionLeft(model: *const Model) bool { return model.position == .left; }
     pub fn positionRight(model: *const Model) bool { return model.position == .right; }
     pub fn positionBottom(model: *const Model) bool { return model.position == .bottom; }
@@ -114,6 +123,13 @@ pub const TrayPosition = enum {
     top,
 };
 
+pub const Retention = enum {
+    day,
+    week,
+    month,
+    forever,
+};
+
 pub const Action = enum {
     none,
     toggle,
@@ -126,6 +142,13 @@ pub const Action = enum {
     position_right,
     position_bottom,
     position_top,
+    retention_day,
+    retention_week,
+    retention_month,
+    retention_forever,
+    autosave_on,
+    autosave_off,
+    open_folder,
 };
 
 pub const Metric = enum(c_int) {
@@ -153,6 +176,13 @@ pub const Msg = union(enum) {
     position_right,
     position_bottom,
     position_top,
+    retention_day,
+    retention_week,
+    retention_month,
+    retention_forever,
+    autosave_on,
+    autosave_off,
+    open_folder,
     set_count: u32,
     set_collapsed: bool,
     set_vertical: bool,
@@ -165,6 +195,8 @@ pub const Msg = union(enum) {
     set_compact: bool,
     set_copied: bool,
     set_position: TrayPosition,
+    set_retention: Retention,
+    set_autosave: bool,
     set_interaction_hover: Action,
     set_interaction_pressed: Action,
 };
@@ -183,6 +215,8 @@ const command_surface_prefix = "surface:";
 const command_compact_prefix = "control.compact:";
 const command_copied_prefix = "control.copied:";
 const command_position_prefix = "settings.position:";
+const command_retention_prefix = "settings.retention:";
+const command_autosave_prefix = "settings.autosave:";
 const command_interaction_hover_prefix = "ui.hover:";
 const command_interaction_pressed_prefix = "ui.pressed:";
 
@@ -245,6 +279,31 @@ fn update(model: *Model, msg: Msg) void {
             model.position = .top;
             model.last_action = .position_top;
         },
+        .retention_day => {
+            model.retention = .day;
+            model.last_action = .retention_day;
+        },
+        .retention_week => {
+            model.retention = .week;
+            model.last_action = .retention_week;
+        },
+        .retention_month => {
+            model.retention = .month;
+            model.last_action = .retention_month;
+        },
+        .retention_forever => {
+            model.retention = .forever;
+            model.last_action = .retention_forever;
+        },
+        .autosave_on => {
+            model.autosave = true;
+            model.last_action = .autosave_on;
+        },
+        .autosave_off => {
+            model.autosave = false;
+            model.last_action = .autosave_off;
+        },
+        .open_folder => model.last_action = .open_folder,
         .set_count => |count| model.count = count,
         .set_collapsed => |collapsed| model.collapsed = collapsed,
         .set_vertical => |vertical| model.vertical = vertical,
@@ -257,6 +316,8 @@ fn update(model: *Model, msg: Msg) void {
         .set_compact => |compact| model.compact = compact,
         .set_copied => |copied| model.copied = copied,
         .set_position => |position| model.position = position,
+        .set_retention => |retention| model.retention = retention,
+        .set_autosave => |enabled| model.autosave = enabled,
         .set_interaction_hover => |action| model.interaction_hover = action,
         .set_interaction_pressed => |action| model.interaction_pressed = action,
     }
@@ -311,6 +372,12 @@ fn onCommand(name: []const u8) ?Msg {
     if (std.mem.startsWith(u8, name, command_position_prefix)) {
         return .{ .set_position = parsePosition(name[command_position_prefix.len..]) orelse return null };
     }
+    if (std.mem.startsWith(u8, name, command_retention_prefix)) {
+        return .{ .set_retention = parseRetention(name[command_retention_prefix.len..]) orelse return null };
+    }
+    if (std.mem.startsWith(u8, name, command_autosave_prefix)) {
+        return .{ .set_autosave = parseBool(name[command_autosave_prefix.len..]) orelse return null };
+    }
     if (std.mem.startsWith(u8, name, command_interaction_hover_prefix)) {
         return .{ .set_interaction_hover = parseAction(name[command_interaction_hover_prefix.len..]) orelse return null };
     }
@@ -334,9 +401,17 @@ fn parsePosition(raw: []const u8) ?TrayPosition {
     return null;
 }
 
+fn parseRetention(raw: []const u8) ?Retention {
+    if (std.mem.eql(u8, raw, "day")) return .day;
+    if (std.mem.eql(u8, raw, "week")) return .week;
+    if (std.mem.eql(u8, raw, "month")) return .month;
+    if (std.mem.eql(u8, raw, "forever")) return .forever;
+    return null;
+}
+
 fn parseAction(raw: []const u8) ?Action {
     const value = std.fmt.parseUnsigned(u8, raw, 10) catch return null;
-    if (value > @intFromEnum(Action.position_top)) return null;
+    if (value > @intFromEnum(Action.open_folder)) return null;
     return @enumFromInt(value);
 }
 
@@ -377,6 +452,13 @@ fn actionForMessage(msg: Msg) Action {
         .position_right => .position_right,
         .position_bottom => .position_bottom,
         .position_top => .position_top,
+        .retention_day => .retention_day,
+        .retention_week => .retention_week,
+        .retention_month => .retention_month,
+        .retention_forever => .retention_forever,
+        .autosave_on => .autosave_on,
+        .autosave_off => .autosave_off,
+        .open_folder => .open_folder,
         else => .none,
     };
 }

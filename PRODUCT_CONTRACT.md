@@ -141,6 +141,29 @@ fullscreen behavior remain explicit runtime release checks.
     interruptible tray progress. Collection insertion/removal/reflow and the
     clipped vertical count odometer have explicit headless regression tests.
 
+## Screenshot Storage
+
+1. A capture is written to a user-visible folder at capture time, not at export
+   time. The file exists independently of the tray.
+2. The folder is configurable; it defaults to a QuickShot folder inside the
+   user's Pictures.
+3. Stored screenshots expire. The retention window is a day, a week, a month, or
+   never, and defaults to a week.
+4. Expired screenshots are deleted permanently, never moved to the Trash: the
+   point of an expiry window is that the data is gone.
+5. The sweep runs at launch, periodically while running, and whenever the
+   retention setting changes. Shortening the window applies to already stored
+   screenshots.
+6. The sweep only deletes QuickShot's own files, identified by name, and never
+   deletes the file currently open in an editor.
+7. Autosave can be switched off entirely. With autosave off nothing is written
+   to disk: the screenshot lives in the tray and on the clipboard only.
+8. The stored file is not tied to delivery leases. Closing the tray and removing
+   a card both leave the file untouched; only expiry or the user removes it.
+9. A failure to write (missing folder, no permission, full disk) is reported
+   explicitly and never silently drops the capture: the screenshot stays in the
+   tray and on the clipboard.
+
 ## UI Architecture
 
 1. UI architecture changes must improve interaction consistency, state

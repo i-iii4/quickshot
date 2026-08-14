@@ -50,14 +50,35 @@
         <else>
             <if test="{settingsSurface}">
               <column gap="10" padding="20" background="background" label="QuickShot settings">
-                <text>Положение трея миниатюр</text>
+                <text>Thumbnail tray position</text>
                 <button-group gap="0" cross="center" label="Tray position">
-                  <button size="sm" selected="{positionLeft}" label="Tray left" on-press="position_left">Слева</button>
-                  <button size="sm" selected="{positionRight}" label="Tray right" on-press="position_right">Справа</button>
-                  <button size="sm" selected="{positionBottom}" label="Tray bottom" on-press="position_bottom">Снизу</button>
-                  <button size="sm" selected="{positionTop}" label="Tray top" on-press="position_top">Сверху</button>
+                  <button size="sm" selected="{positionLeft}" label="Tray left" on-press="position_left">Left</button>
+                  <button size="sm" selected="{positionRight}" label="Tray right" on-press="position_right">Right</button>
+                  <button size="sm" selected="{positionBottom}" label="Tray bottom" on-press="position_bottom">Bottom</button>
+                  <button size="sm" selected="{positionTop}" label="Tray top" on-press="position_top">Top</button>
                 </button-group>
-                <text size="sm" foreground="text_muted" wrap="true">Новый снимок появляется у соответствующего угла экрана.</text>
+                <text size="sm" foreground="text_muted" wrap="true">New screenshots appear at the matching screen corner.</text>
+                <text>Save screenshots to disk</text>
+                <button-group gap="0" cross="center" label="Autosave">
+                  <button size="sm" selected="{autosaveEnabled}" label="Autosave on" on-press="autosave_on">On</button>
+                  <button size="sm" selected="{autosaveDisabled}" label="Autosave off" on-press="autosave_off">Off</button>
+                </button-group>
+                <if test="{autosaveEnabled}">
+                  <text>Keep screenshots for</text>
+                  <button-group gap="0" cross="center" label="Retention">
+                    <button size="sm" selected="{retentionDay}" label="Keep a day" on-press="retention_day">A day</button>
+                    <button size="sm" selected="{retentionWeek}" label="Keep a week" on-press="retention_week">A week</button>
+                    <button size="sm" selected="{retentionMonth}" label="Keep a month" on-press="retention_month">A month</button>
+                    <button size="sm" selected="{retentionForever}" label="Keep forever" on-press="retention_forever">Forever</button>
+                  </button-group>
+                  <row gap="8" cross="center" label="Folder row">
+                    <button size="sm" variant="secondary" icon="folder" label="Open folder" on-press="open_folder">Open Folder</button>
+                  </row>
+                  <text size="sm" foreground="text_muted" wrap="true">Older screenshots are deleted permanently, not moved to the Trash.</text>
+                </if>
+                <else>
+                  <text size="sm" foreground="text_muted" wrap="true">Screenshots live in the tray and on the clipboard only. Closing the tray removes them.</text>
+                </else>
               </column>
             </if>
             <else>

@@ -145,26 +145,62 @@ struct NativeSurfaceBehaviorTests {
 
     private static func testSettingsControls() throws {
         let view = NativeSettingsContentView(frame: .zero)
-        var selections: [String] = []
-        view.onPositionSelected = { selections.append($0) }
+        var positions: [String] = []
+        var retentions: [String] = []
+        var autosave: [Bool] = []
+        var openedFolder = 0
+        view.onPositionSelected = { positions.append($0) }
+        view.onRetentionSelected = { retentions.append($0) }
+        view.onAutosaveChanged = { autosave.append($0) }
+        view.onOpenFolder = { openedFolder += 1 }
         let host = Host(view: view, size: view.fittingSize)
-        let expectedTitles = ["Tray left", "Tray right", "Tray bottom", "Tray top"]
-        let expectedIdentifiers = ["Tray left", "Tray right", "Tray bottom", "Tray top"]
 
-        try require(view.debugButtons().map(\.title) == expectedTitles, "Unexpected settings controls")
-        try require(view.debugButtons().map(\.identifier) == expectedIdentifiers,
-                    "Settings identifiers are not stable")
+        // Автосохранение включено по умолчанию, поэтому срок и папка видимы.
+        let expected = ["Tray left", "Tray right", "Tray bottom", "Tray top",
+                        "Autosave on", "Autosave off",
+                        "Keep a day", "Keep a week", "Keep a month", "Keep forever",
+                        "Open folder"]
+        try require(view.debugButtons().map(\.identifier) == expected,
+                    "Unexpected settings controls: \(view.debugButtons().map(\.identifier))")
         try requireContainedAndSeparated(view.debugButtons(), in: view.bounds, context: "settings")
-        view.debugHoverButton(title: "Tray left")
-        try require(view.debugButtons().filter(\.isHovered).map(\.title) == ["Tray left"],
+        view.debugHoverButton(title: view.debugButtons()[0].title)
+        try require(view.debugButtons().filter(\.isHovered).count == 1,
                     "Native SDK did not own settings hover")
 
-        for title in expectedTitles {
-            let button = view.debugButtons().first { $0.title == title }!
+        for identifier in ["Tray left", "Tray right", "Tray bottom", "Tray top"] {
+            let button = view.debugButtons().first { $0.identifier == identifier }!
             try host.click(button.frame, in: view)
         }
-        try require(selections == ["left", "right", "bottom", "top"],
-                    "Settings dispatch order is wrong: \(selections)")
+        try require(positions == ["left", "right", "bottom", "top"],
+                    "Settings dispatch order is wrong: \(positions)")
+
+        for identifier in ["Keep a day", "Keep a month", "Keep forever", "Keep a week"] {
+            let button = view.debugButtons().first { $0.identifier == identifier }!
+            try host.click(button.frame, in: view)
+        }
+        try require(retentions == ["day", "month", "forever", "week"],
+                    "Retention dispatch is wrong: \(retentions)")
+
+        let openFolder = view.debugButtons().first { $0.identifier == "Open folder" }!
+        try host.click(openFolder.frame, in: view)
+        try require(openedFolder == 1, "Open folder did not dispatch")
+
+        // Выключение автосохранения убирает срок и папку: держать настройку
+        // срока при выключенном сохранении бессмысленно.
+        let off = view.debugButtons().first { $0.identifier == "Autosave off" }!
+        try host.click(off.frame, in: view)
+        try require(autosave == [false], "Autosave toggle did not dispatch: \(autosave)")
+        let afterOff = view.debugButtons().map(\.identifier)
+        try require(!afterOff.contains("Keep a week") && !afterOff.contains("Open folder"),
+                    "Retention controls must disappear when autosave is off: \(afterOff)")
+        try require(afterOff.contains("Autosave on") && afterOff.contains("Autosave off"),
+                    "Autosave switch must stay visible")
+
+        let on = view.debugButtons().first { $0.identifier == "Autosave on" }!
+        try host.click(on.frame, in: view)
+        try require(autosave == [false, true], "Autosave must dispatch both ways")
+        try require(view.debugButtons().map(\.identifier).contains("Keep a week"),
+                    "Retention controls must return when autosave is on")
 
         let points = [
             NSPoint(x: 1, y: 1),

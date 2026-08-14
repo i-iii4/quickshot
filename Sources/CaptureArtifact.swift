@@ -16,7 +16,12 @@ final class CaptureArtifact {
     let sequence: CaptureSequence
     let previewImage: CGImage
     let estimatedSourceBytes: Int
+    /// Временный файл доставки: живёт по арендам буфера, drag и карточки.
     let fileURL: URL
+    /// Файл в пользовательской папке. Живёт по сроку (`ST-3`), переживает
+    /// закрытие трея (`ST-9`) и удаление карточки (`ST-10`), поэтому с
+    /// арендами не связан. `nil`, если автосохранение выключено.
+    var libraryURL: URL?
 
     private var sourceImage: CGImage?
     private var prepared: Clipboard.PreparedImage?

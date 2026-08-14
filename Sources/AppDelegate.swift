@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settings = SettingsController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        settings.attach(library: capture.library)
+
         // Пункт в строке меню: снимок, настройки, доступ, выход.
         statusItem = StatusItemController(onCapture: { [weak self] in
             self?.capture.triggerCapture()

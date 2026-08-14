@@ -27,6 +27,7 @@ OUT="$(mktemp -t quickshot-hub-tests)"
 SURFACE_OUT="$(mktemp -t quickshot-native-surface-tests)"
 TRAY_POINTER_OUT="$(mktemp -t quickshot-tray-pointer-tests)"
 TRAY_HOVER_OUT="$(mktemp -t quickshot-tray-hover-region-tests)"
+LIBRARY_MODEL_OUT="$(mktemp -t quickshot-screenshot-library-tests)"
 THUMBNAIL_LAYOUT_OUT="$(mktemp -t quickshot-thumbnail-layout-tests)"
 THUMBNAIL_MOTION_OUT="$(mktemp -t quickshot-thumbnail-motion-tests)"
 THUMBNAIL_COLLECTION_OUT="$(mktemp -t quickshot-thumbnail-collection-tests)"
@@ -42,7 +43,7 @@ CAPTURE_SEQUENCE_OUT="$(mktemp -t quickshot-capture-sequence-tests)"
 CAPTURE_ARTIFACT_OUT="$(mktemp -t quickshot-capture-artifact-tests)"
 WINDOW_PROTECTION_OUT="$(mktemp -t quickshot-window-protection-tests)"
 THUMBNAIL_MODEL_OUT="$(mktemp -t quickshot-thumbnail-model-tests)"
-trap 'rm -f "$OUT" "$SURFACE_OUT" "$TRAY_POINTER_OUT" "$TRAY_HOVER_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"' EXIT
+trap 'rm -f "$OUT" "$SURFACE_OUT" "$TRAY_POINTER_OUT" "$TRAY_HOVER_OUT" "$LIBRARY_MODEL_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"' EXIT
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -186,6 +187,18 @@ xcrun swiftc \
   -o "$TRAY_HOVER_OUT"
 
 "$TRAY_HOVER_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
+  Sources/ScreenshotLibraryModel.swift \
+  Tests/ScreenshotLibraryModelTests.swift \
+  -o "$LIBRARY_MODEL_OUT"
+
+"$LIBRARY_MODEL_OUT"
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -680,6 +693,17 @@ rg -F -q "handleTooltipInteraction" Sources/NativeHubView.swift
 rg -F -q "TrayHover.tooltipDelay" Sources/NativeHubView.swift
 rg -F -q "let warm = tooltip.isVisible" Sources/NativeHubView.swift
 rg -F -q "cachedButtonNodes" Sources/NativeHubView.swift
+# Библиотека снимков не связана с арендами доставки: файл переживает закрытие
+# трея (ST-9) и удаление карточки (ST-10), уборка удаляет мимо корзины (ST-6).
+rg -F -q "func store(pngData:" Sources/ScreenshotLibrary.swift
+rg -F -q "fileManager.removeItem(at: url)" Sources/ScreenshotLibrary.swift
+rg -F -q "isScreenshotOwnedByQuickShot" Sources/ScreenshotLibrary.swift
+rg -F -q "library.store(pngData: png" Sources/CaptureController.swift
+if output="$(rg -n "trashItem|recycle" Sources/ScreenshotLibrary.swift)"; then
+  echo "$output"
+  echo "Retention regression: expired screenshots must be deleted, not moved to the Trash (ST-6)." >&2
+  exit 1
+fi
 # Панель капсулы рендерится в фактическую ширину ряда: фикс срезанного штриха.
 rg -F -q 'width="{bubbleWidth}"' NativeQuickShotUI/src/hub.native
 rg -F -q "setBubbleWidth(width)" Sources/NativeHubView.swift
