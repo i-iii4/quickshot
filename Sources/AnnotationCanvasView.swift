@@ -559,10 +559,9 @@ final class AnnotationCanvasView: NSView {
 
     func restoreObjects(_ objects: [AnnotationObject]) {
         guard !objects.isEmpty else { return }
-        document.perform { state in
-            state.objects = objects
-            state.selection = []
-        }
+        // Восстановление — исходное состояние сессии, а не правка: иначе первое
+        // же Undo в повторно открытом редакторе стирало все аннотации.
+        document.reset(to: AnnotationDocumentState(objects: objects, selection: []))
     }
 
     /// Поворот на четверть оборота (`D-44`). Применяется к итоговому

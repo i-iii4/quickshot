@@ -167,8 +167,16 @@ final class AnnotationDocument {
     private var undoStack: [AnnotationDocumentState] = []
     private var redoStack: [AnnotationDocumentState] = []
     private var gestureDepth = 0
+    /// Redo, отложенный на время жеста: жест, ничего не изменивший, обязан его
+    /// вернуть — иначе клик после Undo молча лишает пользователя повтора.
+    private var redoStackDuringGesture: [AnnotationDocumentState] = []
 
     var canUndo: Bool { !undoStack.isEmpty }
+#if TESTING
+    /// Сколько шагов истории накоплено: один жест пользователя обязан давать
+    /// ровно один.
+    var debugUndoDepth: Int { undoStack.count }
+#endif
     var canRedo: Bool { !redoStack.isEmpty }
     var objects: [AnnotationObject] { state.objects }
     var selection: Set<UUID> { state.selection }
@@ -198,6 +206,7 @@ final class AnnotationDocument {
     func beginGesture() {
         if gestureDepth == 0 {
             undoStack.append(state)
+            redoStackDuringGesture = redoStack
             redoStack.removeAll()
         }
         gestureDepth += 1
@@ -208,8 +217,35 @@ final class AnnotationDocument {
     func endGesture() {
         guard gestureDepth > 0 else { return }
         gestureDepth -= 1
-        guard gestureDepth == 0, let opening = undoStack.last else { return }
-        if opening == state { undoStack.removeLast() }
+        guard gestureDepth == 0 else { return }
+        defer { redoStackDuringGesture = [] }
+        guard let opening = undoStack.last else { return }
+        if opening == state {
+            undoStack.removeLast()
+            redoStack = redoStackDuringGesture
+        }
+    }
+
+    /// Изменение, которое не является правкой документа: выделение, загрузка
+    /// исходного состояния. В историю не пишется и Redo не сбрасывает.
+    ///
+    /// Выделение хранится в состоянии (отмена удаления обязана вернуть и
+    /// объект, и его выделенность), но САМО изменение выделения шагом истории
+    /// не является: иначе протяжка рамки набивает десятки пустых шагов, и Undo
+    /// перестаёт отменять содержательные действия.
+    private func mutateWithoutHistory(_ mutation: (inout AnnotationDocumentState) -> Void) {
+        var next = state
+        mutation(&next)
+        state = next
+    }
+
+    /// Загрузка исходного состояния (повторное открытие редактора). История
+    /// начинается заново: первое Undo не должно стирать восстановленное.
+    func reset(to newState: AnnotationDocumentState) {
+        state = newState
+        undoStack.removeAll()
+        redoStack.removeAll()
+        gestureDepth = 0
     }
 
     @discardableResult
@@ -269,7 +305,7 @@ final class AnnotationDocument {
     // MARK: выделение
 
     func select(_ ids: Set<UUID>) {
-        perform { state in
+        mutateWithoutHistory { state in
             state.selection = ids.filter { id in
                 state.objects.first { $0.id == id }?.isLocked == false
             }
@@ -277,14 +313,14 @@ final class AnnotationDocument {
     }
 
     func selectAll() {
-        perform { state in
+        mutateWithoutHistory { state in
             state.selection = Set(state.objects.filter { !$0.isLocked }.map(\.id))
         }
     }
 
     func clearSelection() {
         guard !state.selection.isEmpty else { return }
-        perform { $0.selection = [] }
+        mutateWithoutHistory { $0.selection = [] }
     }
 
     /// Верхний объект под точкой. Повторный клик в ту же точку спускается на
@@ -429,7 +465,7 @@ final class AnnotationDocument {
             .filter { state.selection.contains($0.id) }
             .compactMap(\.groupID))
         guard !groups.isEmpty else { return }
-        perform { state in
+        mutateWithoutHistory { state in
             let extra = state.objects.filter { object in
                 guard let group = object.groupID else { return false }
                 return groups.contains(group)
