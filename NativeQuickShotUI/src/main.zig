@@ -19,6 +19,9 @@ pub const Model = struct {
     interaction_hover: Action = .none,
     interaction_pressed: Action = .none,
     tool: AnnotationTool = .select,
+    palette_index: u32 = 0,
+    stroke_weight: StrokeWeight = .medium,
+    filled: bool = false,
     can_undo: bool = false,
     can_redo: bool = false,
     retention: Retention = .week,
@@ -111,6 +114,18 @@ pub const Model = struct {
     pub fn toolStep(model: *const Model) bool { return model.tool == .step; }
     pub fn toolHide(model: *const Model) bool { return model.tool == .hide; }
     pub fn toolBlur(model: *const Model) bool { return model.tool == .blur; }
+    pub fn colour0(model: *const Model) bool { return model.palette_index == 0; }
+    pub fn colour1(model: *const Model) bool { return model.palette_index == 1; }
+    pub fn colour2(model: *const Model) bool { return model.palette_index == 2; }
+    pub fn colour3(model: *const Model) bool { return model.palette_index == 3; }
+    pub fn colour4(model: *const Model) bool { return model.palette_index == 4; }
+    pub fn colour5(model: *const Model) bool { return model.palette_index == 5; }
+    pub fn weightThin(model: *const Model) bool { return model.stroke_weight == .thin; }
+    pub fn weightMedium(model: *const Model) bool { return model.stroke_weight == .medium; }
+    pub fn weightThick(model: *const Model) bool { return model.stroke_weight == .thick; }
+    pub fn fillOn(model: *const Model) bool { return model.filled; }
+    pub fn fillOff(model: *const Model) bool { return !model.filled; }
+
     pub fn canUndo(model: *const Model) bool { return model.can_undo; }
     pub fn canRedo(model: *const Model) bool { return model.can_redo; }
 
@@ -143,6 +158,12 @@ pub const TrayPosition = enum {
     right,
     bottom,
     top,
+};
+
+pub const StrokeWeight = enum {
+    thin,
+    medium,
+    thick,
 };
 
 pub const AnnotationTool = enum {
@@ -201,6 +222,17 @@ pub const Action = enum {
     editor_save,
     editor_copy,
     editor_close,
+    colour_0,
+    colour_1,
+    colour_2,
+    colour_3,
+    colour_4,
+    colour_5,
+    weight_thin,
+    weight_medium,
+    weight_thick,
+    fill_on,
+    fill_off,
 };
 
 pub const Metric = enum(c_int) {
@@ -251,6 +283,17 @@ pub const Msg = union(enum) {
     editor_save,
     editor_copy,
     editor_close,
+    colour_0,
+    colour_1,
+    colour_2,
+    colour_3,
+    colour_4,
+    colour_5,
+    weight_thin,
+    weight_medium,
+    weight_thick,
+    fill_on,
+    fill_off,
     set_count: u32,
     set_collapsed: bool,
     set_vertical: bool,
@@ -266,6 +309,9 @@ pub const Msg = union(enum) {
     set_retention: Retention,
     set_tool: AnnotationTool,
     set_can_undo: bool,
+    set_colour: u32,
+    set_weight: StrokeWeight,
+    set_fill: bool,
     set_can_redo: bool,
     set_autosave: bool,
     set_interaction_hover: Action,
@@ -289,6 +335,9 @@ const command_position_prefix = "settings.position:";
 const command_retention_prefix = "settings.retention:";
 const command_tool_prefix = "editor.tool:";
 const command_can_undo_prefix = "editor.can_undo:";
+const command_colour_prefix = "editor.colour:";
+const command_weight_prefix = "editor.weight:";
+const command_fill_prefix = "editor.fill:";
 const command_can_redo_prefix = "editor.can_redo:";
 const command_autosave_prefix = "settings.autosave:";
 const command_interaction_hover_prefix = "ui.hover:";
@@ -394,6 +443,18 @@ fn update(model: *Model, msg: Msg) void {
         .editor_save => model.last_action = .editor_save,
         .editor_copy => model.last_action = .editor_copy,
         .editor_close => model.last_action = .editor_close,
+        .colour_0 => { model.palette_index = 0; model.last_action = .colour_0; },
+        .colour_1 => { model.palette_index = 1; model.last_action = .colour_1; },
+        .colour_2 => { model.palette_index = 2; model.last_action = .colour_2; },
+        .colour_3 => { model.palette_index = 3; model.last_action = .colour_3; },
+        .colour_4 => { model.palette_index = 4; model.last_action = .colour_4; },
+        .colour_5 => { model.palette_index = 5; model.last_action = .colour_5; },
+        .weight_thin => { model.stroke_weight = .thin; model.last_action = .weight_thin; },
+        .weight_medium => { model.stroke_weight = .medium; model.last_action = .weight_medium; },
+        .weight_thick => { model.stroke_weight = .thick; model.last_action = .weight_thick; },
+        .fill_on => { model.filled = true; model.last_action = .fill_on; },
+        .fill_off => { model.filled = false; model.last_action = .fill_off; },
+
 
         .set_count => |count| model.count = count,
         .set_collapsed => |collapsed| model.collapsed = collapsed,
@@ -410,6 +471,9 @@ fn update(model: *Model, msg: Msg) void {
         .set_retention => |retention| model.retention = retention,
         .set_tool => |tool| model.tool = tool,
         .set_can_undo => |value| model.can_undo = value,
+        .set_colour => |value| model.palette_index = value,
+        .set_weight => |value| model.stroke_weight = value,
+        .set_fill => |value| model.filled = value,
         .set_can_redo => |value| model.can_redo = value,
         .set_autosave => |enabled| model.autosave = enabled,
         .set_interaction_hover => |action| model.interaction_hover = action,
@@ -476,6 +540,16 @@ fn onCommand(name: []const u8) ?Msg {
     if (std.mem.startsWith(u8, name, command_can_undo_prefix)) {
         return .{ .set_can_undo = parseBool(name[command_can_undo_prefix.len..]) orelse return null };
     }
+    if (std.mem.startsWith(u8, name, command_colour_prefix)) {
+        const raw = name[command_colour_prefix.len..];
+        return .{ .set_colour = std.fmt.parseUnsigned(u32, raw, 10) catch return null };
+    }
+    if (std.mem.startsWith(u8, name, command_weight_prefix)) {
+        return .{ .set_weight = parseWeight(name[command_weight_prefix.len..]) orelse return null };
+    }
+    if (std.mem.startsWith(u8, name, command_fill_prefix)) {
+        return .{ .set_fill = parseBool(name[command_fill_prefix.len..]) orelse return null };
+    }
     if (std.mem.startsWith(u8, name, command_can_redo_prefix)) {
         return .{ .set_can_redo = parseBool(name[command_can_redo_prefix.len..]) orelse return null };
     }
@@ -505,6 +579,13 @@ fn parsePosition(raw: []const u8) ?TrayPosition {
     return null;
 }
 
+fn parseWeight(raw: []const u8) ?StrokeWeight {
+    if (std.mem.eql(u8, raw, "thin")) return .thin;
+    if (std.mem.eql(u8, raw, "medium")) return .medium;
+    if (std.mem.eql(u8, raw, "thick")) return .thick;
+    return null;
+}
+
 fn parseTool(raw: []const u8) ?AnnotationTool {
     if (std.mem.eql(u8, raw, "select")) return .select;
     if (std.mem.eql(u8, raw, "arrow")) return .arrow;
@@ -530,7 +611,7 @@ fn parseRetention(raw: []const u8) ?Retention {
 
 fn parseAction(raw: []const u8) ?Action {
     const value = std.fmt.parseUnsigned(u8, raw, 10) catch return null;
-    if (value > @intFromEnum(Action.editor_close)) return null;
+    if (value > @intFromEnum(Action.fill_off)) return null;
     return @enumFromInt(value);
 }
 
@@ -594,6 +675,18 @@ fn actionForMessage(msg: Msg) Action {
         .editor_save => .editor_save,
         .editor_copy => .editor_copy,
         .editor_close => .editor_close,
+        .colour_0 => .colour_0,
+        .colour_1 => .colour_1,
+        .colour_2 => .colour_2,
+        .colour_3 => .colour_3,
+        .colour_4 => .colour_4,
+        .colour_5 => .colour_5,
+        .weight_thin => .weight_thin,
+        .weight_medium => .weight_medium,
+        .weight_thick => .weight_thick,
+        .fill_on => .fill_on,
+        .fill_off => .fill_off,
+
 
         else => .none,
     };

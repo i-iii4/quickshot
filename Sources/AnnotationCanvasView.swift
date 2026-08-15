@@ -15,6 +15,14 @@ final class AnnotationCanvasView: NSView {
     let document = AnnotationDocument()
     var image: CGImage? { didSet { resetZoom(); needsDisplay = true } }
     var tool: AnnotationTool = .select { didSet { updateCursor() } }
+
+    /// Текущий стиль инструмента. Применяется и к следующему созданному
+    /// объекту, и к выделенным — панель свойств обслуживает оба случая
+    /// (`F-1`), а изменение выделенного объекта отменяется отдельным шагом
+    /// истории (`F-2`).
+    private(set) var paletteIndex = 0
+    private(set) var strokeWeight = AnnotationStrokeWeight.medium
+    private(set) var isFilled = false
     var onDocumentChanged: (() -> Void)?
     var onRequestTextEditing: ((UUID) -> Void)?
 
@@ -188,6 +196,7 @@ final class AnnotationCanvasView: NSView {
                 onRequestTextEditing?(hit.id)
                 return
             }
+            adoptStyleFromSelection()
             document.beginGesture()
             dragMode = .moving(ids: document.selection, start: point)
             dragOrigin = point
@@ -202,7 +211,7 @@ final class AnnotationCanvasView: NSView {
 
     private func beginCreation(at point: CGPoint, event: NSEvent) {
         guard let kind = tool.kind else { return }
-        var object = AnnotationObject(kind: kind, geometry: .point(point))
+        var object = AnnotationObject(kind: kind, geometry: .point(point), style: currentStyle)
         switch kind {
         case .arrow, .line, .highlighter:
             object.geometry = .segment(from: point, to: point, curve: 0)
@@ -433,6 +442,62 @@ final class AnnotationCanvasView: NSView {
     private func notifyChange() {
         needsDisplay = true
         onDocumentChanged?()
+    }
+
+    // MARK: свойства (`F-1`, `F-2`)
+
+    var currentStyle: AnnotationStyle {
+        AnnotationStyle(paletteIndex: paletteIndex,
+                        lineWidth: strokeWeight.lineWidth,
+                        filled: isFilled,
+                        fillOpacity: 0.25,
+                        fontSize: strokeWeight.fontSize)
+    }
+
+    func setPaletteIndex(_ index: Int) {
+        paletteIndex = index
+        applyStyleToSelection { $0.paletteIndex = index }
+    }
+
+    func setStrokeWeight(_ weight: AnnotationStrokeWeight) {
+        strokeWeight = weight
+        applyStyleToSelection {
+            $0.lineWidth = weight.lineWidth
+            $0.fontSize = weight.fontSize
+        }
+    }
+
+    func setFilled(_ filled: Bool) {
+        isFilled = filled
+        applyStyleToSelection { $0.filled = filled }
+    }
+
+    private func applyStyleToSelection(_ mutation: (inout AnnotationStyle) -> Void) {
+        guard !document.selection.isEmpty else { return }
+        for id in document.selection {
+            document.update(id: id) { object in mutation(&object.style) }
+        }
+        notifyChange()
+    }
+
+    /// Стиль выделенного объекта поднимается в панель: пользователь видит
+    /// свойства того, что выбрал, а не последние настройки инструмента.
+    func adoptStyleFromSelection() {
+        guard let id = document.selection.first,
+              let object = document.objects.first(where: { $0.id == id }) else { return }
+        paletteIndex = object.style.paletteIndex
+        isFilled = object.style.filled
+        strokeWeight = AnnotationStrokeWeight.allCases.min {
+            abs($0.lineWidth - object.style.lineWidth) < abs($1.lineWidth - object.style.lineWidth)
+        } ?? .medium
+    }
+
+    func restoreObjects(_ objects: [AnnotationObject]) {
+        guard !objects.isEmpty else { return }
+        document.perform { state in
+            state.objects = objects
+            state.selection = []
+        }
     }
 
     /// Итоговое изображение с запечёнными объектами: то, что уходит в буфер,

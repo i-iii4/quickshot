@@ -13,7 +13,7 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
 
     private let artifact: CaptureArtifact
     private let library: ScreenshotLibrary?
-    private let onSaved: (CaptureArtifact, CGImage) -> Void
+    private let onSaved: (CaptureArtifact, CGImage, [AnnotationObject]) -> Void
 
     private var window: NSWindow?
     private let canvas = AnnotationCanvasView(frame: .zero)
@@ -23,7 +23,8 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
 
     static func present(artifact: CaptureArtifact,
                         library: ScreenshotLibrary?,
-                        onSaved: @escaping (CaptureArtifact, CGImage) -> Void) {
+                        restoring objects: [AnnotationObject] = [],
+                        onSaved: @escaping (CaptureArtifact, CGImage, [AnnotationObject]) -> Void) {
         if let existing = open[artifact.id] {
             existing.window?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -33,21 +34,23 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
                                                     library: library,
                                                     onSaved: onSaved)
         open[artifact.id] = controller
-        controller.show()
+        controller.show(restoring: objects)
     }
 
     private init(artifact: CaptureArtifact,
                  library: ScreenshotLibrary?,
-                 onSaved: @escaping (CaptureArtifact, CGImage) -> Void) {
+                 onSaved: @escaping (CaptureArtifact, CGImage, [AnnotationObject]) -> Void) {
         self.artifact = artifact
         self.library = library
         self.onSaved = onSaved
         super.init()
     }
 
-    private func show() {
+    private func show(restoring objects: [AnnotationObject] = []) {
         let image = artifact.fullImage() ?? artifact.previewImage
         canvas.image = image
+        // `ED-5`: повторное открытие возвращает объекты редактируемыми.
+        canvas.restoreObjects(objects)
         canvas.onDocumentChanged = { [weak self] in self?.syncToolbar() }
         canvas.onRequestTextEditing = { [weak self] id in self?.beginTextEditing(id) }
         toolbar.onCommand = { [weak self] command in self?.handle(command) }
@@ -126,6 +129,12 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         case let .tool(tool):
             canvas.tool = tool
             window?.makeFirstResponder(canvas)
+        case let .colour(index):
+            canvas.setPaletteIndex(index)
+        case let .weight(weight):
+            canvas.setStrokeWeight(weight)
+        case let .fill(filled):
+            canvas.setFilled(filled)
         case .undo:
             _ = canvas.document.undo()
             canvas.needsDisplay = true
@@ -147,6 +156,9 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         toolbar.setSelectedTool(canvas.tool)
         toolbar.setHistoryState(canUndo: canvas.document.canUndo,
                                 canRedo: canvas.document.canRedo)
+        toolbar.setStyle(paletteIndex: canvas.paletteIndex,
+                         weight: canvas.strokeWeight,
+                         filled: canvas.isFilled)
     }
 
     /// `ED-2`: сохранение перезаписывает файл в папке; при выключенном
@@ -155,7 +167,7 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     private func save() {
         commitTextEditing()
         guard let flattened = canvas.flattenedImage() else { return }
-        onSaved(artifact, flattened)
+        onSaved(artifact, flattened, canvas.document.objects)
     }
 
     private func copyToClipboard() {

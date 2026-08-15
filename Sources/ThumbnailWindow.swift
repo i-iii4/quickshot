@@ -271,8 +271,17 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     // MARK: drag-out
 
     private func beginDragOut(with event: NSEvent) -> Bool {
-        guard let owner,
-              let payload = manager?.beginDrag(owner) else { return false }
+        guard let owner else { return false }
+        // `ED-4`: перетаскивание после сохранения отдаёт изменённую версию.
+        // Она уже подготовлена, поэтому promise-путь здесь не нужен.
+        if let edited = manager?.preparedImageForDelivery(owner.artifact),
+           let item = Clipboard.pasteboardItem(preparedImage: edited) {
+            let dragItem = NSDraggingItem(pasteboardWriter: item)
+            dragItem.setDraggingFrame(displayView.frame, contents: displayNSImage)
+            beginDraggingSession(with: [dragItem], event: event, source: self)
+            return true
+        }
+        guard let payload = manager?.beginDrag(owner) else { return false }
         activeDragPayload = payload
         let dragItem = NSDraggingItem(pasteboardWriter: payload.pasteboardWriter)
         dragItem.setDraggingFrame(displayView.frame, contents: displayNSImage)
@@ -363,6 +372,7 @@ final class ThumbnailWindow {
     private let container = CardContainer()
     private let view: ThumbnailView
     private let edgeHandle = EdgeHandle()
+    private let editedBadge = EditedBadgeView(frame: .zero)
     private var resizeEdge: EdgeHandle.Edge = .left
     private var restingFrame: NSRect = .zero
     private var visualState = VisualState.resting
@@ -371,6 +381,21 @@ final class ThumbnailWindow {
     var hostView: NSView { container }
     var cardSize: NSSize { NSSize(width: cardWidth, height: cardHeight) }
     var layoutFrame: NSRect { container.frame }
+
+    /// `ED-3`: карточка помечается изменённой после сохранения из редактора.
+    /// Отредактированная версия показывается на карточке: пользователь видит
+    /// то, что уйдёт в буфер и в перетаскивание.
+    func setDisplayImage(_ image: CGImage) {
+        view.setDisplay(image: image)
+    }
+
+    var isEdited = false {
+        didSet {
+            guard isEdited != oldValue else { return }
+            editedBadge.isHidden = !isEdited
+            positionEditedBadge()
+        }
+    }
 
     /// Интерактивная геометрия карточки в координатах хоста: сама карточка и
     /// краевая ручка. Поля контейнера сюда не входят — они пропускают клики
@@ -410,6 +435,8 @@ final class ThumbnailWindow {
             l.shadowOffset = CGSize(width: 0, height: -5)
         }
         container.addSubview(view)                       // карточка под ручкой
+        editedBadge.isHidden = true
+        container.addSubview(editedBadge)                // признак Edited поверх карточки
         container.addSubview(edgeHandle)                 // ручка поверх (вдоль внутреннего края)
 
         edgeHandle.beginSize = { [weak self] in
@@ -436,6 +463,14 @@ final class ThumbnailWindow {
     }
 
     /// Ручка-полоса вдоль внутреннего края: центрирована на крае (±band), длиной во всю сторону.
+    private func positionEditedBadge() {
+        guard isEdited else { return }
+        let card = NSRect(x: band, y: band, width: cardWidth, height: cardHeight)
+        editedBadge.frame = EditedBadgeView.frame(inCard: card,
+                                                  badgeSize: editedBadge.intrinsicSize)
+        editedBadge.needsLayout = true
+    }
+
     private func positionHandle() {
         let b = band, z = 2 * band
         switch resizeEdge {
@@ -469,6 +504,7 @@ final class ThumbnailWindow {
         layoutCardInContainer()
         view.layoutContents()
         positionHandle()
+        positionEditedBadge()
         container.layer?.shadowPath = CGPath(roundedRect: view.frame, cornerWidth: QS.radiusCard,
                                              cornerHeight: QS.radiusCard, transform: nil)
     }

@@ -179,6 +179,17 @@ private enum NativeHubPressedButton: Int32 {
     case editorSave
     case editorCopy
     case editorClose
+    case colour0
+    case colour1
+    case colour2
+    case colour3
+    case colour4
+    case colour5
+    case weightThin
+    case weightMedium
+    case weightThick
+    case fillOn
+    case fillOff
 }
 
 private enum NativeControlSurface: String {
@@ -419,6 +430,12 @@ private final class NativeHubRenderView: NSView {
 
     func sendEditorTool(_ rawValue: String) {
         sendCommand("editor.tool:\(rawValue)")
+    }
+
+    func sendEditorStyle(paletteIndex: Int, weight: String, filled: Bool) {
+        sendCommand("editor.colour:\(max(0, paletteIndex))")
+        sendCommand("editor.weight:\(weight)")
+        sendCommand("editor.fill:\(filled ? 1 : 0)")
     }
 
     func sendEditorHistory(canUndo: Bool, canRedo: Bool) {
@@ -787,6 +804,17 @@ private final class NativeHubRenderView: NSView {
         case "Editor save": return .editorSave
         case "Editor copy": return .editorCopy
         case "Editor close": return .editorClose
+        case "Colour red": return .colour0
+        case "Colour amber": return .colour1
+        case "Colour green": return .colour2
+        case "Colour blue": return .colour3
+        case "Colour violet": return .colour4
+        case "Colour graphite": return .colour5
+        case "Weight thin": return .weightThin
+        case "Weight medium": return .weightMedium
+        case "Weight thick": return .weightThick
+        case "Fill on": return .fillOn
+        case "Fill off": return .fillOff
         default: break
         }
         switch title {
@@ -1265,7 +1293,8 @@ final class NativeHubShellView: NSView {
                  .positionTop, .retentionDay, .retentionWeek, .retentionMonth,
                  .retentionForever, .autosaveOn, .autosaveOff, .openFolder,
                  .toolSelect, .toolArrow, .toolBox, .toolEllipse, .toolLine, .toolPen, .toolText, .toolMark, .toolStep, .toolHide, .toolBlur,
-                 .editorUndo, .editorRedo, .editorSave, .editorCopy, .editorClose:
+                 .editorUndo, .editorRedo, .editorSave, .editorCopy, .editorClose,
+                 .colour0, .colour1, .colour2, .colour3, .colour4, .colour5, .weightThin, .weightMedium, .weightThick, .fillOn, .fillOff:
                 break
             }
         }
@@ -2799,6 +2828,15 @@ final class NativeAnnotationToolbarSurface: NSView {
         needsDisplay = true
     }
 
+    func setStyle(paletteIndex: Int, weight: AnnotationStrokeWeight, filled: Bool) {
+        nativeView.setSurface(.annotationToolbar)
+        nativeView.sendEditorStyle(paletteIndex: paletteIndex,
+                                   weight: weight.rawValue,
+                                   filled: filled)
+        nativeView.renderNow()
+        needsDisplay = true
+    }
+
     func setHistoryState(canUndo: Bool, canRedo: Bool) {
         nativeView.setSurface(.annotationToolbar)
         nativeView.sendEditorHistory(canUndo: canUndo, canRedo: canRedo)
@@ -2831,6 +2869,17 @@ final class NativeAnnotationToolbarSurface: NSView {
         case .editorSave: return .save
         case .editorCopy: return .copy
         case .editorClose: return .close
+        case .colour0: return .colour(0)
+        case .colour1: return .colour(1)
+        case .colour2: return .colour(2)
+        case .colour3: return .colour(3)
+        case .colour4: return .colour(4)
+        case .colour5: return .colour(5)
+        case .weightThin: return .weight(.thin)
+        case .weightMedium: return .weight(.medium)
+        case .weightThick: return .weight(.thick)
+        case .fillOn: return .fill(true)
+        case .fillOff: return .fill(false)
         default: return nil
         }
     }

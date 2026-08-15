@@ -14,6 +14,9 @@ import AppKit
 final class AnnotationToolbarView: NSView {
     enum Command: Equatable {
         case tool(AnnotationTool)
+        case colour(Int)
+        case weight(AnnotationStrokeWeight)
+        case fill(Bool)
         case undo
         case redo
         case save
@@ -52,62 +55,11 @@ final class AnnotationToolbarView: NSView {
     func setHistoryState(canUndo: Bool, canRedo: Bool) {
         surface.setHistoryState(canUndo: canUndo, canRedo: canRedo)
     }
+    func setStyle(paletteIndex: Int, weight: AnnotationStrokeWeight, filled: Bool) {
+        surface.setStyle(paletteIndex: paletteIndex, weight: weight, filled: filled)
+    }
 
 #if TESTING
     func debugButtons() -> [NativeControlDebugButtonSnapshot] { surface.debugButtons() }
 #endif
-}
-
-/// Инструменты редактора. Значения совпадают с именами команд модели Native SDK,
-/// поэтому строковое представление — часть контракта, а не деталь.
-enum AnnotationTool: String, CaseIterable {
-    case select
-    case arrow
-    case box
-    case ellipse
-    case line
-    case pen
-    case text
-    case mark
-    case step
-    case hide
-    case blur
-
-    /// Клавиша инструмента (`D-1`): одна буква без модификатора.
-    var shortcut: String {
-        switch self {
-        case .select: return "v"
-        case .arrow: return "a"
-        case .box: return "r"
-        case .ellipse: return "o"
-        case .line: return "l"
-        case .pen: return "p"
-        case .text: return "t"
-        case .mark: return "h"
-        case .step: return "s"
-        case .hide: return "b"
-        case .blur: return "u"
-        }
-    }
-
-    static func tool(forShortcut key: String) -> AnnotationTool? {
-        allCases.first { $0.shortcut == key.lowercased() }
-    }
-
-    /// Тип объекта, создаваемого инструментом. `select` ничего не создаёт.
-    var kind: AnnotationKind? {
-        switch self {
-        case .select: return nil
-        case .arrow: return .arrow
-        case .box: return .rectangle
-        case .ellipse: return .ellipse
-        case .line: return .line
-        case .pen: return .pencil
-        case .text: return .text
-        case .mark: return .highlighter
-        case .step: return .counter
-        case .hide: return .redaction
-        case .blur: return .blur
-        }
-    }
 }

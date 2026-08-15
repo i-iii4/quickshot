@@ -63,6 +63,23 @@
                 <button size="sm" selected="{toolHide}" label="Tool hide" on-press="tool_hide">Hide</button>
                 <button size="sm" selected="{toolBlur}" label="Tool blur" on-press="tool_blur">Blur</button>
               </button-group>
+              <button-group gap="0" cross="center" label="Colour">
+                <button size="sm" selected="{colour0}" label="Colour red" on-press="colour_0">R</button>
+                <button size="sm" selected="{colour1}" label="Colour amber" on-press="colour_1">A</button>
+                <button size="sm" selected="{colour2}" label="Colour green" on-press="colour_2">G</button>
+                <button size="sm" selected="{colour3}" label="Colour blue" on-press="colour_3">B</button>
+                <button size="sm" selected="{colour4}" label="Colour violet" on-press="colour_4">V</button>
+                <button size="sm" selected="{colour5}" label="Colour graphite" on-press="colour_5">K</button>
+              </button-group>
+              <button-group gap="0" cross="center" label="Stroke weight">
+                <button size="sm" selected="{weightThin}" label="Weight thin" on-press="weight_thin">S</button>
+                <button size="sm" selected="{weightMedium}" label="Weight medium" on-press="weight_medium">M</button>
+                <button size="sm" selected="{weightThick}" label="Weight thick" on-press="weight_thick">L</button>
+              </button-group>
+              <button-group gap="0" cross="center" label="Fill">
+                <button size="sm" selected="{fillOff}" label="Fill off" on-press="fill_off">Line</button>
+                <button size="sm" selected="{fillOn}" label="Fill on" on-press="fill_on">Fill</button>
+              </button-group>
               <button size="sm" variant="secondary" icon="refresh-cw" label="Editor undo" on-press="editor_undo"></button>
               <button size="sm" variant="secondary" icon="repeat" label="Editor redo" on-press="editor_redo"></button>
               <button size="sm" variant="secondary" icon="save" label="Editor save" on-press="editor_save">Save</button>

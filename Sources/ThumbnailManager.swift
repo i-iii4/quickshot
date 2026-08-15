@@ -68,6 +68,9 @@ final class ThumbnailManager {
     private weak var collapsedPeekItem: ThumbnailWindow?
     /// Библиотека снимков: редактор перезаписывает через неё файл в папке.
     weak var library: ScreenshotLibrary?
+    /// Редактируемые состояния и запечённые версии живут, пока снимок в трее.
+    private let sessions = AnnotationSessionStore()
+    private let editedImages = EditedImageStore()
     private var trayHoverActive = false
     private var pointerInsideHoverIsland = false
     private var capturePresentationSessions: Set<UUID> = []
@@ -590,6 +593,10 @@ final class ThumbnailManager {
     }
 
     private func animateRemoval(_ removed: [ThumbnailWindow]) {
+        for item in removed {
+            sessions.discard(item.artifact.id)
+            editedImages.discard(item.artifact.id)
+        }
         finishCollectionMotion()
         finishTrayMotion()
         cancelCollapsedPeekDismiss()
@@ -772,6 +779,12 @@ final class ThumbnailManager {
 
     /// Копирование НЕ закрывает карточку — только короткий фидбэк.
     func copy(_ t: ThumbnailWindow) {
+        // `ED-4`: после сохранения копируется изменённая версия.
+        if let edited = editedImages.preparedImage(for: t.artifact.id) {
+            Clipboard.copy(preparedImage: edited)
+            t.flashCopied()
+            return
+        }
         artifactStore.copy(t.artifact) { [weak t] in t?.flashCopied() }
     }
 
@@ -782,8 +795,12 @@ final class ThumbnailManager {
         artifactStore.copyAll(artifacts) { [weak last] in last?.flashCopied() }
     }
 
+    /// Закрытие трея уничтожает редактируемые состояния и запечённые версии
+    /// (`ED-7`). В папке остаётся последняя сохранённая версия (`ST-9`).
     func deleteAll() {
         guard !items.isEmpty else { return }
+        sessions.discardAll()
+        editedImages.discardAll()
         animateRemoval(items)
     }
 
@@ -848,15 +865,33 @@ final class ThumbnailManager {
     /// Открыть редактор аннотаций для карточки (`ED-1`).
     func openEditor(_ t: ThumbnailWindow) {
         AnnotationEditorController.present(artifact: t.artifact,
-                                           library: library) { [weak self] artifact, image in
-            self?.applyEditedImage(image, to: artifact)
+                                           library: library,
+                                           restoring: sessions.objects(for: t.artifact.id)) {
+            [weak self, weak t] artifact, image, objects in
+            self?.applyEditedImage(image, objects: objects, to: artifact, card: t)
         }
+    }
+
+    /// Отредактированная версия для выдачи (`ED-4`): буфер, перетаскивание и
+    /// экспорт после сохранения отдают именно её.
+    func preparedImageForDelivery(_ artifact: CaptureArtifact) -> Clipboard.PreparedImage? {
+        editedImages.preparedImage(for: artifact.id)
     }
 
     /// Сохранение из редактора: файл в папке перезаписывается изменённой
     /// версией (`ED-2`). Признак `Edited` на карточке и подмена версии для
     /// выдачи — следующий пакет работ.
-    private func applyEditedImage(_ image: CGImage, to artifact: CaptureArtifact) {
+    private func applyEditedImage(_ image: CGImage,
+                                  objects: [AnnotationObject],
+                                  to artifact: CaptureArtifact,
+                                  card: ThumbnailWindow?) {
+        sessions.store(objects: objects, for: artifact.id)
+        editedImages.store(image, for: artifact.id)
+        card?.isEdited = sessions.isEdited(artifact.id)
+        card?.setDisplayImage(image)
+
+        // При выключенном автосохранении файла нет: сохранение фиксирует
+        // изменения на карточке и только (`ED-12`).
         guard let library, library.settings.autosaveEnabled,
               let png = Clipboard.pngData(cgImage: image) else { return }
         if let url = artifact.libraryURL {
