@@ -210,6 +210,14 @@ fullscreen behavior remain explicit runtime release checks.
 7. The rubber band is visible: past an edge the offset moves with resistance
    and, on release, returns with a short ease-out instead of an instant clamp.
    Phase-less mouse wheels get hard edges and no rubber band.
+8. Content follows the fingers: the scroll delta is applied with its own sign.
+   Mouse wheels report line units, so a notch is scaled to points - a notch
+   that moves the strip by one point is a defect.
+9. A scroll frame only moves cards. Card widths, hub position and resize modes
+   belong to layout changes, not to every scroll event.
+10. Exactly one card shows its hover buttons: the one under the pointer. Cards
+   that leave the pointer during a scroll never receive `mouseExited`, so the
+   hover owner is reassigned after every scroll frame.
 
 ## Editor Interface
 
@@ -256,6 +264,9 @@ fullscreen behavior remain explicit runtime release checks.
    through `window.sendEvent`, never by calling event methods on views
    directly — a harness that computes its own hit chain can encode the same
    bug as the product.
+1b. Measuring a Native SDK surface by rendering it into a probe frame must be
+   followed by a render at the real size. A restored frame with a stale raster
+   is scaled into place and reads as a blob of pixels.
 2. A new UI framework or shell model must not weaken the capture contract:
    hotkey-time pixels, fast selection entry, capture exclusion, no tray blink,
    no stale screenshots, and no duplicate cursor remain mandatory.

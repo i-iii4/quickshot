@@ -107,6 +107,52 @@ visually stable instead of blinking out and back in at capture time.
 
 Visual references are stored in `reference/screenshots/`.
 
+## Tray Scrolling
+
+- When the cards no longer fit, the strip scrolls; nothing is dropped for lack
+  of space. Cards past either edge collect into a stack with a shrinking step,
+  fading and scaling, so the stack itself says that more exists.
+- Content follows the fingers. A trackpad gesture applies its delta directly; a
+  mouse wheel reports line units, so a notch is scaled to points instead of
+  moving the strip by a single point.
+- The strip follows the newest capture until the user scrolls away, and every
+  new capture re-arms that following.
+- Past an edge the strip resists with a rubber band and returns with a short
+  ease-out; a continued pull collapses the tray. A phase-less mouse wheel gets
+  hard edges and no rubber band.
+- A scroll frame only moves cards. Card widths, hub position and resize modes
+  are recomputed on layout changes, never per scroll event.
+- Exactly one card shows its hover buttons: the one under the pointer. A card
+  that leaves the pointer during a scroll never receives `mouseExited`, so the
+  hover owner is reassigned after every scroll frame.
+
+## Annotation Editor
+
+- Double-clicking a card opens the editor for that screenshot.
+- The toolbar is icon-first in the House register: eleven tools, then history,
+  scan, save and copy. Colour swatches, stroke weight and fill appear only
+  while something is selected; rotate appears in crop mode. With nothing
+  selected the toolbar shows at most sixteen controls.
+- Every control carries an accessible name that also serves as its hover
+  tooltip; visible one- and two-letter codes are prohibited.
+- Text and counter digits are drawn in the same orientation on screen and in
+  the exported file.
+- One user gesture is one step of undo history. Changing the selection is not
+  an edit and never records a step.
+- Hiding sensitive data has exactly one tool: an opaque bar. Blur and
+  pixelation are rejected (`X-8` in the annotation requirements).
+- Scanning for sensitive data reports findings only. Nothing found shows no
+  window at all, and closing the editor cancels a scan in flight.
+
+## Screenshot Storage
+
+- With autosave on, screenshots are written to `~/Pictures/QuickShot` and
+  expire after the chosen retention (a day, a week, a month, forever). Expired
+  files are deleted permanently, not moved to the Trash.
+- With autosave off, screenshots live in the tray and on the clipboard only.
+- Saving in the editor rewrites the file, marks the card `Edited`, and every
+  later delivery — clipboard, drag, export — uses the edited version.
+
 ## Capture Implementation Status
 
 QuickShot uses a direct, session-owned CoreGraphics snapshot at the hotkey
@@ -201,6 +247,16 @@ QUICKSHOT_ALLOW_SYNTHETIC_INPUT=1 ./scripts/verify-capture-runtime.sh
 
 Prefer log-only verification when working on the user's active machine.
 
+Visual checks render real surfaces to PNG so the result can be looked at
+instead of inferred:
+
+```bash
+./scripts/run-snapshot.sh 1200 /tmp/toolbar.png            # editor toolbar
+./scripts/run-snapshot.sh 1200 /tmp/toolbar.png selected   # with a selection
+python3 ./scripts/run-snapshot-canvas.py /tmp              # canvas: text, counters
+python3 ./scripts/run-one.py EditorDrawingTests.swift      # one suite, fast loop
+```
+
 ## Run
 
 ```bash
@@ -214,10 +270,11 @@ permission to the bundle.
 
 - `PRODUCT_CONTRACT.md` - UX requirements that define regressions.
 - `ANNOTATION_REQUIREMENTS.md` - product requirements for the annotation
-  feature, based on a market review. Planned scope, not yet implemented.
+  feature, based on a market review. Levels 1 and 2 are implemented; level 3
+  and the rejected set (`X-1`…`X-8`) are not.
 - `SYSTEM_REQUIREMENTS.md` - product requirements outside annotation: tray
   scrolling, on-disk storage with expiry, and the edited-screenshot lifecycle.
-  Planned scope, not yet implemented.
+  Implemented.
 - `PLAN.md` - work plan for the requirements above: packages, dependencies,
   and acceptance gates. No schedules, scope only.
 - `CAPTURE_ARCHITECTURE.md` - capture decision, transition status, and plan.
