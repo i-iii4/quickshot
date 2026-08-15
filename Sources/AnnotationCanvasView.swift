@@ -98,6 +98,10 @@ final class AnnotationCanvasView: NSView {
         context.saveGState()
         // При увеличении границы пикселей остаются чёткими (`B-4`).
         context.interpolationQuality = transform.zoom > 1 ? .none : .high
+        // Вью перевёрнута, а CGImage рисуется в нижне-левой системе координат:
+        // без обратного переворота вокруг кадра снимок зеркалится по вертикали.
+        context.translateBy(x: 0, y: frame.minY + frame.maxY)
+        context.scaleBy(x: 1, y: -1)
         context.draw(image, in: frame)
         context.restoreGState()
 

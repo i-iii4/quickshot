@@ -16,6 +16,7 @@ struct EditorTransformTests {
                 try rotationSwapsOrientation()       // D-44
                 try rotationReturnsAfterFourTurns()  // D-44
                 try cropAndRotationCompose()
+                try displayKeepsImageUpright()       // экран ≠ зеркало
                 print("EditorTransformTests: passed")
                 exit(0)
             } catch {
@@ -90,6 +91,52 @@ struct EditorTransformTests {
         guard result.width == 100, result.height == 200 else {
             throw Failure("совмещение обрезки и поворота дало \(result.width)×\(result.height)")
         }
+    }
+
+    /// Экранная отрисовка обязана показывать снимок так, как он снят: верх
+    /// изображения — вверху вью. Холст перевёрнут (isFlipped), а CGImage
+    /// рисуется в нижне-левой системе координат — без компенсации картинка
+    /// выходит зеркальной по вертикали, что и наблюдалось в приложении.
+    @MainActor private static func displayKeepsImageUpright() throws {
+        let canvas = AnnotationCanvasView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        canvas.image = topRedBottomBlueImage(width: 400, height: 300)
+        canvas.zoomToActualSize()
+        let window = NSWindow(contentRect: canvas.frame, styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.contentView = NSView(frame: canvas.frame)
+        window.contentView?.addSubview(canvas)
+
+        guard let rep = canvas.bitmapImageRepForCachingDisplay(in: canvas.bounds) else {
+            throw Failure("нет буфера отображения")
+        }
+        canvas.cacheDisplay(in: canvas.bounds, to: rep)
+        let scaleX = CGFloat(rep.pixelsWide) / canvas.bounds.width
+        let scaleY = CGFloat(rep.pixelsHigh) / canvas.bounds.height
+
+        // Вью перевёрнута: маленький y — верх. В хранилище rep строка 0 — верхняя.
+        guard let top = rep.colorAt(x: Int(200 * scaleX), y: Int(20 * scaleY)),
+              let bottom = rep.colorAt(x: Int(200 * scaleX), y: Int(280 * scaleY)) else {
+            throw Failure("не удалось прочитать пиксели отображения")
+        }
+        guard top.redComponent > 0.6, top.blueComponent < 0.4 else {
+            throw Failure("верх изображения не красный: экран зеркалит снимок (top=\(top))")
+        }
+        guard bottom.blueComponent > 0.6, bottom.redComponent < 0.4 else {
+            throw Failure("низ изображения не синий: экран зеркалит снимок (bottom=\(bottom))")
+        }
+    }
+
+    private static func topRedBottomBlueImage(width: Int, height: Int) -> CGImage {
+        let context = CGContext(data: nil, width: width, height: height,
+                                bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpaceCreateDeviceRGB(),
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        // В CG-контексте origin внизу: верхняя половина изображения — большие y.
+        context.setFillColor(CGColor(red: 0, green: 0, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height / 2))
+        context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: height / 2, width: width, height: height - height / 2))
+        return context.makeImage()!
     }
 
     // MARK: помощники
