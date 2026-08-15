@@ -2834,6 +2834,9 @@ final class NativeAnnotationToolbarSurface: NSView {
     private var isCompact = false
     private var wideLayoutWidth: CGFloat = 0
     private var showsStyleControls = false
+    /// Изменение измеренного размера: владелец окна обязан переложить панель,
+    /// иначе новая строка контролов окажется за её нижним краем.
+    var onFittingSizeChanged: ((NSSize) -> Void)?
     private let tooltip = HubTooltipWindow()
     private var tooltipNodeID: UInt64?
     private var tooltipWork: DispatchWorkItem?
@@ -2957,10 +2960,14 @@ final class NativeAnnotationToolbarSurface: NSView {
 
     func setSelectedTool(_ tool: AnnotationTool) {
         guard selectedTool != tool else { return }
+        let transformModeChanged = (selectedTool == .crop) != (tool == .crop)
         selectedTool = tool
         nativeView.setSurface(.annotationToolbar)
         nativeView.sendEditorTool(tool.rawValue)
         nativeView.renderNow()
+        // Кадрирование добавляет свою команду: набор контролов меняется, и
+        // измеренный размер панели обязан пересчитаться.
+        if transformModeChanged { remeasure() }
         needsDisplay = true
     }
 
@@ -3029,8 +3036,11 @@ final class NativeAnnotationToolbarSurface: NSView {
         let width = ceil(content.maxX + inset)
         let height = ceil(content.height + inset * 2)
         if !isCompact { wideLayoutWidth = width }
-        measuredFittingSize = NSSize(width: width, height: max(40, height))
+        let updated = NSSize(width: width, height: max(40, height))
+        let changed = updated != measuredFittingSize
+        measuredFittingSize = updated
         invalidateIntrinsicContentSize()
+        if changed { onFittingSizeChanged?(updated) }
     }
 
     private static func command(for pressed: NativeHubPressedButton) -> AnnotationToolbarView.Command? {

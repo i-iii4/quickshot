@@ -113,6 +113,10 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         canvas.onDocumentChanged = { [weak self] in self?.syncToolbar() }
         canvas.onRequestTextEditing = { [weak self] id in self?.beginTextEditing(id) }
         toolbar.onCommand = { [weak self] command in self?.handle(command) }
+        toolbar.onFittingSizeChanged = { [weak self] _ in
+            guard let self, let container = self.window?.contentView else { return }
+            self.layoutContents(in: container)
+        }
 
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let maximum = CGSize(width: screen.width * 0.9, height: screen.height * 0.9)

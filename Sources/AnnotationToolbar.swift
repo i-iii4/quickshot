@@ -27,6 +27,11 @@ final class AnnotationToolbarView: NSView {
     }
 
     var onCommand: ((Command) -> Void)?
+    /// Панель сменила измеренный размер: окно обязано переложить содержимое.
+    var onFittingSizeChanged: ((NSSize) -> Void)? {
+        get { surface.onFittingSizeChanged }
+        set { surface.onFittingSizeChanged = newValue }
+    }
 
     private let surface = NativeAnnotationToolbarSurface(frame: .zero)
 
