@@ -2,6 +2,71 @@ const std = @import("std");
 const native_sdk = @import("native_sdk");
 const canvas = native_sdk.canvas;
 
+// ------------------------------------------------------------- app icons
+//
+// Иконки панели редактора: 24x24 stroke-диалект, парсятся на этапе
+// компиляции. Образцы палитры несут буквальные цвета — палитра рисования
+// это содержимое снимка, а не хром темы; hex-значения обязаны совпадать с
+// AnnotationPalette в Sources/AnnotationRenderer.swift.
+
+fn appIcon(comptime name: []const u8) canvas.svg_icon.Icon {
+    return canvas.svg_icon.parseComptime(@embedFile("icons/" ++ name ++ ".svg"));
+}
+
+const tool_select_icon = appIcon("tool-select");
+const tool_arrow_icon = appIcon("tool-arrow");
+const tool_box_icon = appIcon("tool-box");
+const tool_oval_icon = appIcon("tool-oval");
+const tool_line_icon = appIcon("tool-line");
+const tool_pen_icon = appIcon("tool-pen");
+const tool_text_icon = appIcon("tool-text");
+const tool_mark_icon = appIcon("tool-mark");
+const tool_step_icon = appIcon("tool-step");
+const tool_hide_icon = appIcon("tool-hide");
+const tool_blur_icon = appIcon("tool-blur");
+const tool_crop_icon = appIcon("tool-crop");
+const swatch_red_icon = appIcon("swatch-red");
+const swatch_amber_icon = appIcon("swatch-amber");
+const swatch_green_icon = appIcon("swatch-green");
+const swatch_blue_icon = appIcon("swatch-blue");
+const swatch_violet_icon = appIcon("swatch-violet");
+const swatch_graphite_icon = appIcon("swatch-graphite");
+const weight_thin_icon = appIcon("weight-thin");
+const weight_medium_icon = appIcon("weight-medium");
+const weight_thick_icon = appIcon("weight-thick");
+const shape_fill_icon = appIcon("shape-fill");
+const undo_icon = appIcon("undo");
+const redo_icon = appIcon("redo");
+const scan_icon = appIcon("scan");
+
+pub const app_icons: []const canvas.icons.Entry = &.{
+    .{ .name = "tool-select", .icon = &tool_select_icon },
+    .{ .name = "tool-arrow", .icon = &tool_arrow_icon },
+    .{ .name = "tool-box", .icon = &tool_box_icon },
+    .{ .name = "tool-oval", .icon = &tool_oval_icon },
+    .{ .name = "tool-line", .icon = &tool_line_icon },
+    .{ .name = "tool-pen", .icon = &tool_pen_icon },
+    .{ .name = "tool-text", .icon = &tool_text_icon },
+    .{ .name = "tool-mark", .icon = &tool_mark_icon },
+    .{ .name = "tool-step", .icon = &tool_step_icon },
+    .{ .name = "tool-hide", .icon = &tool_hide_icon },
+    .{ .name = "tool-blur", .icon = &tool_blur_icon },
+    .{ .name = "tool-crop", .icon = &tool_crop_icon },
+    .{ .name = "swatch-red", .icon = &swatch_red_icon },
+    .{ .name = "swatch-amber", .icon = &swatch_amber_icon },
+    .{ .name = "swatch-green", .icon = &swatch_green_icon },
+    .{ .name = "swatch-blue", .icon = &swatch_blue_icon },
+    .{ .name = "swatch-violet", .icon = &swatch_violet_icon },
+    .{ .name = "swatch-graphite", .icon = &swatch_graphite_icon },
+    .{ .name = "weight-thin", .icon = &weight_thin_icon },
+    .{ .name = "weight-medium", .icon = &weight_medium_icon },
+    .{ .name = "weight-thick", .icon = &weight_thick_icon },
+    .{ .name = "shape-fill", .icon = &shape_fill_icon },
+    .{ .name = "undo", .icon = &undo_icon },
+    .{ .name = "redo", .icon = &redo_icon },
+    .{ .name = "scan", .icon = &scan_icon },
+};
+
 pub const Model = struct {
     surface: Surface = .hub,
     count: u32 = 0,
@@ -133,6 +198,8 @@ pub const Model = struct {
 
     pub fn canUndo(model: *const Model) bool { return model.can_undo; }
     pub fn canRedo(model: *const Model) bool { return model.can_redo; }
+    pub fn cannotUndo(model: *const Model) bool { return !model.can_undo; }
+    pub fn cannotRedo(model: *const Model) bool { return !model.can_redo; }
 
     pub fn retentionDay(model: *const Model) bool { return model.retention == .day; }
     pub fn retentionWeek(model: *const Model) bool { return model.retention == .week; }
@@ -306,6 +373,7 @@ pub const Msg = union(enum) {
     weight_thick,
     fill_on,
     fill_off,
+    fill_toggle,
     set_count: u32,
     set_collapsed: bool,
     set_vertical: bool,
@@ -365,6 +433,9 @@ pub fn initModel() Model {
 }
 
 pub fn mobileOptions() App.Options {
+    // Регистрация процесс-глобальна и обязана случиться до первого рендера;
+    // `mobileOptions` вызывается ровно один раз при создании приложения.
+    canvas.icons.registerAppIcons(app_icons);
     return .{
         .name = "quickshot-native-ui",
         .scene = native_sdk.embed.mobile_shell_scene,
@@ -471,6 +542,12 @@ fn update(model: *Model, msg: Msg) void {
         .weight_thick => { model.stroke_weight = .thick; model.last_action = .weight_thick; },
         .fill_on => { model.filled = true; model.last_action = .fill_on; },
         .fill_off => { model.filled = false; model.last_action = .fill_off; },
+        // Один переключатель вместо пары кнопок: наружу уходит тот же
+        // fill_on/fill_off, так что Swift-сторона не меняется.
+        .fill_toggle => {
+            model.filled = !model.filled;
+            model.last_action = if (model.filled) .fill_on else .fill_off;
+        },
 
 
         .set_count => |count| model.count = count,
@@ -711,6 +788,7 @@ fn actionForMessage(msg: Msg) Action {
         .weight_thick => .weight_thick,
         .fill_on => .fill_on,
         .fill_off => .fill_off,
+        .fill_toggle => .none,
 
 
         else => .none,

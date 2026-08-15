@@ -55,6 +55,10 @@ final class AnnotationToolbarView: NSView {
 
     override func layout() {
         super.layout()
+        // Ширина панели известна здесь, а не только у контроллера окна:
+        // компактный режим не должен зависеть от того, вспомнил ли хозяин
+        // вызвать setAvailableWidth.
+        surface.setAvailableWidth(bounds.width)
         surface.frame = bounds
     }
 

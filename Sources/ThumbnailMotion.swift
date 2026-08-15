@@ -112,6 +112,9 @@ final class CollectionProgressAnimator: NSObject {
     }
 
     @objc private func step(_ sender: CADisplayLink) {
+#if TESTING
+        Self.debugStepCount += 1
+#endif
         let progress = CGFloat(min(1, max(0, (CACurrentMediaTime() - startedAt) / duration)))
         onFrame?(progress)
         if progress >= 1 { finish() }
@@ -131,6 +134,10 @@ final class CollectionProgressAnimator: NSObject {
         onFrame = nil
         onDone = nil
     }
+
+#if TESTING
+    @MainActor static var debugStepCount = 0
+#endif
 
     isolated deinit { link?.invalidate() }
 }

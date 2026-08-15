@@ -548,6 +548,11 @@ private final class NativeHubRenderView: NSView {
         button(at: point) != nil
     }
 
+    /// Узел кнопки под точкой — для тултипов панели редактора.
+    fileprivate func buttonNode(at point: NSPoint) -> NativeHubButtonNode? {
+        button(at: point)
+    }
+
     /// Сырой RGBA-пиксель отрендеренного растра. Не отладочный: тултип берёт
     /// отсюда цвета House-поверхности, а не дублирует токены в Swift.
     func surfacePixel(at point: NSPoint) -> UInt32 {
@@ -2814,6 +2819,10 @@ final class NativeAnnotationToolbarSurface: NSView {
     private var selectedTool: AnnotationTool = .select
     private var isCompact = false
     private var wideLayoutWidth: CGFloat = 0
+    private let tooltip = HubTooltipWindow()
+    private var tooltipNodeID: UInt64?
+    private var tooltipWork: DispatchWorkItem?
+    private var trackingArea: NSTrackingArea?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -2822,6 +2831,7 @@ final class NativeAnnotationToolbarSurface: NSView {
         nativeView.setSurface(.annotationToolbar)
         nativeView.onButtonPressed = { [weak self] pressed in
             guard let self, let command = Self.command(for: pressed) else { return }
+            self.hideTooltip()
             if case let .tool(tool) = command { self.setSelectedTool(tool) }
             self.onCommand?(command)
         }
@@ -2849,6 +2859,85 @@ final class NativeAnnotationToolbarSurface: NSView {
         nativeView.frame = bounds
         nativeView.setSurface(.annotationToolbar)
         nativeView.renderNow()
+    }
+
+    // MARK: тултипы панели
+
+    /// Окно редактора — обычное key-окно, поэтому достаточно tracking-области;
+    /// глобальные мониторы нужны только не-key окнам трея.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.activeInActiveApp, .inVisibleRect,
+                                            .mouseEnteredAndExited, .mouseMoved],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let inNative = nativeView.convert(event.locationInWindow, from: nil)
+        guard let node = nativeView.buttonNode(at: inNative) else {
+            hideTooltip()
+            return
+        }
+        guard node.id != tooltipNodeID else { return }
+        let warm = tooltip.isVisible
+        tooltipWork?.cancel()
+        tooltipWork = nil
+        tooltipNodeID = node.id
+        if warm {
+            presentTooltip(for: node)
+            return
+        }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.tooltipWork = nil
+            guard let current = self.nativeView.buttonNode(at: inNative),
+                  current.id == node.id else { return }
+            self.presentTooltip(for: current)
+        }
+        tooltipWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + TrayHover.tooltipDelay, execute: work)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hideTooltip()
+    }
+
+    private func hideTooltip() {
+        tooltipNodeID = nil
+        tooltipWork?.cancel()
+        tooltipWork = nil
+        tooltip.hide()
+    }
+
+    private func presentTooltip(for node: NativeHubButtonNode) {
+        guard let window else { return }
+        let inWindow = nativeView.convert(node.frame, to: nil)
+        let anchor = window.convertToScreen(inWindow)
+        // Цвета берутся с отрендеренной House-поверхности, как в трее: угол
+        // панели — фон, чуть светлее — штрих.
+        let fill = Self.pixelColor(nativeView.surfacePixel(at: NSPoint(x: 2, y: 2)))
+        let stroke = fill.blended(withFraction: 0.25, of: .white) ?? fill
+        tooltip.show(text: node.title,
+                     anchor: anchor,
+                     below: true,
+                     fill: fill,
+                     stroke: stroke,
+                     radius: NativeHubMetrics.radius,
+                     controlHeight: NativeHubMetrics.height,
+                     fontSize: NativeHubMetrics.buttonFontSize,
+                     horizontalInset: NativeHubMetrics.controlInset,
+                     screen: window.screen ?? NSScreen.main)
+    }
+
+    private static func pixelColor(_ pixel: UInt32) -> NSColor {
+        NSColor(srgbRed: CGFloat((pixel >> 24) & 0xff) / 255,
+                green: CGFloat((pixel >> 16) & 0xff) / 255,
+                blue: CGFloat((pixel >> 8) & 0xff) / 255,
+                alpha: 1)
     }
 
     func setSelectedTool(_ tool: AnnotationTool) {

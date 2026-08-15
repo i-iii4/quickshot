@@ -51,111 +51,89 @@
           <if test="{annotationToolbarSurface}">
             <column gap="6" padding="6" label="Annotation toolbar">
               <if test="{toolbarCompact}">
-                <row gap="6" cross="center" label="Tools row one">
-                  <button-group gap="0" cross="center" label="Annotation tool primary">
-                    <button size="sm" selected="{toolSelect}" label="Tool select" on-press="tool_select">Select</button>
-                    <button size="sm" selected="{toolArrow}" label="Tool arrow" on-press="tool_arrow">Arrow</button>
-                    <button size="sm" selected="{toolBox}" label="Tool box" on-press="tool_box">Box</button>
-                    <button size="sm" selected="{toolEllipse}" label="Tool ellipse" on-press="tool_ellipse">Oval</button>
-                    <button size="sm" selected="{toolLine}" label="Tool line" on-press="tool_line">Line</button>
-                    <button size="sm" selected="{toolPen}" label="Tool pen" on-press="tool_pen">Pen</button>
+                <row gap="8" cross="center" label="Tools row">
+                  <button-group gap="2" cross="center" label="Annotation tool">
+                    <button size="sm" selected="{toolSelect}" icon="app:tool-select" label="Select" on-press="tool_select"></button>
+                    <button size="sm" selected="{toolArrow}" icon="app:tool-arrow" label="Arrow" on-press="tool_arrow"></button>
+                    <button size="sm" selected="{toolBox}" icon="app:tool-box" label="Rectangle" on-press="tool_box"></button>
+                    <button size="sm" selected="{toolEllipse}" icon="app:tool-oval" label="Oval" on-press="tool_ellipse"></button>
+                    <button size="sm" selected="{toolLine}" icon="app:tool-line" label="Line" on-press="tool_line"></button>
+                    <button size="sm" selected="{toolPen}" icon="app:tool-pen" label="Pen" on-press="tool_pen"></button>
+                    <button size="sm" selected="{toolText}" icon="app:tool-text" label="Text" on-press="tool_text"></button>
+                    <button size="sm" selected="{toolMark}" icon="app:tool-mark" label="Highlight" on-press="tool_mark"></button>
+                    <button size="sm" selected="{toolStep}" icon="app:tool-step" label="Step number" on-press="tool_step"></button>
+                    <button size="sm" selected="{toolHide}" icon="app:tool-hide" label="Redact" on-press="tool_hide"></button>
+                    <button size="sm" selected="{toolBlur}" icon="app:tool-blur" label="Blur" on-press="tool_blur"></button>
+                    <button size="sm" selected="{toolCrop}" icon="app:tool-crop" label="Crop" on-press="tool_crop"></button>
                   </button-group>
                 </row>
-                <row gap="6" cross="center" label="Tools row two">
-                  <button-group gap="0" cross="center" label="Annotation tool secondary">
-                    <button size="sm" selected="{toolText}" label="Tool text" on-press="tool_text">Text</button>
-                    <button size="sm" selected="{toolMark}" label="Tool mark" on-press="tool_mark">Mark</button>
-                    <button size="sm" selected="{toolStep}" label="Tool step" on-press="tool_step">Step</button>
-                    <button size="sm" selected="{toolHide}" label="Tool hide" on-press="tool_hide">Hide</button>
-                    <button size="sm" selected="{toolBlur}" label="Tool blur" on-press="tool_blur">Blur</button>
-                    <button size="sm" selected="{toolCrop}" label="Tool crop" on-press="tool_crop">Crop</button>
+                <row gap="8" cross="center" label="Style row">
+                  <button-group gap="2" cross="center" label="Colour">
+                    <button size="sm" selected="{colour0}" icon="app:swatch-red" label="Red" on-press="colour_0"></button>
+                    <button size="sm" selected="{colour1}" icon="app:swatch-amber" label="Amber" on-press="colour_1"></button>
+                    <button size="sm" selected="{colour2}" icon="app:swatch-green" label="Green" on-press="colour_2"></button>
+                    <button size="sm" selected="{colour3}" icon="app:swatch-blue" label="Blue" on-press="colour_3"></button>
+                    <button size="sm" selected="{colour4}" icon="app:swatch-violet" label="Violet" on-press="colour_4"></button>
+                    <button size="sm" selected="{colour5}" icon="app:swatch-graphite" label="Graphite" on-press="colour_5"></button>
                   </button-group>
+                  <button-group gap="2" cross="center" label="Stroke weight">
+                    <button size="sm" selected="{weightThin}" icon="app:weight-thin" label="Thin stroke" on-press="weight_thin"></button>
+                    <button size="sm" selected="{weightMedium}" icon="app:weight-medium" label="Medium stroke" on-press="weight_medium"></button>
+                    <button size="sm" selected="{weightThick}" icon="app:weight-thick" label="Thick stroke" on-press="weight_thick"></button>
+                  </button-group>
+                  <button size="sm" variant="ghost" selected="{fillOn}" icon="app:shape-fill" label="Fill shapes" on-press="fill_toggle"></button>
+                </row>
+                <row gap="8" cross="center" label="Command row">
+                  <button size="sm" variant="ghost" icon="app:undo" label="Undo" disabled="{cannotUndo}" on-press="editor_undo"></button>
+                  <button size="sm" variant="ghost" icon="app:redo" label="Redo" disabled="{cannotRedo}" on-press="editor_redo"></button>
+                  <button size="sm" variant="ghost" icon="refresh-cw" label="Rotate" on-press="editor_rotate"></button>
+                  <button size="sm" variant="ghost" icon="app:scan" label="Find private data" on-press="editor_scan"></button>
+                  <spacer width="8"/>
+                  <button size="sm" variant="secondary" icon="save" label="Save" on-press="editor_save"></button>
+                  <button size="sm" variant="secondary" icon="copy" label="Copy" on-press="editor_copy"></button>
+                  <button size="sm" variant="ghost" icon="x" label="Close editor" on-press="editor_close"></button>
                 </row>
               </if>
               <else>
-                <row gap="6" cross="center" label="Tools row">
-                  <button-group gap="0" cross="center" label="Annotation tool">
-                    <button size="sm" selected="{toolSelect}" label="Tool select" on-press="tool_select">Select</button>
-                    <button size="sm" selected="{toolArrow}" label="Tool arrow" on-press="tool_arrow">Arrow</button>
-                    <button size="sm" selected="{toolBox}" label="Tool box" on-press="tool_box">Box</button>
-                    <button size="sm" selected="{toolEllipse}" label="Tool ellipse" on-press="tool_ellipse">Oval</button>
-                    <button size="sm" selected="{toolLine}" label="Tool line" on-press="tool_line">Line</button>
-                    <button size="sm" selected="{toolPen}" label="Tool pen" on-press="tool_pen">Pen</button>
-                    <button size="sm" selected="{toolText}" label="Tool text" on-press="tool_text">Text</button>
-                    <button size="sm" selected="{toolMark}" label="Tool mark" on-press="tool_mark">Mark</button>
-                    <button size="sm" selected="{toolStep}" label="Tool step" on-press="tool_step">Step</button>
-                    <button size="sm" selected="{toolHide}" label="Tool hide" on-press="tool_hide">Hide</button>
-                    <button size="sm" selected="{toolBlur}" label="Tool blur" on-press="tool_blur">Blur</button>
-                    <button size="sm" selected="{toolCrop}" label="Tool crop" on-press="tool_crop">Crop</button>
+                <row gap="8" cross="center" label="Toolbar row">
+                  <button-group gap="2" cross="center" label="Annotation tool">
+                    <button size="sm" selected="{toolSelect}" icon="app:tool-select" label="Select" on-press="tool_select"></button>
+                    <button size="sm" selected="{toolArrow}" icon="app:tool-arrow" label="Arrow" on-press="tool_arrow"></button>
+                    <button size="sm" selected="{toolBox}" icon="app:tool-box" label="Rectangle" on-press="tool_box"></button>
+                    <button size="sm" selected="{toolEllipse}" icon="app:tool-oval" label="Oval" on-press="tool_ellipse"></button>
+                    <button size="sm" selected="{toolLine}" icon="app:tool-line" label="Line" on-press="tool_line"></button>
+                    <button size="sm" selected="{toolPen}" icon="app:tool-pen" label="Pen" on-press="tool_pen"></button>
+                    <button size="sm" selected="{toolText}" icon="app:tool-text" label="Text" on-press="tool_text"></button>
+                    <button size="sm" selected="{toolMark}" icon="app:tool-mark" label="Highlight" on-press="tool_mark"></button>
+                    <button size="sm" selected="{toolStep}" icon="app:tool-step" label="Step number" on-press="tool_step"></button>
+                    <button size="sm" selected="{toolHide}" icon="app:tool-hide" label="Redact" on-press="tool_hide"></button>
+                    <button size="sm" selected="{toolBlur}" icon="app:tool-blur" label="Blur" on-press="tool_blur"></button>
+                    <button size="sm" selected="{toolCrop}" icon="app:tool-crop" label="Crop" on-press="tool_crop"></button>
                   </button-group>
-                </row>
-              </else>
-              <if test="{toolbarCompact}">
-                <row gap="6" cross="center" label="Colour row">
-                  <button-group gap="0" cross="center" label="Colour compact">
-                    <button size="sm" selected="{colour0}" label="Colour red" on-press="colour_0">Red</button>
-                    <button size="sm" selected="{colour1}" label="Colour amber" on-press="colour_1">Amber</button>
-                    <button size="sm" selected="{colour2}" label="Colour green" on-press="colour_2">Green</button>
-                    <button size="sm" selected="{colour3}" label="Colour blue" on-press="colour_3">Blue</button>
-                    <button size="sm" selected="{colour4}" label="Colour violet" on-press="colour_4">Violet</button>
-                    <button size="sm" selected="{colour5}" label="Colour graphite" on-press="colour_5">Grey</button>
+                  <separator/>
+                  <button-group gap="2" cross="center" label="Colour">
+                    <button size="sm" selected="{colour0}" icon="app:swatch-red" label="Red" on-press="colour_0"></button>
+                    <button size="sm" selected="{colour1}" icon="app:swatch-amber" label="Amber" on-press="colour_1"></button>
+                    <button size="sm" selected="{colour2}" icon="app:swatch-green" label="Green" on-press="colour_2"></button>
+                    <button size="sm" selected="{colour3}" icon="app:swatch-blue" label="Blue" on-press="colour_3"></button>
+                    <button size="sm" selected="{colour4}" icon="app:swatch-violet" label="Violet" on-press="colour_4"></button>
+                    <button size="sm" selected="{colour5}" icon="app:swatch-graphite" label="Graphite" on-press="colour_5"></button>
                   </button-group>
-                </row>
-                <row gap="6" cross="center" label="Weight row">
-                  <button-group gap="0" cross="center" label="Stroke weight compact">
-                    <button size="sm" selected="{weightThin}" label="Weight thin" on-press="weight_thin">Thin</button>
-                    <button size="sm" selected="{weightMedium}" label="Weight medium" on-press="weight_medium">Medium</button>
-                    <button size="sm" selected="{weightThick}" label="Weight thick" on-press="weight_thick">Thick</button>
+                  <button-group gap="2" cross="center" label="Stroke weight">
+                    <button size="sm" selected="{weightThin}" icon="app:weight-thin" label="Thin stroke" on-press="weight_thin"></button>
+                    <button size="sm" selected="{weightMedium}" icon="app:weight-medium" label="Medium stroke" on-press="weight_medium"></button>
+                    <button size="sm" selected="{weightThick}" icon="app:weight-thick" label="Thick stroke" on-press="weight_thick"></button>
                   </button-group>
-                  <button-group gap="0" cross="center" label="Fill compact">
-                    <button size="sm" selected="{fillOff}" label="Fill off" on-press="fill_off">Outline</button>
-                    <button size="sm" selected="{fillOn}" label="Fill on" on-press="fill_on">Filled</button>
-                  </button-group>
-                </row>
-              </if>
-              <else>
-              <row gap="6" cross="center" label="Style row">
-                <button-group gap="0" cross="center" label="Colour">
-                  <button size="sm" selected="{colour0}" label="Colour red" on-press="colour_0">Red</button>
-                  <button size="sm" selected="{colour1}" label="Colour amber" on-press="colour_1">Amber</button>
-                  <button size="sm" selected="{colour2}" label="Colour green" on-press="colour_2">Green</button>
-                  <button size="sm" selected="{colour3}" label="Colour blue" on-press="colour_3">Blue</button>
-                  <button size="sm" selected="{colour4}" label="Colour violet" on-press="colour_4">Violet</button>
-                  <button size="sm" selected="{colour5}" label="Colour graphite" on-press="colour_5">Grey</button>
-                </button-group>
-                <button-group gap="0" cross="center" label="Stroke weight">
-                  <button size="sm" selected="{weightThin}" label="Weight thin" on-press="weight_thin">Thin</button>
-                  <button size="sm" selected="{weightMedium}" label="Weight medium" on-press="weight_medium">Medium</button>
-                  <button size="sm" selected="{weightThick}" label="Weight thick" on-press="weight_thick">Thick</button>
-                </button-group>
-                <button-group gap="0" cross="center" label="Fill">
-                  <button size="sm" selected="{fillOff}" label="Fill off" on-press="fill_off">Outline</button>
-                  <button size="sm" selected="{fillOn}" label="Fill on" on-press="fill_on">Filled</button>
-                </button-group>
-              </row>
-              </else>
-              <if test="{toolbarCompact}">
-                <row gap="6" cross="center" label="Command row one">
-                  <button size="sm" variant="secondary" icon="refresh-cw" label="Editor rotate" on-press="editor_rotate">Rotate</button>
-                  <button size="sm" variant="secondary" icon="search" label="Editor scan" on-press="editor_scan">Scan</button>
-                  <button size="sm" variant="secondary" icon="chevron-left" label="Editor undo" on-press="editor_undo">Undo</button>
-                  <button size="sm" variant="secondary" icon="chevron-right" label="Editor redo" on-press="editor_redo">Redo</button>
-                </row>
-                <row gap="6" cross="center" label="Command row two">
-                  <button size="sm" variant="secondary" icon="save" label="Editor save" on-press="editor_save">Save</button>
-                  <button size="sm" variant="secondary" icon="copy" label="Editor copy" on-press="editor_copy">Copy</button>
-                  <button size="sm" variant="destructive" icon="x" label="Editor close" on-press="editor_close">Close</button>
-                </row>
-              </if>
-              <else>
-                <row gap="6" cross="center" label="Command row">
-                  <button size="sm" variant="secondary" icon="refresh-cw" label="Editor rotate" on-press="editor_rotate">Rotate</button>
-                  <button size="sm" variant="secondary" icon="search" label="Editor scan" on-press="editor_scan">Scan</button>
-                  <button size="sm" variant="secondary" icon="chevron-left" label="Editor undo" on-press="editor_undo">Undo</button>
-                  <button size="sm" variant="secondary" icon="chevron-right" label="Editor redo" on-press="editor_redo">Redo</button>
-                  <button size="sm" variant="secondary" icon="save" label="Editor save" on-press="editor_save">Save</button>
-                  <button size="sm" variant="secondary" icon="copy" label="Editor copy" on-press="editor_copy">Copy</button>
-                  <button size="sm" variant="destructive" icon="x" label="Editor close" on-press="editor_close">Close</button>
+                  <button size="sm" variant="ghost" selected="{fillOn}" icon="app:shape-fill" label="Fill shapes" on-press="fill_toggle"></button>
+                  <separator/>
+                  <button size="sm" variant="ghost" icon="app:undo" label="Undo" disabled="{cannotUndo}" on-press="editor_undo"></button>
+                  <button size="sm" variant="ghost" icon="app:redo" label="Redo" disabled="{cannotRedo}" on-press="editor_redo"></button>
+                  <button size="sm" variant="ghost" icon="refresh-cw" label="Rotate" on-press="editor_rotate"></button>
+                  <button size="sm" variant="ghost" icon="app:scan" label="Find private data" on-press="editor_scan"></button>
+                  <separator/>
+                  <button size="sm" variant="secondary" icon="save" label="Save" on-press="editor_save"></button>
+                  <button size="sm" variant="secondary" icon="copy" label="Copy" on-press="editor_copy"></button>
+                  <button size="sm" variant="ghost" icon="x" label="Close editor" on-press="editor_close"></button>
                 </row>
               </else>
             </column>

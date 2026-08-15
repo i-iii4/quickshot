@@ -680,6 +680,9 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/AnnotationCanvas.swift \
   Sources/AnnotationRenderer.swift \
   Sources/AnnotationHandle.swift \
+  Sources/AnnotationDocument.swift \
+  Sources/AnnotationToolModel.swift \
+  Sources/AnnotationToolbar.swift \
   Sources/AnnotationCanvasView.swift \
   Sources/AnnotationSession.swift \
   Sources/AnnotationStateStore.swift \

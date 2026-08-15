@@ -30,108 +30,81 @@ private final class ThumbnailWindowLiveClickTests: NSObject, NSApplicationDelega
         }
     }
 
-    private func runCloseClick(position: TrayPosition) {
-        guard let screen = NSScreen.main,
-              let image = makeImage(width: 360, height: 220) else {
+    /// Реальный поток: менеджер сам создаёт карточку в своём окне-хосте,
+    /// клик уходит через sendEvent этого окна, буфер обмена — настоящий.
+    private func makeFixture(position: TrayPosition)
+        -> (manager: ThumbnailManager, store: CaptureArtifactStore, thumbnail: ThumbnailWindow, host: NSWindow)? {
+        guard let screen = NSScreen.main, let image = makeImage(width: 360, height: 220) else {
             failures.append("\(position): cannot create test image")
-            return
+            return nil
         }
-
-        let panel = ThumbnailLivePanel(contentRect: NSRect(x: screen.frame.midX - 260,
-                                                           y: screen.frame.midY - 170,
-                                                           width: 520,
-                                                           height: 340),
-                                       styleMask: [.borderless, .nonactivatingPanel],
-                                       backing: .buffered,
-                                       defer: false)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = false
-        panel.level = .statusBar
-        panel.becomesKeyOnlyIfNeeded = false
-
-        let root = TrayHostContentView(frame: NSRect(x: 0, y: 0, width: 520, height: 340))
-        panel.contentView = root
-
-        let manager = ThumbnailManager()
-        let thumbnail = ThumbnailWindow(image: image,
-                                        screen: screen,
-                                        manager: manager,
-                                        width: 240,
-                                        screenHeight: screen.frame.height)
-        root.addSubview(thumbnail.hostView)
-        thumbnail.configureResize(for: position)
-        thumbnail.placeInstant(origin: NSPoint(x: 120, y: 80))
+        let sequence = CaptureSequence(rawValue: UInt64.random(in: 1...UInt64.max))
+        let store = CaptureArtifactStore(
+            rootURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("QuickShotLiveClickTests-\(UUID().uuidString)"))
+        store.registerCapture(sequence)
+        guard let artifact = try? store.admit(sequence: sequence, image: image) else {
+            failures.append("\(position): cannot admit test artifact")
+            return nil
+        }
+        let manager = ThumbnailManager(artifactStore: store)
+        manager.add(artifact: artifact, on: screen)
+        guard let thumbnail = manager.debugThumbnail(for: artifact.id),
+              let host = thumbnail.hostView.window else {
+            failures.append("\(position): manager did not present the card")
+            manager.shutdown()
+            store.shutdown()
+            return nil
+        }
+        // Окно хоста в тестовой сессии может числиться occluded — display-link
+        // тогда не тикает; анимации достраиваются явно.
+        manager.debugFinishMotions()
+        spinUntil(0.5) { thumbnail.hostView.alphaValue > 0.99 }
+        if thumbnail.hostView.alphaValue < 0.99 {
+            failures.append("\(position): card never faded in (alpha=\(thumbnail.hostView.alphaValue))")
+        }
         thumbnail.debugShowControls()
-        root.layoutSubtreeIfNeeded()
-
-        panel.orderFrontRegardless()
-        panel.makeKey()
+        thumbnail.hostView.superview?.layoutSubtreeIfNeeded()
         spin(0.05)
+        return (manager, store, thumbnail, host)
+    }
 
-        let point = thumbnail.debugCloseButtonCenterInHost()
-        let hitBefore = hitDescription(at: point, root: root, thumbnail: thumbnail)
-        postMouse(.leftMouseDown, at: point, panel: panel)
+    private func runCloseClick(position: TrayPosition) {
+        guard let fixture = makeFixture(position: position) else { return }
+        let (manager, store, thumbnail, host) = fixture
+
+        let inWindow = thumbnail.debugCloseButtonCenterInHost()
+        let hitBefore = hitDescription(at: inWindow, root: host.contentView!, thumbnail: thumbnail)
+        postMouse(.leftMouseDown, at: inWindow, panel: host)
         spin(0.02)
-        postMouse(.leftMouseUp, at: point, panel: panel)
-        spin(0.08)
+        postMouse(.leftMouseUp, at: inWindow, panel: host)
+        spinUntil(1.2) {
+            manager.debugFinishMotions()
+            return thumbnail.hostView.superview == nil
+        }
 
         if thumbnail.hostView.superview != nil {
             failures.append("\(position): close button did not remove thumbnail; \(hitBefore); \(thumbnail.debugCloseButtonState())")
         }
-        panel.orderOut(nil)
+        manager.shutdown()
+        store.shutdown()
         spin(0.03)
     }
 
     private func runCopyClick(position: TrayPosition) {
-        guard let screen = NSScreen.main,
-              let image = makeImage(width: 360, height: 220) else {
-            failures.append("\(position): cannot create test image")
-            return
-        }
-
-        let panel = ThumbnailLivePanel(contentRect: NSRect(x: screen.frame.midX - 260,
-                                                           y: screen.frame.midY - 170,
-                                                           width: 520,
-                                                           height: 340),
-                                       styleMask: [.borderless, .nonactivatingPanel],
-                                       backing: .buffered,
-                                       defer: false)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = false
-        panel.level = .statusBar
-        panel.becomesKeyOnlyIfNeeded = false
-
-        let root = TrayHostContentView(frame: NSRect(x: 0, y: 0, width: 520, height: 340))
-        panel.contentView = root
-
-        let manager = ThumbnailManager()
-        let thumbnail = ThumbnailWindow(image: image,
-                                        screen: screen,
-                                        manager: manager,
-                                        width: 240,
-                                        screenHeight: screen.frame.height)
-        root.addSubview(thumbnail.hostView)
-        thumbnail.configureResize(for: position)
-        thumbnail.placeInstant(origin: NSPoint(x: 120, y: 80))
-        thumbnail.debugShowControls()
-        root.layoutSubtreeIfNeeded()
-
-        panel.orderFrontRegardless()
-        panel.makeKey()
-        spin(0.05)
+        guard let fixture = makeFixture(position: position) else { return }
+        let (manager, store, thumbnail, host) = fixture
 
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         let changeCount = pasteboard.changeCount
 
-        let point = thumbnail.debugCopyButtonCenterInHost()
-        let hitBefore = hitDescription(at: point, root: root, thumbnail: thumbnail)
-        postMouse(.leftMouseDown, at: point, panel: panel)
+        let inWindow = thumbnail.debugCopyButtonCenterInHost()
+        let hitBefore = hitDescription(at: inWindow, root: host.contentView!, thumbnail: thumbnail)
+        postMouse(.leftMouseDown, at: inWindow, panel: host)
         spin(0.02)
-        postMouse(.leftMouseUp, at: point, panel: panel)
-        spinUntil(0.7) {
+        postMouse(.leftMouseUp, at: inWindow, panel: host)
+        spinUntil(1.5) {
             pasteboard.changeCount != changeCount && pasteboard.data(forType: .png) != nil
         }
 
@@ -141,7 +114,8 @@ private final class ThumbnailWindowLiveClickTests: NSObject, NSApplicationDelega
         if pasteboard.changeCount == changeCount || pasteboard.data(forType: .png) == nil {
             failures.append("\(position): copy button did not publish PNG to pasteboard; \(hitBefore); \(thumbnail.debugCopyButtonState())")
         }
-        panel.orderOut(nil)
+        manager.shutdown()
+        store.shutdown()
         spin(0.03)
     }
 
@@ -163,9 +137,12 @@ private final class ThumbnailWindowLiveClickTests: NSObject, NSApplicationDelega
                                 thumbnail: ThumbnailWindow) -> String {
         let rootPoint = root.convert(windowPoint, from: nil)
         let rootHit = root.hitTest(rootPoint).map { String(describing: type(of: $0)) } ?? "nil"
-        let hostPoint = thumbnail.hostView.convert(rootPoint, from: root)
-        let hostHit = thumbnail.hostView.hitTest(hostPoint).map { String(describing: type(of: $0)) } ?? "nil"
-        return "rootHit=\(rootHit) hostHit=\(hostHit) windowPoint=\(windowPoint) hostPoint=\(hostPoint) hostFrame=\(thumbnail.hostView.frame)"
+        // hitTest ждёт координаты СУПЕРВЬЮ цели: для hostView это root.
+        let hostHit = thumbnail.hostView.hitTest(rootPoint).map { String(describing: type(of: $0)) } ?? "nil"
+        let children = root.subviews.map {
+            "\(type(of: $0))@\($0.frame) hidden=\($0.isHidden) alpha=\($0.alphaValue)"
+        }.joined(separator: "; ")
+        return "rootHit=\(rootHit) hostHit=\(hostHit) windowPoint=\(windowPoint) rootBounds=\(root.bounds) rootPoint=\(rootPoint) hostFrame=\(thumbnail.hostView.frame) children=[\(children)]"
     }
 
     private func makeImage(width: Int, height: Int) -> CGImage? {

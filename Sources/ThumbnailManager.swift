@@ -992,6 +992,14 @@ final class ThumbnailManager {
 
 #if TESTING
     var debugActiveDragSessionCount: Int { activeDragPayloads.count }
+    func debugThumbnail(for id: UUID) -> ThumbnailWindow? { itemByID[id] }
+
+    /// Достроить идущие анимации немедленно: тестовые окружения без живого
+    /// display-clock (окно считается occluded) иначе зависают на alpha=0.
+    func debugFinishMotions() {
+        finishCollectionMotion()
+        finishTrayMotion()
+    }
 #endif
 
     func shutdown() {

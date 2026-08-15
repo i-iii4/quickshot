@@ -6,12 +6,13 @@ enum TrayPosition: String {
 
     var isVertical: Bool { self == .right || self == .left }
 
-    static var testCurrent: TrayPosition = .right
-    static var current: TrayPosition { testCurrent }
+    @MainActor static var testCurrent: TrayPosition = .right
+    @MainActor static var current: TrayPosition { testCurrent }
 }
 
 private func liveEaseOutCubic(_ f: CGFloat) -> CGFloat { 1 - pow(1 - f, 3) }
 
+@MainActor
 final class FrameAnimator: NSObject {
     private weak var hostView: NSView?
     private var link: CADisplayLink?
@@ -59,7 +60,9 @@ final class FrameAnimator: NSObject {
         onDone = nil
     }
 
-    deinit { link?.invalidate() }
+    // `cancel()` уже инвалидировал линк при завершении; деинициализация на
+    // MainActor-классе не может трогать не-Sendable поле — и не обязана:
+    // тестовый аниматор всегда доигрывает до конца или отменяется явно.
 }
 
 private final class LiveClickPanel: NSPanel {
