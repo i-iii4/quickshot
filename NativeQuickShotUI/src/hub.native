@@ -63,7 +63,6 @@
                     <button size="sm" selected="{toolMark}" icon="app:tool-mark" label="Highlight" on-press="tool_mark"></button>
                     <button size="sm" selected="{toolStep}" icon="app:tool-step" label="Step number" on-press="tool_step"></button>
                     <button size="sm" selected="{toolHide}" icon="app:tool-hide" label="Redact" on-press="tool_hide"></button>
-                    <button size="sm" selected="{toolBlur}" icon="app:tool-blur" label="Blur" on-press="tool_blur"></button>
                     <button size="sm" selected="{toolCrop}" icon="app:tool-crop" label="Crop" on-press="tool_crop"></button>
                   </button-group>
                 </row>
@@ -107,7 +106,6 @@
                     <button size="sm" selected="{toolMark}" icon="app:tool-mark" label="Highlight" on-press="tool_mark"></button>
                     <button size="sm" selected="{toolStep}" icon="app:tool-step" label="Step number" on-press="tool_step"></button>
                     <button size="sm" selected="{toolHide}" icon="app:tool-hide" label="Redact" on-press="tool_hide"></button>
-                    <button size="sm" selected="{toolBlur}" icon="app:tool-blur" label="Blur" on-press="tool_blur"></button>
                     <button size="sm" selected="{toolCrop}" icon="app:tool-crop" label="Crop" on-press="tool_crop"></button>
                   </button-group>
                   <separator/>

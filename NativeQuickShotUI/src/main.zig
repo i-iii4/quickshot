@@ -23,7 +23,6 @@ const tool_text_icon = appIcon("tool-text");
 const tool_mark_icon = appIcon("tool-mark");
 const tool_step_icon = appIcon("tool-step");
 const tool_hide_icon = appIcon("tool-hide");
-const tool_blur_icon = appIcon("tool-blur");
 const tool_crop_icon = appIcon("tool-crop");
 const swatch_red_icon = appIcon("swatch-red");
 const swatch_amber_icon = appIcon("swatch-amber");
@@ -50,7 +49,6 @@ pub const app_icons: []const canvas.icons.Entry = &.{
     .{ .name = "tool-mark", .icon = &tool_mark_icon },
     .{ .name = "tool-step", .icon = &tool_step_icon },
     .{ .name = "tool-hide", .icon = &tool_hide_icon },
-    .{ .name = "tool-blur", .icon = &tool_blur_icon },
     .{ .name = "tool-crop", .icon = &tool_crop_icon },
     .{ .name = "swatch-red", .icon = &swatch_red_icon },
     .{ .name = "swatch-amber", .icon = &swatch_amber_icon },
@@ -180,7 +178,6 @@ pub const Model = struct {
     pub fn toolMark(model: *const Model) bool { return model.tool == .mark; }
     pub fn toolStep(model: *const Model) bool { return model.tool == .step; }
     pub fn toolHide(model: *const Model) bool { return model.tool == .hide; }
-    pub fn toolBlur(model: *const Model) bool { return model.tool == .blur; }
     pub fn colour0(model: *const Model) bool { return model.palette_index == 0; }
     pub fn colour1(model: *const Model) bool { return model.palette_index == 1; }
     pub fn colour2(model: *const Model) bool { return model.palette_index == 2; }
@@ -250,7 +247,6 @@ pub const AnnotationTool = enum {
     mark,
     step,
     hide,
-    blur,
 };
 
 pub const Retention = enum {
@@ -290,7 +286,6 @@ pub const Action = enum {
     tool_mark,
     tool_step,
     tool_hide,
-    tool_blur,
     editor_undo,
     editor_redo,
     editor_save,
@@ -354,7 +349,6 @@ pub const Msg = union(enum) {
     tool_mark,
     tool_step,
     tool_hide,
-    tool_blur,
     editor_undo,
     editor_redo,
     editor_save,
@@ -523,7 +517,6 @@ fn update(model: *Model, msg: Msg) void {
         .tool_mark => { model.tool = .mark; model.last_action = .tool_mark; },
         .tool_step => { model.tool = .step; model.last_action = .tool_step; },
         .tool_hide => { model.tool = .hide; model.last_action = .tool_hide; },
-        .tool_blur => { model.tool = .blur; model.last_action = .tool_blur; },
         .editor_undo => model.last_action = .editor_undo,
         .editor_redo => model.last_action = .editor_redo,
         .editor_save => model.last_action = .editor_save,
@@ -696,7 +689,6 @@ fn parseTool(raw: []const u8) ?AnnotationTool {
     if (std.mem.eql(u8, raw, "mark")) return .mark;
     if (std.mem.eql(u8, raw, "step")) return .step;
     if (std.mem.eql(u8, raw, "hide")) return .hide;
-    if (std.mem.eql(u8, raw, "blur")) return .blur;
     return null;
 }
 
@@ -769,7 +761,6 @@ fn actionForMessage(msg: Msg) Action {
         .tool_mark => .tool_mark,
         .tool_step => .tool_step,
         .tool_hide => .tool_hide,
-        .tool_blur => .tool_blur,
         .editor_undo => .editor_undo,
         .editor_redo => .editor_redo,
         .editor_save => .editor_save,

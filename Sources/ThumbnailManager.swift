@@ -84,6 +84,9 @@ final class ThumbnailManager {
     private var scrollGestureOvershoot: CGFloat = 0
     private var collapsedByGesture = false
     private var scrollGestureActive = false
+    /// `TR-5`: лента держится на новых снимках, пока пользователь не увёл её
+    /// сам. Новый снимок снова возвращает следование.
+    private var scrollFollowsNewest = true
     private var scrollSettleAnimating = false
     private lazy var scrollSettleAnimator = CollectionProgressAnimator(hostView: hostContent)
 
@@ -400,6 +403,7 @@ final class ThumbnailManager {
     // MARK: добавление/удаление
 
     func add(artifact: CaptureArtifact, on screen: NSScreen) {
+        scrollFollowsNewest = true          // `TR-5`
         finishCollectionMotion()
         finishTrayMotion()
         cancelCollapsedPeekDismiss()
@@ -728,6 +732,7 @@ final class ThumbnailManager {
         }
 
         guard scrollModel.isScrollable || abs(delta) > 0.01 else { return }
+        scrollFollowsNewest = false
         // Резинка только у жестов с фазами: колесо упирается в край жёстко.
         scrollModel = scrollModel.scrolled(by: -delta, rubberBand: hasPhases)
         scrollGestureOvershoot = scrollModel.overshoot
@@ -805,12 +810,6 @@ final class ThumbnailManager {
     /// один к одному, ушедшие за край собираются в стопку (`TR-3`).
     private func applyScrollOffset() {
         layout()
-    }
-
-    /// Состояние по умолчанию: стопка внизу, новый снимок сверху (`TR-5`).
-    private func resetScrollToNewest() {
-        scrollModel.offset = TrayScrollModel.defaultOffset(contentLength: scrollModel.contentLength,
-                                                           viewportLength: scrollModel.viewportLength)
     }
 
     private func shiftViewport(by delta: Int) {
@@ -1036,6 +1035,7 @@ final class ThumbnailManager {
 #if TESTING
     var debugActiveDragSessionCount: Int { activeDragPayloads.count }
     func debugThumbnail(for id: UUID) -> ThumbnailWindow? { itemByID[id] }
+    var debugScrollIsActive: Bool { scrollModel.isScrollable }
 
     /// Достроить идущие анимации немедленно: тестовые окружения без живого
     /// display-clock (окно считается occluded) иначе зависают на alpha=0.
@@ -1254,11 +1254,16 @@ final class ThumbnailManager {
         scrollModel.viewportLength = max(1, viewport)
         // Пока идёт жест или пружинный возврат, смещение может законно жить за
         // границей — мгновенный clamp здесь и делал резинку невидимой.
-        if !scrollGestureActive && !scrollSettleAnimating {
-            scrollModel = scrollModel.settled()
-        } else if !scrollModel.isScrollable {
-            scrollModel.offset = 0
+        if scrollGestureActive || scrollSettleAnimating {
+            if !scrollModel.isScrollable { scrollModel.offset = 0 }
+            return
         }
+        if scrollFollowsNewest {
+            scrollModel.offset = TrayScrollModel.defaultOffset(contentLength: scrollModel.contentLength,
+                                                               viewportLength: scrollModel.viewportLength)
+            return
+        }
+        scrollModel = scrollModel.settled()
     }
 
     private func resolvedViewportLayout(on screen: NSScreen) -> ThumbnailLayoutResult {

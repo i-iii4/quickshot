@@ -26,8 +26,6 @@ ICONS = {
     'tool-hide': ('<rect x="3.5" y="8" width="17" height="8" rx="1.5"/>'
                   '<line x1="7" y1="16" x2="10.5" y2="8"/>'
                   '<line x1="12" y1="16" x2="15.5" y2="8"/>'),
-    'tool-blur': ('<path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5'
-                  'c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/>'),
     'tool-crop': '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/>',
     'weight-thin': '<line x1="4" y1="12" x2="20" y2="12" stroke-width="1.3"/>',
     'weight-medium': '<line x1="4" y1="12" x2="20" y2="12" stroke-width="2.8"/>',

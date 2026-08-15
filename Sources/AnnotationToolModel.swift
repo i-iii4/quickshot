@@ -40,7 +40,6 @@ enum AnnotationTool: String, CaseIterable {
     case mark
     case step
     case hide
-    case blur
 
     /// Клавиша инструмента (`D-1`): одна буква без модификатора.
     var shortcut: String {
@@ -56,7 +55,6 @@ enum AnnotationTool: String, CaseIterable {
         case .mark: return "h"
         case .step: return "s"
         case .hide: return "b"
-        case .blur: return "u"
         }
     }
 
@@ -77,7 +75,6 @@ enum AnnotationTool: String, CaseIterable {
         case .mark: return .highlighter
         case .step: return .counter
         case .hide: return .redaction
-        case .blur: return .blur
         }
     }
 }

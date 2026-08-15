@@ -96,8 +96,6 @@ enum AnnotationRenderer {
                 context.setFillColor(AnnotationPalette.redaction.cgColor)
                 context.fill(rect.standardized)
             }
-        case .blur:
-            drawPixelated(object, in: context, imageSize: imageSize)
         }
     }
 
@@ -243,32 +241,6 @@ enum AnnotationRenderer {
             context.fill(rect.standardized)
         }
         draw(text, at: rect.standardized.origin, context: context)
-    }
-
-    private static func drawPixelated(_ object: AnnotationObject,
-                                      in context: CGContext,
-                                      imageSize: CGSize) {
-        guard case let .rect(rect, _) = object.geometry else { return }
-        // Пикселизация помечена как небезопасная (`E-3`); здесь она рисуется
-        // честно крупной сеткой, чтобы пользователь видел, что это не плашка.
-        let block = max(6, min(rect.width, rect.height) / 6)
-        let standardized = rect.standardized
-        var y = standardized.minY
-        var toggle = false
-        while y < standardized.maxY {
-            var x = standardized.minX
-            while x < standardized.maxX {
-                let shade = toggle ? 0.45 : 0.6
-                context.setFillColor(NSColor(white: shade, alpha: 1).cgColor)
-                context.fill(CGRect(x: x, y: y,
-                                    width: min(block, standardized.maxX - x),
-                                    height: min(block, standardized.maxY - y)))
-                x += block
-                toggle.toggle()
-            }
-            y += block
-            toggle.toggle()
-        }
     }
 
     private static func drawCentred(_ text: NSAttributedString,

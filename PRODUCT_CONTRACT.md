@@ -178,8 +178,9 @@ fullscreen behavior remain explicit runtime release checks.
    smaller than the window, and keeps stroke width visually constant.
 5. Every tool is reachable by a single letter key, and the full cycle — select,
    create, move, resize, restyle, delete, apply — works without a mouse.
-6. Hiding sensitive data defaults to an opaque bar. Blur and pixelation exist
-   but are marked unsafe for text. Applying the document bakes hiding objects
+6. Hiding sensitive data has exactly one tool: an opaque bar. Blur and
+   pixelation are rejected (`X-8`) — a second, recoverable way to hide is not a
+   choice worth offering. Applying the document bakes hiding objects
    irreversibly.
 7. Detection of sensitive data uses on-device text recognition, reports what it
    found, and never hides anything silently.

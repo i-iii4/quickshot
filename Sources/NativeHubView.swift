@@ -174,7 +174,6 @@ private enum NativeHubPressedButton: Int32 {
     case toolMark
     case toolStep
     case toolHide
-    case toolBlur
     case editorUndo
     case editorRedo
     case editorSave
@@ -811,7 +810,6 @@ private final class NativeHubRenderView: NSView {
         case "Tool mark": return .toolMark
         case "Tool step": return .toolStep
         case "Tool hide": return .toolHide
-        case "Tool blur": return .toolBlur
         case "Editor undo": return .editorUndo
         case "Editor redo": return .editorRedo
         case "Editor save": return .editorSave
@@ -1307,7 +1305,7 @@ final class NativeHubShellView: NSView {
             case .none, .copy, .dismiss, .positionLeft, .positionRight, .positionBottom,
                  .positionTop, .retentionDay, .retentionWeek, .retentionMonth,
                  .retentionForever, .autosaveOn, .autosaveOff, .openFolder,
-                 .toolSelect, .toolArrow, .toolBox, .toolEllipse, .toolLine, .toolPen, .toolText, .toolMark, .toolStep, .toolHide, .toolBlur,
+                 .toolSelect, .toolArrow, .toolBox, .toolEllipse, .toolLine, .toolPen, .toolText, .toolMark, .toolStep, .toolHide,
                  .editorUndo, .editorRedo, .editorSave, .editorCopy, .editorClose, .editorScan,
                  .editorRotate, .toolCrop,
                  .colour0, .colour1, .colour2, .colour3, .colour4, .colour5, .weightThin, .weightMedium, .weightThick, .fillOn, .fillOff:
@@ -3017,7 +3015,6 @@ final class NativeAnnotationToolbarSurface: NSView {
         case .toolMark: return .tool(.mark)
         case .toolStep: return .tool(.step)
         case .toolHide: return .tool(.hide)
-        case .toolBlur: return .tool(.blur)
         case .editorUndo: return .undo
         case .editorRedo: return .redo
         case .editorSave: return .save

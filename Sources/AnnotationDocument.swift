@@ -13,7 +13,6 @@ enum AnnotationKind: String, Equatable, CaseIterable {
     case highlighter
     case counter
     case redaction
-    case blur
 }
 
 /// Геометрия объекта. Формы разведены по способу задания, а не по инструменту:

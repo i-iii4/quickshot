@@ -542,6 +542,11 @@ final class ThumbnailWindow {
 
     func debugCloseButtonState() -> String { view.debugCloseButtonState() }
     func debugCopyButtonState() -> String { view.debugCopyButtonState() }
+
+    /// Видимость и живость карточки так, как их видит пользователь: карточка
+    /// в стопке может быть отрисована, но не принимать мышь.
+    var debugIsInteractive: Bool { container.interactionsEnabled }
+    var debugOpacity: CGFloat { container.alphaValue }
 #endif
 
     // MARK: motion
@@ -585,7 +590,10 @@ final class ThumbnailWindow {
         container.layer?.shadowOpacity = Float(TrayAnim.restingShadowOpacity * opacity)
         container.alphaValue = max(0, min(1, opacity))
         CATransaction.commit()
-        container.interactionsEnabled = opacity > 0.9
+        // Карточка в стопке остаётся живой: клик достаётся верхней по
+        // z-порядку, а гашение интерактивности убивало и прокрутку, потому что
+        // события колеса доходят до трея только через карточку.
+        container.interactionsEnabled = true
         container.isHidden = false
     }
 

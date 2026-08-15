@@ -9,7 +9,6 @@ struct AnnotationRendererTests {
         arrowHeadShrinksWithShortArrows()
         curveOnlyBendsWhenAsked()
         redactionIsOpaqueAndCoversPixels()
-        blurIsVisiblyDifferentFromRedaction()
         strokeScaleKeepsScreenWidth()
         everyKindRendersSomething()
         print("AnnotationRendererTests: passed")
@@ -77,23 +76,6 @@ struct AnnotationRendererTests {
     }
 
     /// `E-3`
-    private static func blurIsVisiblyDifferentFromRedaction() {
-        let source = filledImage(color: .white)
-        let rect = CGRect(x: 40, y: 30, width: 80, height: 40)
-        let blurred = render([AnnotationObject(kind: .blur, geometry: .rect(rect, cornerRadius: 0))],
-                             over: source)
-        let redacted = render([AnnotationObject(kind: .redaction, geometry: .rect(rect, cornerRadius: 0))],
-                              over: source)
-        let blurPixel = pixel(blurred, at: CGPoint(x: 80, y: 50))
-        let redactionPixel = pixel(redacted, at: CGPoint(x: 80, y: 50))
-        expect(blurPixel.brightness != redactionPixel.brightness,
-               "the unsafe tool must not look like the safe one")
-        expect(blurPixel.brightness > redactionPixel.brightness,
-               "pixelation stays lighter than a solid redaction bar")
-    }
-
-    /// `B-5`: при увеличенном холсте штрих в изображении тоньше, чтобы на
-    /// экране остаться прежним.
     private static func strokeScaleKeepsScreenWidth() {
         let object = AnnotationObject(kind: .line,
                                       geometry: .segment(from: CGPoint(x: 10, y: 60),
