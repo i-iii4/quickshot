@@ -99,8 +99,8 @@ final class HubWindow {
                   animateChevron: animateChevron,
                   animateCount: animateCount)
         shell.setAccessibilityValue("\(count)")
-        shell.setAccessibilityLabel(collapsed ? "Развернуть скриншоты" : "Свернуть скриншоты")
-        shell.setAccessibilityHelp("Нажмите, чтобы развернуть или свернуть трей")
+        shell.setAccessibilityLabel(collapsed ? "Show screenshots" : "Hide screenshots")
+        shell.setAccessibilityHelp("Click to show or hide the screenshot tray")
     }
 
     func setOrigin(_ point: NSPoint) { shell.setCollapsedOrigin(point) }

@@ -80,6 +80,7 @@
                 <button size="sm" selected="{fillOff}" label="Fill off" on-press="fill_off">Line</button>
                 <button size="sm" selected="{fillOn}" label="Fill on" on-press="fill_on">Fill</button>
               </button-group>
+              <button size="sm" variant="secondary" icon="search" label="Editor scan" on-press="editor_scan">Scan</button>
               <button size="sm" variant="secondary" icon="refresh-cw" label="Editor undo" on-press="editor_undo"></button>
               <button size="sm" variant="secondary" icon="repeat" label="Editor redo" on-press="editor_redo"></button>
               <button size="sm" variant="secondary" icon="save" label="Editor save" on-press="editor_save">Save</button>

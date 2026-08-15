@@ -149,6 +149,8 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
             copyToClipboard()
         case .close:
             window?.performClose(nil)
+        case .scan:
+            scanForSensitiveData()
         }
     }
 
@@ -168,6 +170,71 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         commitTextEditing()
         guard let flattened = canvas.flattenedImage() else { return }
         onSaved(artifact, flattened, canvas.document.objects)
+
+        // При выключенном автосохранении файла в папке нет, и сохранение
+        // фиксирует изменения только на карточке. Чтобы получить файл,
+        // пользователь выбирает место сам (`ED-12`).
+        guard library?.settings.autosaveEnabled != true else { return }
+        exportToFile(flattened)
+    }
+
+    private func exportToFile(_ image: CGImage) {
+        let panel = NSSavePanel()
+        panel.title = "Save Screenshot"
+        panel.prompt = "Save"
+        panel.nameFieldStringValue = ScreenshotNaming.fileName(date: Date())
+        panel.allowedContentTypes = [.png]
+        guard panel.runModal() == .OK, let url = panel.url,
+              let png = Clipboard.pngData(cgImage: image) else { return }
+        try? png.write(to: url, options: .atomic)
+    }
+
+    /// `E-6`, `E-7`: находки подсвечиваются и закрываются одним действием, но
+    /// никогда не закрываются молча — пользователь видит, что именно скрыто, и
+    /// решает сам. Автоматика неполна по природе, и молчаливое доверие к ней
+    /// приводит к опубликованному ключу.
+    private func scanForSensitiveData() {
+        guard let image = canvas.image else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let matches = await SensitiveDataDetector.detect(in: image)
+            self.presentScanResult(matches, imageSize: CGSize(width: image.width,
+                                                              height: image.height))
+        }
+    }
+
+    private func presentScanResult(_ matches: [SensitiveMatch], imageSize: CGSize) {
+        let alert = NSAlert()
+        guard !matches.isEmpty else {
+            alert.messageText = "No sensitive data found"
+            alert.informativeText = "Detection is not exhaustive: check the screenshot yourself."
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        let summary = Dictionary(grouping: matches, by: \.kind)
+            .map { "\($0.value.count) × \($0.key.title)" }
+            .sorted()
+            .joined(separator: ", ")
+        alert.messageText = "Found \(matches.count) items to hide"
+        alert.informativeText = "\(summary)\n\nThey will be covered with opaque bars."
+        alert.addButton(withTitle: "Hide All")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        canvas.document.beginGesture()
+        for match in matches {
+            let rect = SensitiveDataDetector.documentRect(for: match.normalizedRect,
+                                                          imageSize: imageSize)
+            canvas.document.add(AnnotationObject(kind: .redaction,
+                                                 geometry: .rect(rect.insetBy(dx: -2, dy: -2),
+                                                                 cornerRadius: 0)),
+                                select: false)
+        }
+        canvas.document.endGesture()
+        canvas.needsDisplay = true
+        syncToolbar()
     }
 
     private func copyToClipboard() {

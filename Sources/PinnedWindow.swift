@@ -27,7 +27,7 @@ private final class PinnedContentView: NSView {
         addSubview(imageView)
 
         copyButton.onCopy = { [weak self] in self?.doCopy() }
-        copyButton.toolTip = "Скопировать (⌘C)"
+        copyButton.toolTip = "Copy (⌘C)"
         copyButton.isHidden = true
         addSubview(copyButton)
     }
@@ -124,7 +124,7 @@ final class PinnedWindowController: NSObject, NSWindowDelegate {
         let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: w, height: h),
                            styleMask: [.titled, .closable, .resizable],
                            backing: .buffered, defer: false)
-        win.title = "QuickShot — полный кадр"
+        win.title = "QuickShot — Full Frame"
         win.isReleasedWhenClosed = false
         win.level = .floating
         win.delegate = self

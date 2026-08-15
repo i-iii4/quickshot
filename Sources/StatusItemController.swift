@@ -35,18 +35,18 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
         menu.autoenablesItems = false
-        menu.addItem(item(title: "Сделать снимок",
+        menu.addItem(item(title: "Capture Area",
                           action: #selector(menuCapture),
                           keyEquivalent: "4",
                           modifiers: [.command, .shift]))
-        menu.addItem(item(title: "Настройки...",
+        menu.addItem(item(title: "Settings...",
                           action: #selector(menuSettings),
                           keyEquivalent: ","))
         menu.addItem(.separator())
-        menu.addItem(item(title: "Открыть доступ к записи экрана",
+        menu.addItem(item(title: "Screen Recording Access...",
                           action: #selector(menuAccess)))
         menu.addItem(.separator())
-        menu.addItem(item(title: "Выйти из QuickShot",
+        menu.addItem(item(title: "Quit QuickShot",
                           action: #selector(menuQuit),
                           keyEquivalent: "q"))
         return menu

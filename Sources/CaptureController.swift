@@ -205,12 +205,12 @@ final class CaptureController {
         NSApp.activate()
         let alert = NSAlert()
         alert.messageText = firstRun
-            ? "Нужен доступ «Запись экрана»"
-            : "Доступ «Запись экрана» выключен"
-        alert.informativeText = "Откройте Системные настройки → Конфиденциальность и безопасность → "
-            + "Запись экрана, включите QuickShot и перезапустите приложение."
-        alert.addButton(withTitle: "Открыть настройки")
-        alert.addButton(withTitle: "Отмена")
+            ? "Screen Recording access required"
+            : "Screen Recording access is turned off"
+        alert.informativeText = "Open System Settings → Privacy & Security → Screen Recording, "
+            + "enable QuickShot, and restart the app."
+        alert.addButton(withTitle: "Open Settings")
+        alert.addButton(withTitle: "Cancel")
         if alert.runModal() == .alertFirstButtonReturn,
            let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
             NSWorkspace.shared.open(url)

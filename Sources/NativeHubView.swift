@@ -179,6 +179,7 @@ private enum NativeHubPressedButton: Int32 {
     case editorSave
     case editorCopy
     case editorClose
+    case editorScan
     case colour0
     case colour1
     case colour2
@@ -804,6 +805,7 @@ private final class NativeHubRenderView: NSView {
         case "Editor save": return .editorSave
         case "Editor copy": return .editorCopy
         case "Editor close": return .editorClose
+        case "Editor scan": return .editorScan
         case "Colour red": return .colour0
         case "Colour amber": return .colour1
         case "Colour green": return .colour2
@@ -1293,7 +1295,7 @@ final class NativeHubShellView: NSView {
                  .positionTop, .retentionDay, .retentionWeek, .retentionMonth,
                  .retentionForever, .autosaveOn, .autosaveOff, .openFolder,
                  .toolSelect, .toolArrow, .toolBox, .toolEllipse, .toolLine, .toolPen, .toolText, .toolMark, .toolStep, .toolHide, .toolBlur,
-                 .editorUndo, .editorRedo, .editorSave, .editorCopy, .editorClose,
+                 .editorUndo, .editorRedo, .editorSave, .editorCopy, .editorClose, .editorScan,
                  .colour0, .colour1, .colour2, .colour3, .colour4, .colour5, .weightThin, .weightMedium, .weightThick, .fillOn, .fillOff:
                 break
             }
@@ -2882,6 +2884,7 @@ final class NativeAnnotationToolbarSurface: NSView {
         case .editorSave: return .save
         case .editorCopy: return .copy
         case .editorClose: return .close
+        case .editorScan: return .scan
         case .colour0: return .colour(0)
         case .colour1: return .colour(1)
         case .colour2: return .colour(2)

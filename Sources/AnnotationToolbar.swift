@@ -22,6 +22,7 @@ final class AnnotationToolbarView: NSView {
         case save
         case copy
         case close
+        case scan
     }
 
     var onCommand: ((Command) -> Void)?

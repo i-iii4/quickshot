@@ -164,6 +164,45 @@ fullscreen behavior remain explicit runtime release checks.
    explicitly and never silently drops the capture: the screenshot stays in the
    tray and on the clipboard.
 
+## Annotation
+
+1. Annotation opens for a finished screenshot: double-click a tray card or a
+   pinned window. The capture overlay is never repurposed for drawing.
+2. Annotations are objects, not baked pixels, for as long as the screenshot
+   stays in the tray. Reopening a card returns text as editable text.
+3. Undo and redo cover creation, deletion, movement, resizing, property
+   changes and text edits, without a depth limit inside the session. A gesture
+   occupies exactly one history step; a click without movement occupies none.
+4. The canvas zooms between 10% and 800% keeping the point under the cursor
+   fixed, never lets the image leave the viewport, never upscales an image
+   smaller than the window, and keeps stroke width visually constant.
+5. Every tool is reachable by a single letter key, and the full cycle — select,
+   create, move, resize, restyle, delete, apply — works without a mouse.
+6. Hiding sensitive data defaults to an opaque bar. Blur and pixelation exist
+   but are marked unsafe for text. Applying the document bakes hiding objects
+   irreversibly.
+7. Detection of sensitive data uses on-device text recognition, reports what it
+   found, and never hides anything silently.
+8. Saving rewrites the file in the folder, marks the card `Edited`, and every
+   later delivery — clipboard, drag, export — uses the edited version.
+9. Closing the tray destroys editable state; the folder keeps the last saved
+   version.
+
+## Tray Scrolling
+
+1. When cards do not fit, the tray scrolls continuously with momentum. Nothing
+   is hidden because of a lack of space.
+2. Cards past either edge collect into a stack with a shrinking step, fading
+   and scaling instead of disappearing: the stack is the signal that more
+   exists.
+3. The default position shows the newest screenshots; a new capture returns to
+   that position.
+4. A continued pull past an edge collapses the tray. The threshold is measured
+   in accumulated overshoot, not in touching the edge, and does not depend on
+   how many screenshots there are.
+5. A two-finger swipe over the hub button expands a collapsed tray and
+   collapses an open one; clicking keeps working as before.
+
 ## UI Architecture
 
 1. UI architecture changes must improve interaction consistency, state

@@ -34,6 +34,7 @@ ANNOTATION_HANDLE_OUT="$(mktemp -t quickshot-annotation-handle-tests)"
 ANNOTATION_RENDER_OUT="$(mktemp -t quickshot-annotation-render-tests)"
 ANNOTATION_SESSION_OUT="$(mktemp -t quickshot-annotation-session-tests)"
 TRAY_SCROLL_OUT="$(mktemp -t quickshot-tray-scroll-tests)"
+SENSITIVE_OUT="$(mktemp -t quickshot-sensitive-tests)"
 THUMBNAIL_LAYOUT_OUT="$(mktemp -t quickshot-thumbnail-layout-tests)"
 THUMBNAIL_MOTION_OUT="$(mktemp -t quickshot-thumbnail-motion-tests)"
 THUMBNAIL_COLLECTION_OUT="$(mktemp -t quickshot-thumbnail-collection-tests)"
@@ -49,7 +50,7 @@ CAPTURE_SEQUENCE_OUT="$(mktemp -t quickshot-capture-sequence-tests)"
 CAPTURE_ARTIFACT_OUT="$(mktemp -t quickshot-capture-artifact-tests)"
 WINDOW_PROTECTION_OUT="$(mktemp -t quickshot-window-protection-tests)"
 THUMBNAIL_MODEL_OUT="$(mktemp -t quickshot-thumbnail-model-tests)"
-trap 'rm -f "$OUT" "$SURFACE_OUT" "$TRAY_POINTER_OUT" "$TRAY_HOVER_OUT" "$LIBRARY_MODEL_OUT" "$ANNOTATION_DOC_OUT" "$ANNOTATION_CANVAS_OUT" "$ANNOTATION_HANDLE_OUT" "$ANNOTATION_RENDER_OUT" "$ANNOTATION_SESSION_OUT" "$TRAY_SCROLL_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"' EXIT
+trap 'rm -f "$OUT" "$SURFACE_OUT" "$TRAY_POINTER_OUT" "$TRAY_HOVER_OUT" "$LIBRARY_MODEL_OUT" "$ANNOTATION_DOC_OUT" "$ANNOTATION_CANVAS_OUT" "$ANNOTATION_HANDLE_OUT" "$ANNOTATION_RENDER_OUT" "$ANNOTATION_SESSION_OUT" "$TRAY_SCROLL_OUT" "$SENSITIVE_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"' EXIT
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -300,6 +301,19 @@ xcrun swiftc \
   -swift-version 6 \
   -strict-concurrency=complete \
   -warnings-as-errors \
+  -framework Vision \
+  Sources/SensitiveDataDetector.swift \
+  Tests/SensitiveDataTests.swift \
+  -o "$SENSITIVE_OUT"
+
+"$SENSITIVE_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -framework AppKit \
   Sources/ThumbnailLayout.swift \
   Tests/ThumbnailLayoutTests.swift \
@@ -362,6 +376,7 @@ xcrun swiftc \
   Sources/AnnotationCanvasView.swift \
   Sources/AnnotationSession.swift \
   Sources/EditedBadge.swift \
+  Sources/SensitiveDataDetector.swift \
   Sources/AnnotationEditor.swift \
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
@@ -438,6 +453,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/AnnotationCanvasView.swift \
   Sources/AnnotationSession.swift \
   Sources/EditedBadge.swift \
+  Sources/SensitiveDataDetector.swift \
   Sources/AnnotationEditor.swift \
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
@@ -832,6 +848,15 @@ rg -F -q "sessions.discardAll()" Sources/ThumbnailManager.swift
 rg -F -q "scrollModel.scrolled(by: -delta)" Sources/ThumbnailManager.swift
 rg -F -q "collapseThreshold" Sources/TrayScrollModel.swift
 rg -F -q "func handleHubSwipe" Sources/ThumbnailManager.swift
+# Находки не скрываются молча, а проверка Луна отсекает не-карты.
+rg -F -q "Hide All" Sources/AnnotationEditor.swift
+rg -F -q "passesLuhn" Sources/SensitiveDataDetector.swift
+# Интерфейс целиком на английском (N-1).
+if output="$(rg -n '"[^"]*[а-яА-Я][^"]*"' Sources/*.swift | rg -v NSLog)"; then
+  echo "$output"
+  echo "Language regression: the interface is English-only (N-1)." >&2
+  exit 1
+fi
 if output="$(rg -n "shiftViewport\(by: step\)" Sources/ThumbnailManager.swift)"; then
   echo "$output"
   echo "Tray regression: scrolling must be continuous, not stepwise (TR-2)." >&2
