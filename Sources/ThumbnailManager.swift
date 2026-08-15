@@ -83,6 +83,9 @@ final class ThumbnailManager {
     private var scrollModel = TrayScrollModel(contentLength: 0, viewportLength: 0, offset: 0)
     private var scrollGestureOvershoot: CGFloat = 0
     private var collapsedByGesture = false
+    private var scrollGestureActive = false
+    private var scrollSettleAnimating = false
+    private lazy var scrollSettleAnimator = CollectionProgressAnimator(hostView: hostContent)
 
     private let defaults = UserDefaults.standard
     private let widthKey = "thumbnailCardWidth"
@@ -477,13 +480,13 @@ final class ThumbnailManager {
         }
 
         var reflowing: [(ThumbnailWindow, NSRect)] = []
-        for (item, origin) in visible where item !== inserted {
+        for (item, slot) in visible where item !== inserted {
             guard let oldFrame = oldFrames[ObjectIdentifier(item)] else {
-                item.placeInstant(origin: toLocal(origin))
+                item.placeInstant(origin: toLocal(slot.origin))
                 continue
             }
             item.prepareReflow(from: oldFrame,
-                               to: thumbnailAxisLockedOrigin(candidate: toLocal(origin),
+                               to: thumbnailAxisLockedOrigin(candidate: toLocal(slot.origin),
                                                              oldOuterFrame: oldFrame,
                                                              resizeBand: ThumbStyle.resizeBand,
                                                              vertical: TrayPosition.current.isVertical),
@@ -494,7 +497,7 @@ final class ThumbnailManager {
             item.prepareRemoval(toward: collectionDirectionalOffset(), reduceMotion: reduceMotion)
         }
 
-        guard let origin = visible.first(where: { $0.0 === inserted })?.1 else {
+        guard let origin = visible.first(where: { $0.0 === inserted })?.1.origin else {
             inserted.hide()
             runCollectionMotion(duration: reduceMotion ? TrayAnim.reducedTransition : TrayAnim.insertion,
                                 onFrame: { [weak self] progress in
@@ -632,10 +635,10 @@ final class ThumbnailManager {
         var reflowing: [(ThumbnailWindow, NSRect)] = []
         var entering: [ThumbnailWindow] = []
         if animateCards {
-            for (item, origin) in visible {
+            for (item, slot) in visible {
                 let identifier = ObjectIdentifier(item)
                 guard oldVisibleIDs.contains(identifier), let oldFrame = oldFrames[identifier] else {
-                    item.prepareInsertion(at: toLocal(origin),
+                    item.prepareInsertion(at: toLocal(slot.origin),
                                           from: collectionDirectionalOffset(),
                                           reduceMotion: reduceMotion)
                     entering.append(item)
@@ -643,7 +646,7 @@ final class ThumbnailManager {
                 }
                 item.prepareReflow(
                     from: oldFrame,
-                    to: thumbnailAxisLockedOrigin(candidate: toLocal(origin),
+                    to: thumbnailAxisLockedOrigin(candidate: toLocal(slot.origin),
                                                   oldOuterFrame: oldFrame,
                                                   resizeBand: ThumbStyle.resizeBand,
                                                   vertical: TrayPosition.current.isVertical),
@@ -711,32 +714,70 @@ final class ThumbnailManager {
         let delta = vertical
             ? event.scrollingDeltaY
             : (abs(event.scrollingDeltaX) > 0.01 ? event.scrollingDeltaX : event.scrollingDeltaY)
+        // Трекпад шлёт фазы жеста и инерции; классическое колесо — нет.
+        let hasPhases = event.phase != [] || event.momentumPhase != []
 
         if event.phase == .began || event.phase == .mayBegin {
             scrollGestureOvershoot = 0
             collapsedByGesture = false
         }
+        if hasPhases {
+            scrollSettleAnimator.cancel()
+            scrollSettleAnimating = false
+            scrollGestureActive = true
+        }
 
         guard scrollModel.isScrollable || abs(delta) > 0.01 else { return }
-        scrollModel = scrollModel.scrolled(by: -delta)
+        // Резинка только у жестов с фазами: колесо упирается в край жёстко.
+        scrollModel = scrollModel.scrolled(by: -delta, rubberBand: hasPhases)
         scrollGestureOvershoot = scrollModel.overshoot
 
         // `TR-7`: продолженное движение за краем сворачивает трей. Проверка
         // идёт по накопленному перетягиванию, а не по факту касания края.
-        if !collapsedByGesture,
+        if !collapsedByGesture, hasPhases,
            let direction = scrollModel.collapseDirection(afterOvershoot: scrollGestureOvershoot) {
             collapsedByGesture = true
+            scrollGestureActive = false
             collapseByGesture(direction: direction)
             return
         }
 
         applyScrollOffset()
 
-        if event.phase == .ended || event.phase == .cancelled || event.momentumPhase == .ended {
+        if !hasPhases {
             scrollModel = scrollModel.settled()
             applyScrollOffset()
-            scrollGestureOvershoot = 0
+            return
         }
+        if event.phase == .ended || event.phase == .cancelled || event.momentumPhase == .ended {
+            scrollGestureActive = false
+            scrollGestureOvershoot = 0
+            settleScrollAnimated()
+        }
+    }
+
+    /// Возврат из-за края после отпускания: не мгновенный clamp, а короткий
+    /// ease-out — лента отвечает движением, как системный rubber-band.
+    private func settleScrollAnimated() {
+        let from = scrollModel.offset
+        let target = scrollModel.settled().offset
+        guard abs(target - from) > 0.5 else {
+            scrollModel.offset = target
+            applyScrollOffset()
+            return
+        }
+        scrollSettleAnimating = true
+        scrollSettleAnimator.run(duration: 0.3, onFrame: { [weak self] progress in
+            guard let self else { return }
+            let eased = 1 - pow(1 - progress, 3)
+            self.scrollModel.offset = from + (target - from) * eased
+            self.applyScrollOffset()
+        }, onDone: { [weak self] in
+            guard let self else { return }
+            self.scrollSettleAnimating = false
+            self.scrollModel.offset = target
+            self.applyScrollOffset()
+        })
     }
 
     /// Свайп по кнопке хаба разворачивает свёрнутый трей и сворачивает
@@ -753,6 +794,8 @@ final class ThumbnailManager {
     }
 
     private func collapseByGesture(direction: TrayCollapseDirection) {
+        scrollSettleAnimator.cancel()
+        scrollSettleAnimating = false
         scrollModel = scrollModel.settled()
         applyScrollOffset()
         collapse()
@@ -799,19 +842,19 @@ final class ThumbnailManager {
 
         var reflowing: [(ThumbnailWindow, NSRect)] = []
         var entering: [ThumbnailWindow] = []
-        for (item, origin) in visible {
+        for (item, slot) in visible {
             let identifier = ObjectIdentifier(item)
             if let oldFrame = oldFrames[identifier] {
                 item.prepareReflow(
                     from: oldFrame,
-                    to: thumbnailAxisLockedOrigin(candidate: toLocal(origin),
+                    to: thumbnailAxisLockedOrigin(candidate: toLocal(slot.origin),
                                                   oldOuterFrame: oldFrame,
                                                   resizeBand: ThumbStyle.resizeBand,
                                                   vertical: TrayPosition.current.isVertical),
                     reduceMotion: reduceMotion)
                 reflowing.append((item, oldFrame))
             } else {
-                item.prepareInsertion(at: toLocal(origin),
+                item.prepareInsertion(at: toLocal(slot.origin),
                                       from: collectionDirectionalOffset(),
                                       reduceMotion: reduceMotion)
                 entering.append(item)
@@ -1073,10 +1116,10 @@ final class ThumbnailManager {
             item.setCollapsed(target == 1)
             item.hide()
         }
-        for (item, globalOrigin) in visible {
+        for (item, slot) in visible {
             item.prepareTrayTransition(progress: trayProgress,
                                        travelOffset: travelOffset,
-                                       restingOrigin: toLocal(globalOrigin),
+                                       restingOrigin: toLocal(slot.origin),
                                        expanding: target == 0,
                                        reduceMotion: reduceMotion)
         }
@@ -1145,9 +1188,15 @@ final class ThumbnailManager {
         if settledProgress == 1 {
             for (t, _) in visible { t.hide() }
         } else {
-            for pair in visible {
-                let localOrigin = toLocal(pair.1)
-                pair.0.placeInstant(origin: localOrigin)
+            for (item, slot) in visible {
+                let localOrigin = toLocal(slot.origin)
+                if slot.opacity < 0.999 || slot.scale < 0.999 {
+                    item.placeScrolled(origin: localOrigin,
+                                       opacity: slot.opacity,
+                                       scale: slot.scale)
+                } else {
+                    item.placeInstant(origin: localOrigin)
+                }
             }
         }
         refreshHostPointerRouting()
@@ -1182,10 +1231,10 @@ final class ThumbnailManager {
     /// Позиции видимых карточек в порядке добавления + список переполнения. Существующие карточки
     /// сохраняют свои слоты, новый снимок занимает следующий свободный слот по направлению от хаба.
     /// Координаты глобальные; вызывающий конвертирует их через toLocal.
-    private func cardLayout(on screen: NSScreen) -> (visible: [(ThumbnailWindow, NSPoint)], hidden: [ThumbnailWindow]) {
+    private func cardLayout(on screen: NSScreen) -> (visible: [(ThumbnailWindow, ThumbnailLayoutSlot)], hidden: [ThumbnailWindow]) {
         let result = resolvedViewportLayout(on: screen)
         return (
-            result.visible.map { (items[$0.index], $0.origin) },
+            result.visible.map { (items[$0.index], $0) },
             result.hidden.map { items[$0] }
         )
     }
@@ -1203,7 +1252,13 @@ final class ThumbnailManager {
             : screen.frame.width - ThumbStyle.margin * 2 - hub.width - gap
         scrollModel.contentLength = content
         scrollModel.viewportLength = max(1, viewport)
-        scrollModel = scrollModel.settled()
+        // Пока идёт жест или пружинный возврат, смещение может законно жить за
+        // границей — мгновенный clamp здесь и делал резинку невидимой.
+        if !scrollGestureActive && !scrollSettleAnimating {
+            scrollModel = scrollModel.settled()
+        } else if !scrollModel.isScrollable {
+            scrollModel.offset = 0
+        }
     }
 
     private func resolvedViewportLayout(on screen: NSScreen) -> ThumbnailLayoutResult {

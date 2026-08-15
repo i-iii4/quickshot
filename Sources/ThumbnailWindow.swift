@@ -569,6 +569,26 @@ final class ThumbnailWindow {
         container.isHidden = false
     }
 
+    /// Позиция в прокручиваемой ленте со стопочной глубиной (`TR-3`): карточка
+    /// у края тускнеет и слегка уменьшается вокруг своего центра. Глубокая
+    /// карточка не интерактивна — клик достаётся верхней.
+    func placeScrolled(origin: NSPoint, opacity: CGFloat, scale: CGFloat) {
+        restingFrame = outerRect(cardOrigin: origin)
+        container.frame = restingFrame
+        layoutCardInContainer()
+        var transform = CATransform3DMakeScale(scale, scale, 1)
+        transform.m41 = restingFrame.width * (1 - scale) / 2
+        transform.m42 = restingFrame.height * (1 - scale) / 2
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        container.layer?.transform = transform
+        container.layer?.shadowOpacity = Float(TrayAnim.restingShadowOpacity * opacity)
+        container.alphaValue = max(0, min(1, opacity))
+        CATransaction.commit()
+        container.interactionsEnabled = opacity > 0.9
+        container.isHidden = false
+    }
+
     func prepareInsertion(at origin: NSPoint, from offset: NSPoint, reduceMotion: Bool) {
         restingFrame = outerRect(cardOrigin: origin)
         container.frame = restingFrame

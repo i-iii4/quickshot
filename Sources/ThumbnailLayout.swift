@@ -9,6 +9,9 @@ enum ThumbnailLayoutEdge: String, CaseIterable {
 struct ThumbnailLayoutSlot: Equatable {
     let index: Int
     let origin: NSPoint
+    /// Глубина стопки у края (`TR-3`): тусклость и уменьшение, 1 — обычная карточка.
+    var opacity: CGFloat = 1
+    var scale: CGFloat = 1
 }
 
 struct ThumbnailLayoutResult: Equatable {
@@ -180,14 +183,27 @@ func thumbnailScrollLayout(screenFrame: NSRect,
             hidden.append(index)
             continue
         }
+        // Позиция поперёк оси ленты совпадает с обычной раскладкой
+        // `thumbnailLayout`: правый край — карточка у правого края, верхний —
+        // карточка целиком на экране. Ошибка здесь и ломала трей при
+        // переполнении: полоса бралась от ширины хаба, а не карточки.
         let origin: NSPoint
         switch edge {
-        case .right, .left:
-            origin = NSPoint(x: strip.x, y: strip.y + placement.position)
-        case .bottom, .top:
-            origin = NSPoint(x: strip.x - placement.position, y: strip.y)
+        case .right:
+            origin = NSPoint(x: screenFrame.maxX - margin - cardWidth,
+                             y: strip.y + placement.position)
+        case .left:
+            origin = NSPoint(x: screenFrame.minX + margin,
+                             y: strip.y + placement.position)
+        case .bottom:
+            origin = NSPoint(x: strip.x - cardWidth - placement.position,
+                             y: screenFrame.minY + margin)
+        case .top:
+            origin = NSPoint(x: strip.x - cardWidth - placement.position,
+                             y: screenFrame.maxY - margin - cardHeights[index])
         }
-        visible.append(.init(index: index, origin: origin))
+        visible.append(.init(index: index, origin: origin,
+                             opacity: placement.opacity, scale: placement.scale))
     }
     return .init(visible: visible, hidden: hidden)
 }
