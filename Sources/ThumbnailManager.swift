@@ -76,6 +76,9 @@ final class ThumbnailManager {
     private var capturePresentationSessions: Set<UUID> = []
     private var activeDragPayloads: Set<ObjectIdentifier> = []
     private var viewportScrollAccumulator: CGFloat = 0
+    private var scrollModel = TrayScrollModel(contentLength: 0, viewportLength: 0, offset: 0)
+    private var scrollGestureOvershoot: CGFloat = 0
+    private var collapsedByGesture = false
 
     private let defaults = UserDefaults.standard
     private let widthKey = "thumbnailCardWidth"
@@ -111,6 +114,7 @@ final class ThumbnailManager {
         hub.onDelete = { [weak self] in self?.deleteAll() }
         hub.onSaveAs = { [weak self] in self?.saveAllAs() }
         hub.onCopyAll = { [weak self] in self?.copyAll() }
+        hub.onSwipe = { [weak self] delta in self?.handleHubSwipe(delta: delta) }
         hub.onHoverChanged = { [weak self] entered in
             self?.hubHoverChanged(entered: entered)
         }
@@ -693,21 +697,72 @@ final class ThumbnailManager {
 
     /// Scrolls the finite tray viewport without moving the hub. A newly captured
     /// screenshot always returns the viewport to the newest page.
+    /// Непрерывная прокрутка ленты (`TR-1`, `TR-2`). Пошаговое переключение
+    /// заменено на смещение, потому что ступенчатая лента не даёт понять, где
+    /// ты находишься, и не позволяет остановиться между карточками.
     func scrollTray(with event: NSEvent) {
-        guard items.count > 1, !cardsAreCollapsed else { return }
-        let delta = TrayPosition.current.isVertical
+        guard !cardsAreCollapsed else { return }
+        let vertical = TrayPosition.current.isVertical
+        let delta = vertical
             ? event.scrollingDeltaY
             : (abs(event.scrollingDeltaX) > 0.01 ? event.scrollingDeltaX : event.scrollingDeltaY)
-        guard abs(delta) > 0.01 else { return }
 
-        if event.phase == .began || event.phase == .mayBegin { viewportScrollAccumulator = 0 }
-        viewportScrollAccumulator += delta
-        let threshold: CGFloat = event.hasPreciseScrollingDeltas ? 18 : 1
-        guard abs(viewportScrollAccumulator) >= threshold else { return }
+        if event.phase == .began || event.phase == .mayBegin {
+            scrollGestureOvershoot = 0
+            collapsedByGesture = false
+        }
 
-        let step = viewportScrollAccumulator > 0 ? -1 : 1
-        viewportScrollAccumulator = 0
-        shiftViewport(by: step)
+        guard scrollModel.isScrollable || abs(delta) > 0.01 else { return }
+        scrollModel = scrollModel.scrolled(by: -delta)
+        scrollGestureOvershoot = scrollModel.overshoot
+
+        // `TR-7`: продолженное движение за краем сворачивает трей. Проверка
+        // идёт по накопленному перетягиванию, а не по факту касания края.
+        if !collapsedByGesture,
+           let direction = scrollModel.collapseDirection(afterOvershoot: scrollGestureOvershoot) {
+            collapsedByGesture = true
+            collapseByGesture(direction: direction)
+            return
+        }
+
+        applyScrollOffset()
+
+        if event.phase == .ended || event.phase == .cancelled || event.momentumPhase == .ended {
+            scrollModel = scrollModel.settled()
+            applyScrollOffset()
+            scrollGestureOvershoot = 0
+        }
+    }
+
+    /// Свайп по кнопке хаба разворачивает свёрнутый трей и сворачивает
+    /// открытый (`TR-9`, `TR-10`). Клик продолжает работать как раньше.
+    func handleHubSwipe(delta: CGFloat) {
+        guard abs(delta) > 4 else { return }
+        let vertical = TrayPosition.current.isVertical
+        let opens = vertical ? delta > 0 : delta < 0
+        if collapsed, opens {
+            expand()
+        } else if !collapsed, !opens {
+            collapse()
+        }
+    }
+
+    private func collapseByGesture(direction: TrayCollapseDirection) {
+        scrollModel = scrollModel.settled()
+        applyScrollOffset()
+        collapse()
+    }
+
+    /// Пересчёт положения карточек по текущему смещению: видимые двигаются
+    /// один к одному, ушедшие за край собираются в стопку (`TR-3`).
+    private func applyScrollOffset() {
+        layout()
+    }
+
+    /// Состояние по умолчанию: стопка внизу, новый снимок сверху (`TR-5`).
+    private func resetScrollToNewest() {
+        scrollModel.offset = TrayScrollModel.defaultOffset(contentLength: scrollModel.contentLength,
+                                                           viewportLength: scrollModel.viewportLength)
     }
 
     private func shiftViewport(by delta: Int) {
@@ -1106,10 +1161,27 @@ final class ThumbnailManager {
     /// Координаты глобальные; вызывающий конвертирует их через toLocal.
     private func cardLayout(on screen: NSScreen) -> (visible: [(ThumbnailWindow, NSPoint)], hidden: [ThumbnailWindow]) {
         let result = resolvedViewportLayout(on: screen)
+        syncScrollModel(on: screen)
         return (
             result.visible.map { (items[$0.index], $0.origin) },
             result.hidden.map { items[$0] }
         )
+    }
+
+    /// Длина ленты и окна просмотра для модели прокрутки. Модель отвечает на
+    /// вопрос «есть ли куда скроллить и насколько перетянуто», раскладку
+    /// по-прежнему считает `ThumbnailLayout`.
+    private func syncScrollModel(on screen: NSScreen) {
+        let vertical = TrayPosition.current.isVertical
+        let gap = ThumbStyle.gap
+        let lengths = items.map { vertical ? $0.cardSize.height : $0.cardSize.width }
+        let content = lengths.reduce(0, +) + gap * CGFloat(max(0, lengths.count - 1))
+        let viewport = vertical
+            ? screen.frame.height - ThumbStyle.margin * 2 - hub.height - gap
+            : screen.frame.width - ThumbStyle.margin * 2 - hub.width - gap
+        scrollModel.contentLength = content
+        scrollModel.viewportLength = max(1, viewport)
+        scrollModel = scrollModel.settled()
     }
 
     private func resolvedViewportLayout(on screen: NSScreen) -> ThumbnailLayoutResult {

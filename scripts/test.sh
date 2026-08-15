@@ -33,6 +33,7 @@ ANNOTATION_CANVAS_OUT="$(mktemp -t quickshot-annotation-canvas-tests)"
 ANNOTATION_HANDLE_OUT="$(mktemp -t quickshot-annotation-handle-tests)"
 ANNOTATION_RENDER_OUT="$(mktemp -t quickshot-annotation-render-tests)"
 ANNOTATION_SESSION_OUT="$(mktemp -t quickshot-annotation-session-tests)"
+TRAY_SCROLL_OUT="$(mktemp -t quickshot-tray-scroll-tests)"
 THUMBNAIL_LAYOUT_OUT="$(mktemp -t quickshot-thumbnail-layout-tests)"
 THUMBNAIL_MOTION_OUT="$(mktemp -t quickshot-thumbnail-motion-tests)"
 THUMBNAIL_COLLECTION_OUT="$(mktemp -t quickshot-thumbnail-collection-tests)"
@@ -48,7 +49,7 @@ CAPTURE_SEQUENCE_OUT="$(mktemp -t quickshot-capture-sequence-tests)"
 CAPTURE_ARTIFACT_OUT="$(mktemp -t quickshot-capture-artifact-tests)"
 WINDOW_PROTECTION_OUT="$(mktemp -t quickshot-window-protection-tests)"
 THUMBNAIL_MODEL_OUT="$(mktemp -t quickshot-thumbnail-model-tests)"
-trap 'rm -f "$OUT" "$SURFACE_OUT" "$TRAY_POINTER_OUT" "$TRAY_HOVER_OUT" "$LIBRARY_MODEL_OUT" "$ANNOTATION_DOC_OUT" "$ANNOTATION_CANVAS_OUT" "$ANNOTATION_HANDLE_OUT" "$ANNOTATION_RENDER_OUT" "$ANNOTATION_SESSION_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"' EXIT
+trap 'rm -f "$OUT" "$SURFACE_OUT" "$TRAY_POINTER_OUT" "$TRAY_HOVER_OUT" "$LIBRARY_MODEL_OUT" "$ANNOTATION_DOC_OUT" "$ANNOTATION_CANVAS_OUT" "$ANNOTATION_HANDLE_OUT" "$ANNOTATION_RENDER_OUT" "$ANNOTATION_SESSION_OUT" "$TRAY_SCROLL_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"' EXIT
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -287,6 +288,18 @@ xcrun swiftc \
   -swift-version 6 \
   -strict-concurrency=complete \
   -warnings-as-errors \
+  Sources/TrayScrollModel.swift \
+  Tests/TrayScrollModelTests.swift \
+  -o "$TRAY_SCROLL_OUT"
+
+"$TRAY_SCROLL_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -framework AppKit \
   Sources/ThumbnailLayout.swift \
   Tests/ThumbnailLayoutTests.swift \
@@ -351,6 +364,7 @@ xcrun swiftc \
   Sources/EditedBadge.swift \
   Sources/AnnotationEditor.swift \
   Sources/SettingsWindow.swift \
+  Sources/TrayScrollModel.swift \
   Sources/ThumbnailManager.swift \
   Tests/ThumbnailCollectionBehaviorTests.swift \
   "$NATIVE_UI_LIB" \
@@ -426,6 +440,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/EditedBadge.swift \
   Sources/AnnotationEditor.swift \
   Sources/SettingsWindow.swift \
+  Sources/TrayScrollModel.swift \
   Sources/ThumbnailManager.swift \
   Tests/ThumbnailWindowLiveClickTests.swift \
   "$NATIVE_UI_LIB" \
@@ -813,6 +828,15 @@ rg -F -q "AnnotationPalette.redaction" Sources/AnnotationRenderer.swift
 rg -F -q "func discardAll()" Sources/AnnotationSession.swift
 rg -F -q "editedImages.preparedImage(for: t.artifact.id)" Sources/ThumbnailManager.swift
 rg -F -q "sessions.discardAll()" Sources/ThumbnailManager.swift
+# Прокрутка непрерывная, а не пошаговая; сворачивание требует намерения.
+rg -F -q "scrollModel.scrolled(by: -delta)" Sources/ThumbnailManager.swift
+rg -F -q "collapseThreshold" Sources/TrayScrollModel.swift
+rg -F -q "func handleHubSwipe" Sources/ThumbnailManager.swift
+if output="$(rg -n "shiftViewport\(by: step\)" Sources/ThumbnailManager.swift)"; then
+  echo "$output"
+  echo "Tray regression: scrolling must be continuous, not stepwise (TR-2)." >&2
+  exit 1
+fi
 if output="$(rg -n "CaptureSession|Overlay" Sources/AnnotationEditor.swift Sources/AnnotationCanvasView.swift)"; then
   echo "$output"
   echo "Editor regression: annotation must not reach into the capture overlay (X-1)." >&2

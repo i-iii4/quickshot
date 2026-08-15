@@ -1468,6 +1468,19 @@ final class NativeHubShellView: NSView {
         trackingArea = area
     }
 
+    var onSwipe: ((CGFloat) -> Void)?
+
+    /// `TR-9`, `TR-10`: свайп двумя пальцами по кнопке хаба разворачивает
+    /// свёрнутый трей и сворачивает открытый. Клик при этом продолжает
+    /// работать как раньше.
+    override func scrollWheel(with event: NSEvent) {
+        guard abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX) else {
+            super.scrollWheel(with: event)
+            return
+        }
+        onSwipe?(event.scrollingDeltaY)
+    }
+
     override func mouseEntered(with event: NSEvent) { setPointerHover(true) }
     override func mouseMoved(with event: NSEvent) { setPointerHover(true) }
     override func mouseExited(with event: NSEvent) {

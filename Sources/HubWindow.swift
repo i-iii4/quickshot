@@ -76,6 +76,7 @@ final class HubWindow {
     var onSaveAs: (() -> Void)? { didSet { shell.onSaveAs = onSaveAs } }
     var onCopyAll: (() -> Void)? { didSet { shell.onCopyAll = onCopyAll } }
     var onHoverChanged: ((Bool) -> Void)? { didSet { shell.onHoverChanged = onHoverChanged } }
+    var onSwipe: ((CGFloat) -> Void)? { didSet { shell.onSwipe = onSwipe } }
 
     var width: CGFloat { shell.compactWidth }
     var height: CGFloat { shell.compactHeight }
