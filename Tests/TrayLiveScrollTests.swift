@@ -18,6 +18,9 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
         newestCaptureStaysReachable()
         scrollWheelMovesCards()
         closeButtonWorksOnNewestCard()
+        scrollFollowsTheGesture()
+        wheelNotchMovesAVisibleDistance()
+        hoverStaysOnASingleCard()
 
         if failures.isEmpty {
             print("TrayLiveScrollTests: passed")
@@ -107,6 +110,74 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Лента идёт за пальцами. Открытая на новых снимках, она может ехать
+    /// только к старым: жест вверх (отрицательная дельта) поднимает карточки,
+    /// открывая те, что лежат ближе к хабу.
+    private func scrollFollowsTheGesture() {
+        guard let fixture = makeOverflowingTray(label: "direction") else { return }
+        defer { fixture.teardown() }
+
+        let probe = fixture.cards[fixture.cards.count / 2]
+        let point = NSPoint(x: probe.layoutFrame.midX, y: probe.layoutFrame.midY)
+        // Смотрим на карточку, прошедшую наибольший путь: стоящая в стопке
+        // сдвигается лишь на её шаг и о направлении ничего не говорит.
+        let before = fixture.cards.map { $0.layoutFrame.origin.y }
+
+        post(scroll: -40, phase: .began, at: point, window: fixture.window)
+        for _ in 0..<4 { post(scroll: -40, phase: .changed, at: point, window: fixture.window) }
+        let after = fixture.cards.map { $0.layoutFrame.origin.y }
+        post(scroll: 0, phase: .ended, at: point, window: fixture.window)
+        spin(0.4)
+
+        let shift = zip(before, after).map { $1 - $0 }.max(by: { abs($0) < abs($1) }) ?? 0
+        guard shift > 20 else {
+            failures.append("прокрутка развёрнута или стоит: наибольший сдвиг \(shift) pt")
+            return
+        }
+    }
+
+    /// Щелчок колеса мыши приходит в строках, а не в точках: без пересчёта
+    /// лента ползла на пиксель за щелчок.
+    private func wheelNotchMovesAVisibleDistance() {
+        guard let fixture = makeOverflowingTray(label: "wheel") else { return }
+        defer { fixture.teardown() }
+
+        let probe = fixture.cards[fixture.cards.count / 2]
+        let point = NSPoint(x: probe.layoutFrame.midX, y: probe.layoutFrame.midY)
+        let before = fixture.cards.map { $0.layoutFrame.origin }
+
+        postWheelNotch(at: point, window: fixture.window)
+        let after = fixture.cards.map { $0.layoutFrame.origin }
+        let travelled = zip(before, after)
+            .map { hypot($1.x - $0.x, $1.y - $0.y) }
+            .max() ?? 0
+        guard travelled >= 20 else {
+            failures.append("щелчок колеса сдвинул ленту на \(travelled) pt")
+            return
+        }
+    }
+
+    /// Кнопки видны ровно на одной карточке: уехавшая из-под курсора карточка
+    /// `mouseExited` не получает, и её кнопки оставались висеть.
+    private func hoverStaysOnASingleCard() {
+        guard let fixture = makeOverflowingTray(label: "hover") else { return }
+        defer { fixture.teardown() }
+
+        for card in fixture.cards { card.debugShowControls() }
+        let probe = fixture.cards[fixture.cards.count / 2]
+        let point = NSPoint(x: probe.layoutFrame.midX, y: probe.layoutFrame.midY)
+        post(scroll: 40, phase: .began, at: point, window: fixture.window)
+        for _ in 0..<4 { post(scroll: 40, phase: .changed, at: point, window: fixture.window) }
+        post(scroll: 0, phase: .ended, at: point, window: fixture.window)
+        spin(0.4)
+
+        let visible = fixture.cards.filter { $0.debugControlsVisible }
+        guard visible.count <= 1 else {
+            failures.append("кнопки видны сразу на \(visible.count) карточках")
+            return
+        }
+    }
+
     // MARK: окружение
 
     private struct Fixture {
@@ -193,6 +264,21 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
         let flipped = CGPoint(x: screenPoint.x,
                               y: (NSScreen.screens.first?.frame.maxY ?? 0) - screenPoint.y)
         cg.location = flipped
+        guard let event = NSEvent(cgEvent: cg) else { return }
+        window.sendEvent(event)
+    }
+
+    /// Щелчок колеса мыши: без фаз и без точных дельт, значение в строках.
+    private func postWheelNotch(at windowPoint: NSPoint, window: NSWindow) {
+        guard let cg = CGEvent(scrollWheelEvent2Source: nil,
+                               units: .line,
+                               wheelCount: 1,
+                               wheel1: -1,
+                               wheel2: 0,
+                               wheel3: 0) else { return }
+        let screenPoint = window.convertPoint(toScreen: windowPoint)
+        cg.location = CGPoint(x: screenPoint.x,
+                              y: (NSScreen.screens.first?.frame.maxY ?? 0) - screenPoint.y)
         guard let event = NSEvent(cgEvent: cg) else { return }
         window.sendEvent(event)
     }

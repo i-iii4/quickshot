@@ -1289,7 +1289,7 @@ rg -F -q "func discardAll()" Sources/AnnotationSession.swift
 rg -F -q "editedImages.preparedImage(for: t.artifact.id)" Sources/ThumbnailManager.swift
 rg -F -q "sessions.discardAll()" Sources/ThumbnailManager.swift
 # Прокрутка непрерывная, а не пошаговая; сворачивание требует намерения.
-rg -F -q "scrollModel.scrolled(by: -delta, rubberBand: hasPhases)" Sources/ThumbnailManager.swift
+rg -F -q "scrollModel.scrolled(by: delta, rubberBand: hasPhases)" Sources/ThumbnailManager.swift
 rg -F -q "collapseThreshold" Sources/TrayScrollModel.swift
 rg -F -q "func handleHubSwipe" Sources/ThumbnailManager.swift
 # Прокрутка доходит до координат карточек, а не живёт только в модели.

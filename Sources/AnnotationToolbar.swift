@@ -83,5 +83,6 @@ final class AnnotationToolbarView: NSView {
 
 #if TESTING
     func debugButtons() -> [NativeControlDebugButtonSnapshot] { surface.debugButtons() }
+    var debugRenderedSize: NSSize { surface.debugRenderedSize }
 #endif
 }

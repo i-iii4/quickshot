@@ -278,6 +278,18 @@ private final class NativeHubRenderView: NSView {
     private var retainedImageData: Data?
     private var retainedCGImage: CGImage?
     private var lastRenderSignature: NativeHubRenderSignature?
+#if TESTING
+    /// Размер последнего фактически отрисованного растра в точках. Замер
+    /// панели рендерит её в пробный кадр, и если после этого не перерисовать,
+    /// на экран уходит растр от пробного размера — та самая «каша пикселей».
+    var debugRenderedSize: NSSize {
+        guard let signature = lastRenderSignature, signature.scale > 0 else { return .zero }
+        // Масштаб хранится умноженным на 1000, чтобы подпись оставалась целой.
+        let scale = CGFloat(signature.scale) / 1000
+        return NSSize(width: CGFloat(signature.width) / scale,
+                      height: CGFloat(signature.height) / scale)
+    }
+#endif
     private var lastSurfaceSignature: NativeHubSurfaceSignature?
     private var renderRevision: UInt64 = 0
     private var cachedButtonNodes: (key: NativeButtonNodesCacheKey, nodes: [NativeHubButtonNode])?
@@ -3003,7 +3015,10 @@ final class NativeAnnotationToolbarSurface: NSView {
         nativeView.setSurface(.annotationToolbar)
         nativeView.renderNow()
         let frames = nativeView.buttonNodes().map(\.frame)
+        // Возврат рамки без перерисовки оставлял на экране растр от пробного
+        // кадра: панель выглядела кашей пикселей после каждого замера.
         nativeView.frame = previousFrame
+        nativeView.renderNow()
 
         guard let first = frames.first else {
             measuredFittingSize = NSSize(width: 720, height: 40)
@@ -3054,6 +3069,8 @@ final class NativeAnnotationToolbarSurface: NSView {
     }
 
 #if TESTING
+    var debugRenderedSize: NSSize { nativeView.debugRenderedSize }
+
     func debugButtons() -> [NativeControlDebugButtonSnapshot] {
         nativeDebugButtons(nativeView, in: self)
     }

@@ -158,6 +158,19 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         setControlsVisible(false)
     }
 
+    /// Показ контролов по решению менеджера. При прокрутке карточка уезжает
+    /// из-под курсора, не получая `mouseExited`, и её кнопки оставались
+    /// видимыми — сразу на нескольких карточках.
+    func applyHover(_ active: Bool) {
+        guard !collapsed || !active else { return }
+        // Повторное назначение того же состояния запускало бы анимацию
+        // прозрачности на каждом кадре прокрутки.
+        guard controlsVisible != active else { return }
+        setControlsVisible(active)
+    }
+
+    var controlsVisible: Bool { !controls.isHidden && controls.alphaValue > 0.01 }
+
     private func setControlsVisible(_ visible: Bool, animated: Bool = true) {
         if visible {
             controls.isHidden = false
@@ -542,6 +555,7 @@ final class ThumbnailWindow {
 
     func debugCloseButtonState() -> String { view.debugCloseButtonState() }
     func debugCopyButtonState() -> String { view.debugCopyButtonState() }
+    var debugControlsVisible: Bool { view.controlsVisible }
 
     /// Видимость и живость карточки так, как их видит пользователь: карточка
     /// в стопке может быть отрисована, но не принимать мышь.
@@ -702,6 +716,9 @@ final class ThumbnailWindow {
             container.isHidden = false
         }
     }
+
+    /// Ховер карточки, назначенный менеджером.
+    func applyHover(_ active: Bool) { view.applyHover(active) }
 
     func hide() {
         container.interactionsEnabled = false

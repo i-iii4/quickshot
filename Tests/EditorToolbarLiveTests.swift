@@ -18,6 +18,7 @@ struct EditorToolbarLiveTests {
                 try narrowWindowSwitchesToCompact()   // (2) узкое окно перестраивает строки
                 try cardControlsDispatch()            // (1) меню карточки тоже живое
                 try styleControlsAreContextual()      // (6) без выделения панель не свалка
+                try toolbarSurvivesRemeasure()        // растр не остаётся от пробного кадра
                 print("EditorToolbarLiveTests: passed")
                 exit(0)
             } catch {
@@ -160,6 +161,26 @@ struct EditorToolbarLiveTests {
         }
         guard active.contains(where: { $0.identifier == "Red" }) else {
             throw Failure("при выделении нет выбора цвета: \(active.map(\.identifier))")
+        }
+    }
+
+    /// Замер панели рендерит её в пробный кадр 2400×400. Если после замера не
+    /// перерисовать в настоящем размере, на экран уходит растр от пробного —
+    /// панель превращается в кашу пикселей. Проверяется по фактическому
+    /// размеру последнего растра.
+    @MainActor private static func toolbarSurvivesRemeasure() throws {
+        let toolbar = AnnotationToolbarView(frame: .zero)
+        let host = Host(view: toolbar, size: NSSize(width: 1200, height: 60))
+        _ = host
+
+        for presence in [true, false, true] {
+            toolbar.setSelectionPresence(presence)
+            toolbar.layoutSubtreeIfNeeded()
+            let rendered = toolbar.debugRenderedSize
+            guard abs(rendered.width - toolbar.bounds.width) < 1,
+                  abs(rendered.height - toolbar.bounds.height) < 1 else {
+                throw Failure("после смены выделения растр \(rendered) не совпадает с панелью \(toolbar.bounds.size)")
+            }
         }
     }
 

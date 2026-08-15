@@ -90,6 +90,9 @@ final class ThumbnailManager {
     private var scrollSettleAnimating = false
     private lazy var scrollSettleAnimator = CollectionProgressAnimator(hostView: hostContent)
 
+    /// Шаг колеса мыши в точках: дельта приходит в строках.
+    private static let wheelLineHeight: CGFloat = 40
+
     private let defaults = UserDefaults.standard
     private let widthKey = "thumbnailCardWidth"
 
@@ -715,9 +718,12 @@ final class ThumbnailManager {
     func scrollTray(with event: NSEvent) {
         guard !cardsAreCollapsed else { return }
         let vertical = TrayPosition.current.isVertical
-        let delta = vertical
+        let raw = vertical
             ? event.scrollingDeltaY
             : (abs(event.scrollingDeltaX) > 0.01 ? event.scrollingDeltaX : event.scrollingDeltaY)
+        // Колесо мыши шлёт дельту в строках, а не в точках: один щелчок — это
+        // единица, и лента ползла на пиксель за щелчок.
+        let delta = event.hasPreciseScrollingDeltas ? raw : raw * Self.wheelLineHeight
         // Трекпад шлёт фазы жеста и инерции; классическое колесо — нет.
         let hasPhases = event.phase != [] || event.momentumPhase != []
 
@@ -734,7 +740,9 @@ final class ThumbnailManager {
         guard scrollModel.isScrollable || abs(delta) > 0.01 else { return }
         scrollFollowsNewest = false
         // Резинка только у жестов с фазами: колесо упирается в край жёстко.
-        scrollModel = scrollModel.scrolled(by: -delta, rubberBand: hasPhases)
+        // Содержимое идёт за пальцами: положительная дельта двигает карточки к
+        // хабу. Обратный знак разворачивал ленту против жеста.
+        scrollModel = scrollModel.scrolled(by: delta, rubberBand: hasPhases)
         scrollGestureOvershoot = scrollModel.overshoot
 
         // `TR-7`: продолженное движение за краем сворачивает трей. Проверка
@@ -808,8 +816,39 @@ final class ThumbnailManager {
 
     /// Пересчёт положения карточек по текущему смещению: видимые двигаются
     /// один к одному, ушедшие за край собираются в стопку (`TR-3`).
+    /// Лёгкий кадр прокрутки: двигаются только карточки. Полная перекладка
+    /// пересчитывает ширину каждой карточки, положение хаба и режимы ресайза —
+    /// на каждое событие колеса это и давало рывки.
     private func applyScrollOffset() {
-        layout()
+        guard let screen = anchorScreen ?? NSScreen.main, !cardsAreCollapsed else {
+            layout()
+            return
+        }
+        let (visible, hidden) = cardLayout(on: screen)
+        for item in hidden { item.hide() }
+        for (item, slot) in visible {
+            let localOrigin = toLocal(slot.origin)
+            if slot.opacity < 0.999 || slot.scale < 0.999 {
+                item.placeScrolled(origin: localOrigin, opacity: slot.opacity, scale: slot.scale)
+            } else {
+                item.placeInstant(origin: localOrigin)
+            }
+        }
+        refreshHoverUnderPointer()
+    }
+
+    /// Ровно одна карточка под курсором показывает свои кнопки. Карточка,
+    /// уехавшая из-под курсора при прокрутке, `mouseExited` не получает.
+    private func refreshHoverUnderPointer() {
+        guard host.isVisible else { return }
+        let pointer = toLocal(NSEvent.mouseLocation)
+        // Порядок массива — порядок наложения: побеждает последняя подходящая
+        // карточка, она лежит поверх остальных.
+        var hovered: ThumbnailWindow?
+        for item in items where !item.hostView.isHidden {
+            if item.layoutFrame.contains(pointer) { hovered = item }
+        }
+        for item in items { item.applyHover(item === hovered) }
     }
 
     private func shiftViewport(by delta: Int) {
