@@ -29,6 +29,10 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     private let onSaved: (CaptureArtifact, CGImage, [AnnotationObject]) -> Void
 
     private var window: NSWindow?
+    /// Идущее сканирование: закрытие окна обязано его отменить, иначе результат
+    /// всплывает поверх уже закрытого редактора.
+    private var scanTask: Task<Void, Never>?
+    private var isClosed = false
     private let canvas = AnnotationCanvasView(frame: .zero)
     private let toolbar = AnnotationToolbarView(frame: .zero)
     private var textField: NSTextField?
@@ -49,6 +53,48 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         open[artifact.id] = controller
         controller.show(restoring: objects)
     }
+
+    /// Показ решения о скрытии. Отдельной точкой — чтобы тест видел, что
+    /// именно было предъявлено пользователю, не открывая модальное окно.
+    private func confirmHiding(title: String, details: String) -> Bool {
+#if TESTING
+        Self.debugLastAlert = title
+        return false
+#else
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = details
+        alert.addButton(withTitle: "Hide All")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+#endif
+    }
+
+#if TESTING
+    /// Последнее предъявленное пользователю решение; `nil` — окна не было.
+    static var debugLastAlert: String?
+
+    static func debugController() -> AnnotationEditorController {
+        debugLastAlert = nil
+        let store = CaptureArtifactStore(
+            rootURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("QuickShotScanTests-\(UUID().uuidString)"))
+        let sequence = CaptureSequence(rawValue: UInt64.random(in: 1...UInt64.max))
+        store.registerCapture(sequence)
+        let context = CGContext(data: nil, width: 40, height: 30,
+                                bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpaceCreateDeviceRGB(),
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        let artifact = try! store.admit(sequence: sequence, image: context.makeImage()!)
+        return AnnotationEditorController(artifact: artifact, library: nil, onSaved: { _, _, _ in })
+    }
+
+    func debugMarkClosed() { isClosed = true }
+
+    func debugPresentScanResult(_ matches: [SensitiveMatch], imageSize: CGSize) {
+        presentScanResult(matches, imageSize: imageSize)
+    }
+#endif
 
     private init(artifact: CaptureArtifact,
                  library: ScreenshotLibrary?,
@@ -134,6 +180,9 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        isClosed = true
+        scanTask?.cancel()
+        scanTask = nil
         if let url = artifact.libraryURL { library?.unprotect(url) }
         Self.open.removeValue(forKey: artifact.id)
     }
@@ -213,33 +262,32 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     /// приводит к опубликованному ключу.
     private func scanForSensitiveData() {
         guard let image = canvas.image else { return }
-        Task { @MainActor [weak self] in
-            guard let self else { return }
+        scanTask?.cancel()
+        // Слабая ссылка обязана проверяться ПОСЛЕ приостановки: `guard let self`
+        // до `await` удерживает контроллер живым через всё распознавание, и
+        // результат всплывал поверх уже закрытого редактора.
+        scanTask = Task { @MainActor [weak self] in
             let matches = await SensitiveDataDetector.detect(in: image)
+            guard !Task.isCancelled, let self, !self.isClosed else { return }
+            self.scanTask = nil
             self.presentScanResult(matches, imageSize: CGSize(width: image.width,
                                                               height: image.height))
         }
     }
 
     private func presentScanResult(_ matches: [SensitiveMatch], imageSize: CGSize) {
-        let alert = NSAlert()
-        guard !matches.isEmpty else {
-            alert.messageText = "No sensitive data found"
-            alert.informativeText = "Detection is not exhaustive: check the screenshot yourself."
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
-            return
-        }
+        guard !isClosed else { return }
+        // Пустой результат — не новость: сообщать «ничего не найдено» значит
+        // требовать действия там, где действия нет.
+        guard !matches.isEmpty else { return }
 
         let summary = Dictionary(grouping: matches, by: \.kind)
             .map { "\($0.value.count) × \($0.key.title)" }
             .sorted()
             .joined(separator: ", ")
-        alert.messageText = "Found \(matches.count) items to hide"
-        alert.informativeText = "\(summary)\n\nThey will be covered with opaque bars."
-        alert.addButton(withTitle: "Hide All")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let title = "Found \(matches.count) items to hide"
+        guard confirmHiding(title: title,
+                            details: "\(summary)\n\nThey will be covered with opaque bars.") else { return }
 
         canvas.document.beginGesture()
         for match in matches {
