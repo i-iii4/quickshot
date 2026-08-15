@@ -139,46 +139,53 @@ struct EditorToolbarLiveTests {
         init(_ description: String) { self.description = description }
     }
 
+    /// Хост воспроизводит реальное размещение панели в окне редактора: вью
+    /// стоит СО СМЕЩЕНИЕМ от origin контейнера, а клик доставляется через
+    /// `window.sendEvent`, чтобы hitTest выполнял сам AppKit по своей
+    /// конвенции координат. Прямые вызовы `view.mouseDown` и ручной hitTest
+    /// однажды закодировали в харнесс ту же ошибку координат, что была в
+    /// продукте, — панель была мертва при зелёных тестах.
     @MainActor private final class Host {
         let window: NSWindow
         let root: NSView
 
         init(view: NSView, size: NSSize) {
-            window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
+            let rootSize = NSSize(width: size.width, height: size.height + 120)
+            window = NSWindow(contentRect: NSRect(origin: .zero, size: rootSize),
                               styleMask: [.borderless], backing: .buffered, defer: false)
-            root = NSView(frame: NSRect(origin: .zero, size: size))
+            root = NSView(frame: NSRect(origin: .zero, size: rootSize))
             window.contentView = root
-            view.frame = NSRect(origin: .zero,
-                                size: NSSize(width: size.width, height: view.fittingSize.height))
+            let height = max(1, view.fittingSize.height)
+            view.frame = NSRect(x: 0, y: rootSize.height - height,
+                                width: size.width, height: height)
             root.addSubview(view)
+            // Невидимому окну AppKit не доставляет события: sendEvent молча
+            // глотает клик, и мёртвая панель выглядела бы как живая (или
+            // наоборот). Окно поднимается за пределами экрана насильно.
+            window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+            window.orderFrontRegardless()
             root.layoutSubtreeIfNeeded()
             view.layoutSubtreeIfNeeded()
         }
 
         func click(_ buttonFrame: NSRect, in view: NSView) throws {
             let centre = NSPoint(x: buttonFrame.midX, y: buttonFrame.midY)
-            let inRoot = view.convert(centre, to: root)
-            guard let hit = view.hitTest(view.convert(inRoot, from: root)) else {
-                throw Failure("нет интерактивной вью под \(centre)")
-            }
-            let down = event(.leftMouseDown, at: window.convertPoint(toScreen: inRoot))
-            let up = event(.leftMouseUp, at: window.convertPoint(toScreen: inRoot))
-            hit.mouseDown(with: down)
-            hit.mouseUp(with: up)
+            let inWindow = view.convert(centre, to: nil)
+            window.sendEvent(event(.leftMouseDown, at: inWindow))
+            window.sendEvent(event(.leftMouseUp, at: inWindow))
             root.layoutSubtreeIfNeeded()
         }
 
-        private func event(_ type: NSEvent.EventType, at screenPoint: NSPoint) -> NSEvent {
-            let windowPoint = window.convertPoint(fromScreen: screenPoint)
-            return NSEvent.mouseEvent(with: type,
-                                      location: windowPoint,
-                                      modifierFlags: [],
-                                      timestamp: ProcessInfo.processInfo.systemUptime,
-                                      windowNumber: window.windowNumber,
-                                      context: nil,
-                                      eventNumber: 0,
-                                      clickCount: 1,
-                                      pressure: 1)!
+        private func event(_ type: NSEvent.EventType, at windowPoint: NSPoint) -> NSEvent {
+            NSEvent.mouseEvent(with: type,
+                               location: windowPoint,
+                               modifierFlags: [],
+                               timestamp: ProcessInfo.processInfo.systemUptime,
+                               windowNumber: window.windowNumber,
+                               context: nil,
+                               eventNumber: 0,
+                               clickCount: 1,
+                               pressure: 1)!
         }
     }
 }

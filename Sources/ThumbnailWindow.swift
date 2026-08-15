@@ -108,10 +108,10 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden, alphaValue > 0.01, bounds.contains(point) else { return nil }
+        let local = superview.map { convert(point, from: $0) } ?? point
+        guard !isHidden, alphaValue > 0.01, bounds.contains(local) else { return nil }
         if !controls.isHidden, controls.alphaValue > 0.01 {
-            let converted = convert(point, to: controls)
-            if let hit = controls.hitTest(converted) { return hit }
+            if let hit = controls.hitTest(local) { return hit }
         }
         return self
     }
@@ -335,10 +335,10 @@ private final class CardContainer: NSView {
     override func mouseExited(with event: NSEvent) { onHoverChanged?(false) }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard interactionsEnabled, !isHidden, alphaValue > 0.01, bounds.contains(point) else { return nil }
+        let local = superview.map { convert(point, from: $0) } ?? point
+        guard interactionsEnabled, !isHidden, alphaValue > 0.01, bounds.contains(local) else { return nil }
         for child in subviews.reversed() where !child.isHidden && child.alphaValue > 0.01 {
-            let converted = child.convert(point, from: self)
-            if let hit = child.hitTest(converted) { return hit }
+            if let hit = child.hitTest(local) { return hit }
         }
         return nil          // ловят только сабвью (ручка/карточка); поля — сквозь
     }

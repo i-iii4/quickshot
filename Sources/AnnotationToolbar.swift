@@ -43,9 +43,14 @@ final class AnnotationToolbarView: NSView {
     override var fittingSize: NSSize { surface.fittingSize }
     override var intrinsicContentSize: NSSize { fittingSize }
 
+    /// AppKit передаёт точку в системе координат супервью — контейнер окна
+    /// редактора кладёт панель со смещением, поэтому конвертация обязательна.
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden, alphaValue > 0.01, bounds.contains(point) else { return nil }
-        return surface.hitTest(convert(point, to: surface))
+        let local = superview.map { convert(point, from: $0) } ?? point
+        guard !isHidden, alphaValue > 0.01, bounds.contains(local) else { return nil }
+        // `surface` занимает панель целиком, так что локальная точка панели —
+        // это координаты супервью для `surface`, как и требует контракт hitTest.
+        return surface.hitTest(local)
     }
 
     override func layout() {

@@ -1456,13 +1456,14 @@ final class NativeHubShellView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden, alphaValue > 0.01, visibleBounds.contains(point) else { return nil }
-        let backgroundPoint = convert(point, to: coreBackgroundView)
+        let local = superview.map { convert(point, from: $0) } ?? point
+        guard !isHidden, alphaValue > 0.01, visibleBounds.contains(local) else { return nil }
+        let backgroundPoint = convert(local, to: coreBackgroundView)
         if coreBackgroundMaskLayer.path?.contains(backgroundPoint) == true,
            coreBackgroundView.hasInteractiveButton(at: backgroundPoint) {
             return coreBackgroundView
         }
-        let nativePoint = convert(point, to: nativeView)
+        let nativePoint = convert(local, to: nativeView)
         return nativeView.alphaValue > 0.01 &&
             revealedContentMaskLayer.path?.contains(nativePoint) == true &&
             nativeView.hasInteractiveButton(at: nativePoint) ? nativeView : nil
@@ -2510,9 +2511,10 @@ final class NativeThumbnailControlsView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden, alphaValue > 0.01, bounds.contains(point) else { return nil }
-        let p = convert(point, to: nativeView)
-        return nativeView.hasInteractiveButton(at: p) ? nativeView : nil
+        let local = superview.map { convert(point, from: $0) } ?? point
+        guard !isHidden, alphaValue > 0.01, bounds.contains(local) else { return nil }
+        let inNative = convert(local, to: nativeView)
+        return nativeView.hasInteractiveButton(at: inNative) ? nativeView : nil
     }
 
     override func layout() {
@@ -2613,9 +2615,10 @@ final class NativePinnedCopyButtonView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden, alphaValue > 0.01, bounds.contains(point) else { return nil }
-        let p = convert(point, to: nativeView)
-        return nativeView.hasInteractiveButton(at: p) ? nativeView : nil
+        let local = superview.map { convert(point, from: $0) } ?? point
+        guard !isHidden, alphaValue > 0.01, bounds.contains(local) else { return nil }
+        let inNative = convert(local, to: nativeView)
+        return nativeView.hasInteractiveButton(at: inNative) ? nativeView : nil
     }
 
     override func layout() {
@@ -2715,9 +2718,10 @@ final class NativeSettingsContentView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden, alphaValue > 0.01, bounds.contains(point) else { return nil }
-        let p = convert(point, to: nativeView)
-        return nativeView.hasInteractiveButton(at: p) ? nativeView : nil
+        let local = superview.map { convert(point, from: $0) } ?? point
+        guard !isHidden, alphaValue > 0.01, bounds.contains(local) else { return nil }
+        let inNative = convert(local, to: nativeView)
+        return nativeView.hasInteractiveButton(at: inNative) ? nativeView : nil
     }
 
     override func layout() {
@@ -2832,10 +2836,12 @@ final class NativeAnnotationToolbarSurface: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     /// Пустое место панели не крадёт клики: события получают только кнопки.
+    /// Точка приходит в координатах супервью — контракт hitTest AppKit.
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden, alphaValue > 0.01, bounds.contains(point) else { return nil }
-        let local = convert(point, to: nativeView)
-        return nativeView.hasInteractiveButton(at: local) ? nativeView : nil
+        let local = superview.map { convert(point, from: $0) } ?? point
+        guard !isHidden, alphaValue > 0.01, bounds.contains(local) else { return nil }
+        let inNative = convert(local, to: nativeView)
+        return nativeView.hasInteractiveButton(at: inNative) ? nativeView : nil
     }
 
     override func layout() {

@@ -1064,8 +1064,7 @@ struct HubWindowBehaviorTests {
         }
 
         func click(at point: NSPoint) throws {
-            let pointInHub = hub.view.convert(point, from: root)
-            guard let hit = hub.view.hitTest(pointInHub), hit !== hub.view else {
+            guard let hit = hub.view.hitTest(point), hit !== hub.view else {
                 throw Failure("No interactive view at \(point)")
             }
             hit.mouseDown(with: event(.leftMouseDown, at: point))
@@ -1075,8 +1074,7 @@ struct HubWindowBehaviorTests {
 
         func holdCorePress() throws {
             let point = hub.center
-            let pointInHub = hub.view.convert(point, from: root)
-            guard let hit = hub.view.hitTest(pointInHub), hit !== hub.view else {
+            guard let hit = hub.view.hitTest(point), hit !== hub.view else {
                 throw Failure("No interactive core view at \(point)")
             }
             heldHit = hit
@@ -1092,16 +1090,14 @@ struct HubWindowBehaviorTests {
         }
 
         func dispatchClickIfPossible(at point: NSPoint) {
-            let pointInHub = hub.view.convert(point, from: root)
-            guard let hit = hub.view.hitTest(pointInHub) else { return }
+            guard let hit = hub.view.hitTest(point) else { return }
             hit.mouseDown(with: event(.leftMouseDown, at: point))
             hit.mouseUp(with: event(.leftMouseUp, at: point))
             root.layoutSubtreeIfNeeded()
         }
 
         func pressThenShellExitAndRelease(at point: NSPoint) throws {
-            let pointInHub = hub.view.convert(point, from: root)
-            guard let hit = hub.view.hitTest(pointInHub), hit !== hub.view else {
+            guard let hit = hub.view.hitTest(point), hit !== hub.view else {
                 throw Failure("No interactive view at \(point)")
             }
 
@@ -1143,7 +1139,7 @@ struct HubWindowBehaviorTests {
             var x = clip.minX
             while x <= clip.maxX {
                 let pointInHub = NSPoint(x: x, y: clip.midY)
-                let hit = hub.view.hitTest(pointInHub)
+                let hit = hub.view.hitTest(hub.view.convert(pointInHub, to: root))
                 if hit == nil || hit === hub.view {
                     return hub.view.convert(pointInHub, to: root)
                 }

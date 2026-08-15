@@ -13,10 +13,12 @@ func trayHostIgnoresMouseEvents(isVisible: Bool,
 /// Здесь события получают только реальные интерактивные сабвью; пустота возвращает nil.
 final class TrayHostContentView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !isHidden, alphaValue > 0.01, bounds.contains(point) else { return nil }
+        let local = superview.map { convert(point, from: $0) } ?? point
+        guard !isHidden, alphaValue > 0.01, bounds.contains(local) else { return nil }
         for child in subviews.reversed() where !child.isHidden && child.alphaValue > 0.01 {
-            let converted = child.convert(point, from: self)
-            if let hit = child.hitTest(converted) { return hit }
+            // hitTest ребёнка ждёт точку в координатах СВОЕГО супервью — то
+            // есть в наших локальных, без предварительной конвертации.
+            if let hit = child.hitTest(local) { return hit }
         }
         return nil
     }
