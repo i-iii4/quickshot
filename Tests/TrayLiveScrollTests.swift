@@ -21,6 +21,8 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
         scrollFollowsTheGesture()
         wheelNotchMovesAVisibleDistance()
         hoverStaysOnASingleCard()
+        scrollWorksInTheGapBetweenCards()
+        momentumKeepsMovingTheStrip()
 
         if failures.isEmpty {
             print("TrayLiveScrollTests: passed")
@@ -178,6 +180,76 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Зазор между карточками — часть трея. Пустота обязана пропускать клики
+    /// насквозь, поэтому `hitTest` там возвращает nil, и жест прокрутки на
+    /// зазоре обрывался.
+    private func scrollWorksInTheGapBetweenCards() {
+        guard let fixture = makeOverflowingTray(label: "gap") else { return }
+        defer { fixture.teardown() }
+
+        // Точка ровно между двумя соседними видимыми карточками.
+        let frames = fixture.cards
+            .filter { !$0.hostView.isHidden }
+            .map { $0.debugCardFrame }
+            .sorted { $0.minY < $1.minY }
+        guard frames.count >= 2 else {
+            failures.append("в ленте меньше двух видимых карточек")
+            return
+        }
+        var gapPoint: NSPoint?
+        for (lower, upper) in zip(frames, frames.dropFirst()) where upper.minY - lower.maxY > 4 {
+            gapPoint = NSPoint(x: lower.midX, y: (lower.maxY + upper.minY) / 2)
+            break
+        }
+        guard let point = gapPoint else {
+            failures.append("не нашёл зазора между карточками")
+            return
+        }
+        if fixture.cards.contains(where: { $0.debugCardFrame.contains(point) }) {
+            failures.append("точка замера попала на карточку, а не в зазор")
+            return
+        }
+
+        let before = fixture.cards.map { $0.layoutFrame.origin }
+        post(scroll: -40, phase: .began, at: point, window: fixture.window)
+        for _ in 0..<4 { post(scroll: -40, phase: .changed, at: point, window: fixture.window) }
+        let after = fixture.cards.map { $0.layoutFrame.origin }
+        post(scroll: 0, phase: .ended, at: point, window: fixture.window)
+        spin(0.4)
+
+        let travelled = zip(before, after).map { hypot($1.x - $0.x, $1.y - $0.y) }.max() ?? 0
+        guard travelled >= 20 else {
+            failures.append("прокрутка в зазоре не сдвинула ленту: \(travelled) pt")
+            return
+        }
+    }
+
+    /// Инерция: система досылает события после отпускания пальцев, и лента
+    /// обязана продолжать движение. Карточки при этом уезжают из-под курсора,
+    /// поэтому доставка не может зависеть от того, что под ним сейчас.
+    private func momentumKeepsMovingTheStrip() {
+        guard let fixture = makeOverflowingTray(label: "momentum") else { return }
+        defer { fixture.teardown() }
+
+        let probe = fixture.cards[fixture.cards.count / 2]
+        let point = NSPoint(x: probe.layoutFrame.midX, y: probe.layoutFrame.midY)
+        post(scroll: -40, phase: .began, at: point, window: fixture.window)
+        post(scroll: -40, phase: .changed, at: point, window: fixture.window)
+        post(scroll: 0, phase: .ended, at: point, window: fixture.window)
+
+        let before = fixture.cards.map { $0.layoutFrame.origin }
+        for _ in 0..<5 { postMomentum(scroll: -30, at: point, window: fixture.window) }
+        let after = fixture.cards.map { $0.layoutFrame.origin }
+        postMomentumEnd(at: point, window: fixture.window)
+        spin(0.4)
+
+        let travelled = zip(before, after).map { hypot($1.x - $0.x, $1.y - $0.y) }.max() ?? 0
+        guard travelled >= 20 else {
+            failures.append("инерция не двигает ленту: \(travelled) pt")
+            return
+        }
+    }
+
     // MARK: окружение
 
     private struct Fixture {
@@ -264,6 +336,44 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
         let flipped = CGPoint(x: screenPoint.x,
                               y: (NSScreen.screens.first?.frame.maxY ?? 0) - screenPoint.y)
         cg.location = flipped
+        guard let event = NSEvent(cgEvent: cg) else { return }
+        window.sendEvent(event)
+    }
+
+    /// Инерционное событие: пальцы уже отпущены, фаза жеста пуста.
+    private func postMomentum(scroll delta: CGFloat, at windowPoint: NSPoint, window: NSWindow) {
+        postScroll(delta: delta,
+                   scrollPhase: 0,
+                   momentumPhase: Int64(CGMomentumScrollPhase.continuous.rawValue),
+                   at: windowPoint,
+                   window: window)
+    }
+
+    private func postMomentumEnd(at windowPoint: NSPoint, window: NSWindow) {
+        postScroll(delta: 0,
+                   scrollPhase: 0,
+                   momentumPhase: Int64(CGMomentumScrollPhase.end.rawValue),
+                   at: windowPoint,
+                   window: window)
+    }
+
+    private func postScroll(delta: CGFloat,
+                            scrollPhase: Int64,
+                            momentumPhase: Int64,
+                            at windowPoint: NSPoint,
+                            window: NSWindow) {
+        guard let cg = CGEvent(scrollWheelEvent2Source: nil,
+                               units: .pixel,
+                               wheelCount: 1,
+                               wheel1: Int32(delta),
+                               wheel2: 0,
+                               wheel3: 0) else { return }
+        cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: scrollPhase)
+        cg.setIntegerValueField(.scrollWheelEventMomentumPhase, value: momentumPhase)
+        cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        let screenPoint = window.convertPoint(toScreen: windowPoint)
+        cg.location = CGPoint(x: screenPoint.x,
+                              y: (NSScreen.screens.first?.frame.maxY ?? 0) - screenPoint.y)
         guard let event = NSEvent(cgEvent: cg) else { return }
         window.sendEvent(event)
     }

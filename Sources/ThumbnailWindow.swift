@@ -217,10 +217,6 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         movedFar = beginDragOut(with: event)
     }
 
-    override func scrollWheel(with event: NSEvent) {
-        manager?.scrollTray(with: event)
-    }
-
     // MARK: действия
 
     private func doCopy() { if let owner { manager?.copy(owner) } }
@@ -556,6 +552,9 @@ final class ThumbnailWindow {
     func debugCloseButtonState() -> String { view.debugCloseButtonState() }
     func debugCopyButtonState() -> String { view.debugCopyButtonState() }
     var debugControlsVisible: Bool { view.controlsVisible }
+    /// Видимая рамка карточки в координатах хоста: контейнер шире неё на поля
+    /// ресайза, и зазор между карточками лежит именно между этими рамками.
+    var debugCardFrame: NSRect { container.convert(view.frame, to: container.superview) }
 
     /// Видимость и живость карточки так, как их видит пользователь: карточка
     /// в стопке может быть отрисована, но не принимать мышь.

@@ -35,6 +35,18 @@ enum TrayPosition: String {
 /// поэтому полноэкранный хост не перехватывает мышь в пустых областях.
 final class TrayHostPanel: NSPanel {
     override var canBecomeKey: Bool { true }
+
+    /// Прокрутка обрабатывается на уровне окна. Доставка по `hitTest` не
+    /// годится: пустота трея и поля ресайза обязаны пропускать клики насквозь
+    /// и потому возвращают nil, поэтому жест обрывался в зазоре между
+    /// карточками, а инерция гасла, как только карточка уезжала из-под
+    /// курсора. Замыкание возвращает `true`, если событие взято треем.
+    var onScrollWheel: ((NSEvent) -> Bool)?
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .scrollWheel, onScrollWheel?(event) == true { return }
+        super.sendEvent(event)
+    }
 }
 
 /// Менеджер трея миниатюр. Карточки выкладываются у угла (колонка/ряд), у самого угла —
@@ -115,6 +127,9 @@ final class ThumbnailManager {
         host.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         hostContent.wantsLayer = true
         host.contentView = hostContent
+        host.onScrollWheel = { [weak self] event in
+            self?.handleHostScroll(event) ?? false
+        }
         hostContent.addSubview(hub.view)              // хаб — верхний сабвью; карточки кладём под него
 
         let saved = defaults.double(forKey: widthKey)
@@ -791,6 +806,20 @@ final class ThumbnailManager {
             self.scrollModel.offset = target
             self.applyScrollOffset()
         })
+    }
+
+    /// Событие прокрутки, пришедшее в окно трея. Над кнопкой хаба оно остаётся
+    /// свайпом сворачивания и уходит по обычному маршруту; во всей остальной
+    /// части трея им управляет лента.
+    private func handleHostScroll(_ event: NSEvent) -> Bool {
+        // Если событие дошло до окна, система уже решила, что оно принимает
+        // мышь: повторная проверка `ignoresMouseEvents` здесь только ломает
+        // доставку.
+        guard host.isVisible else { return false }
+        let point = hostContent.convert(event.locationInWindow, from: nil)
+        if hub.view.frame.contains(point) { return false }
+        scrollTray(with: event)
+        return true
     }
 
     /// Свайп по кнопке хаба разворачивает свёрнутый трей и сворачивает

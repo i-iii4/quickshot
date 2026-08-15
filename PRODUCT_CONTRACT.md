@@ -218,6 +218,12 @@ fullscreen behavior remain explicit runtime release checks.
 10. Exactly one card shows its hover buttons: the one under the pointer. Cards
    that leave the pointer during a scroll never receive `mouseExited`, so the
    hover owner is reassigned after every scroll frame.
+11. Scrolling is owned by the tray window, not by the view under the pointer.
+   Empty tray space and card resize bands deliberately pass clicks through and
+   therefore hit-test to nothing, so gesture delivery cannot depend on them: a
+   gesture must survive the gaps between cards, and momentum must keep the
+   strip moving after the cards have left the pointer. Scrolling over the hub
+   button stays the collapse swipe.
 
 ## Editor Interface
 
