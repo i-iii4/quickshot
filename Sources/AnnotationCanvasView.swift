@@ -13,7 +13,7 @@ final class AnnotationCanvasView: NSView {
     private static let snapDistance: CGFloat = 6
 
     let document = AnnotationDocument()
-    var image: CGImage? { didSet { resetZoom(); needsDisplay = true } }
+    var image: CGImage? { didSet { resetZoom(); needsDisplay = true } }   // документ не трогаем: A-6
     var tool: AnnotationTool = .select { didSet { updateCursor() } }
 
     /// Текущий стиль инструмента. Применяется и к следующему созданному
@@ -31,6 +31,17 @@ final class AnnotationCanvasView: NSView {
     private var dragOrigin: CGPoint?
     private var dragMode: DragMode = .none
     private var lastClickedID: UUID?
+    /// Рамка кадрирования в координатах изображения (`D-40`). Пока она задана,
+    /// снимок не обрезан: обрезка происходит при применении, поэтому её можно
+    /// отменить, не потеряв отрезанное (`D-42`).
+    private(set) var cropRect: CGRect?
+    /// Поворот кратно 90 градусам, применяется к итоговому изображению.
+    private(set) var rotationQuarterTurns = 0
+    /// Снимок документа на момент последнего сохранения (`ED-8`, `ED-11`).
+    private var lastSavedState: AnnotationDocumentState?
+    /// Последний выданный результат: держится до следующей выдачи, чтобы
+    /// перетаскивание и буфер не пересобирали изображение заново.
+    private var lastFlattened: CGImage?
     private var marqueeRect: CGRect?
 
     private enum DragMode {
@@ -104,6 +115,7 @@ final class AnnotationCanvasView: NSView {
 
         drawSelection(in: context)
         drawMarquee(in: context)
+        drawCropOverlay(in: context)
     }
 
     private func drawSelection(in context: CGContext) {
@@ -134,6 +146,21 @@ final class AnnotationCanvasView: NSView {
                 context.strokeEllipse(in: rect)
             }
         }
+        context.restoreGState()
+    }
+
+    /// Затемнение вне рамки кадрирования: пользователь видит, что останется.
+    private func drawCropOverlay(in context: CGContext) {
+        guard let rect = cropRect, rect.width > 1, rect.height > 1 else { return }
+        let viewRect = transform.viewRect(fromImage: rect)
+        context.saveGState()
+        context.setFillColor(NSColor.black.withAlphaComponent(0.5).cgColor)
+        context.addRect(transform.imageFrame)
+        context.addRect(viewRect)
+        context.fillPath(using: .evenOdd)
+        context.setStrokeColor(NSColor.white.cgColor)
+        context.setLineWidth(1)
+        context.stroke(viewRect)
         context.restoreGState()
     }
 
@@ -210,6 +237,12 @@ final class AnnotationCanvasView: NSView {
     }
 
     private func beginCreation(at point: CGPoint, event: NSEvent) {
+        if tool == .crop {
+            cropRect = CGRect(origin: point, size: .zero)
+            dragOrigin = point
+            dragMode = .creating
+            return
+        }
         guard let kind = tool.kind else { return }
         var object = AnnotationObject(kind: kind, geometry: .point(point), style: currentStyle)
         switch kind {
@@ -279,6 +312,13 @@ final class AnnotationCanvasView: NSView {
     }
 
     private func updateDraft(to rawPoint: CGPoint, event: NSEvent) {
+        if tool == .crop, let origin = dragOrigin {
+            cropRect = CGRect(x: min(origin.x, rawPoint.x), y: min(origin.y, rawPoint.y),
+                              width: abs(rawPoint.x - origin.x),
+                              height: abs(rawPoint.y - origin.y))
+            needsDisplay = true
+            return
+        }
         guard var object = draft, let origin = dragOrigin else { return }
         var point = rawPoint
         let proportional = event.modifierFlags.contains(.shift)
@@ -329,6 +369,13 @@ final class AnnotationCanvasView: NSView {
     /// `D-5`: объект пренебрежимо малого размера не создаётся — случайный клик
     /// не должен оставлять мусор.
     private func commitDraft() {
+        if tool == .crop {
+            // Слишком мелкая рамка — промах, а не намерение обрезать всё.
+            if let rect = cropRect, rect.width < 8 || rect.height < 8 { cropRect = nil }
+            needsDisplay = true
+            onDocumentChanged?()
+            return
+        }
         defer { draft = nil }
         guard let object = draft else { return }
         let box = object.geometry.boundingBox
@@ -500,9 +547,218 @@ final class AnnotationCanvasView: NSView {
         }
     }
 
+    /// Поворот на четверть оборота (`D-44`). Применяется к итоговому
+    /// изображению, а не к объектам: объекты остаются в координатах снимка.
+    func rotateQuarterTurn() {
+        rotationQuarterTurns = (rotationQuarterTurns + 1) % 4
+        needsDisplay = true
+        onDocumentChanged?()
+    }
+
+    func clearCrop() {
+        cropRect = nil
+        needsDisplay = true
+        onDocumentChanged?()
+    }
+
+
+    // MARK: клавиатурные операции (`H-1`, `H-2`)
+
+    /// Создание объекта в центре кадра: путь без мыши обязан быть полным.
+    func createObjectAtCentre(kind: AnnotationKind) {
+        let centre = CGPoint(x: transform.imageSize.width / 2, y: transform.imageSize.height / 2)
+        let side: CGFloat = 80
+        let geometry: AnnotationGeometry
+        switch kind {
+        case .arrow, .line, .highlighter:
+            geometry = .segment(from: CGPoint(x: centre.x - side / 2, y: centre.y),
+                                to: CGPoint(x: centre.x + side / 2, y: centre.y),
+                                curve: 0)
+        case .pencil:
+            geometry = .path([centre])
+        case .counter:
+            geometry = .point(centre)
+        default:
+            geometry = .rect(CGRect(x: centre.x - side / 2, y: centre.y - side / 2,
+                                    width: side, height: side),
+                             cornerRadius: kind == .rectangle ? 4 : 0)
+        }
+        var object = AnnotationObject(kind: kind, geometry: geometry, style: currentStyle)
+        if kind == .counter { object.number = document.nextCounterNumber() }
+        document.add(object)
+        notifyChange()
+    }
+
+    func selectNext(backwards: Bool) {
+        cycleSelection(backwards: backwards)
+    }
+
+    func nudgeSelection(dx: CGFloat, dy: CGFloat) {
+        nudge(dx: dx, dy: dy)
+    }
+
+    func deleteSelection() {
+        document.removeSelection()
+        notifyChange()
+    }
+
+    /// `G-3`, `G-4`: выделение рамкой захватывает пересечённые объекты.
+    func selectInRect(_ rect: CGRect) {
+        let hits = document.objects.filter { $0.geometry.boundingBox.intersects(rect) }
+        document.select(Set(hits.map(\.id)))
+        notifyChange()
+    }
+
+    // MARK: выравнивание и показатели (`G-11`, `G-12`)
+
+    enum Alignment { case left, right, top, bottom, horizontalCentre, verticalCentre }
+
+    func alignSelection(_ alignment: Alignment) {
+        let selected = document.objects.filter { document.selection.contains($0.id) }
+        guard selected.count > 1 else { return }
+        let boxes = selected.map(\.geometry.boundingBox)
+        let target: (CGRect) -> CGVector
+        switch alignment {
+        case .left:
+            let edge = boxes.map(\.minX).min() ?? 0
+            target = { CGVector(dx: edge - $0.minX, dy: 0) }
+        case .right:
+            let edge = boxes.map(\.maxX).max() ?? 0
+            target = { CGVector(dx: edge - $0.maxX, dy: 0) }
+        case .top:
+            let edge = boxes.map(\.minY).min() ?? 0
+            target = { CGVector(dx: 0, dy: edge - $0.minY) }
+        case .bottom:
+            let edge = boxes.map(\.maxY).max() ?? 0
+            target = { CGVector(dx: 0, dy: edge - $0.maxY) }
+        case .horizontalCentre:
+            let centre = (boxes.map(\.midX).reduce(0, +)) / CGFloat(boxes.count)
+            target = { CGVector(dx: centre - $0.midX, dy: 0) }
+        case .verticalCentre:
+            let centre = (boxes.map(\.midY).reduce(0, +)) / CGFloat(boxes.count)
+            target = { CGVector(dx: 0, dy: centre - $0.midY) }
+        }
+
+        document.beginGesture()
+        for object in selected {
+            document.update(id: object.id) { item in
+                item.geometry = item.geometry.translated(by: target(item.geometry.boundingBox))
+            }
+        }
+        document.endGesture()
+        notifyChange()
+    }
+
+    /// Размер и положение выделения: показываются во время изменения.
+    func selectionMetrics() -> CGRect? {
+        let boxes = document.objects
+            .filter { document.selection.contains($0.id) }
+            .map(\.geometry.boundingBox)
+        guard let first = boxes.first else { return nil }
+        return boxes.dropFirst().reduce(first) { $0.union($1) }
+    }
+
+    // MARK: сохранение и откат (`ED-8`, `ED-11`)
+
+    var hasUnsavedChanges: Bool {
+        guard let lastSavedState else { return !document.objects.isEmpty }
+        return lastSavedState != document.state
+    }
+
+    func markSaved() {
+        lastSavedState = document.state
+    }
+
+    /// Отмена в редакторе возвращает к последнему сохранению, а не к
+    /// захваченному снимку: сохранённое пользователь считает своим.
+    func revertToLastSave() {
+        guard let lastSavedState else {
+            document.perform { $0 = AnnotationDocumentState() }
+            notifyChange()
+            return
+        }
+        document.perform { $0 = lastSavedState }
+        notifyChange()
+    }
+
+    /// `Q-5`: объект, уехавший за кадр, возвращается в видимую область.
+    func bringSelectionIntoView() {
+        guard !document.selection.isEmpty else { return }
+        let frame = CGRect(origin: .zero, size: transform.imageSize)
+        document.beginGesture()
+        for id in document.selection {
+            guard let object = document.objects.first(where: { $0.id == id }) else { continue }
+            let box = object.geometry.boundingBox
+            guard !box.intersects(frame) else { continue }
+            let delta = CGVector(dx: frame.midX - box.midX, dy: frame.midY - box.midY)
+            document.update(id: id) { $0.geometry = $0.geometry.translated(by: delta) }
+        }
+        document.endGesture()
+        notifyChange()
+    }
+
+    /// `L-4`: сколько несжатых копий изображения удерживает редактор.
+    /// Исходник плюс, на время выдачи, результат — больше быть не должно.
+    var debugRetainedImageCount: Int {
+        (image == nil ? 0 : 1) + (lastFlattened == nil ? 0 : 1)
+    }
+
+    /// Принудительная отрисовка для замеров бюджета кадра.
+    func renderForTesting() {
+        guard let context = CGContext(data: nil,
+                                      width: max(1, Int(bounds.width)),
+                                      height: max(1, Int(bounds.height)),
+                                      bitsPerComponent: 8,
+                                      bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        AnnotationRenderer.draw(document.objects,
+                                in: context,
+                                imageSize: transform.imageSize,
+                                strokeScale: 1)
+    }
+
     /// Итоговое изображение с запечёнными объектами: то, что уходит в буфер,
-    /// файл и перетаскивание.
+    /// файл и перетаскивание. Кадрирование и поворот применяются здесь же.
     func flattenedImage() -> CGImage? {
+        guard let baked = bakedImage() else { return nil }
+        let cropped = applyCrop(to: baked)
+        let result = applyRotation(to: cropped)
+        lastFlattened = result
+        return result
+    }
+
+    private func applyCrop(to image: CGImage) -> CGImage {
+        guard let rect = cropRect, rect.width >= 8, rect.height >= 8 else { return image }
+        // Документ живёт в перевёрнутых координатах вью, а `cropping` считает
+        // от верхнего левого угла изображения — по вертикали это совпадает.
+        let bounded = rect.intersection(CGRect(x: 0, y: 0,
+                                               width: CGFloat(image.width),
+                                               height: CGFloat(image.height)))
+        guard !bounded.isNull, let cropped = image.cropping(to: bounded) else { return image }
+        return cropped
+    }
+
+    private func applyRotation(to image: CGImage) -> CGImage {
+        guard rotationQuarterTurns % 4 != 0 else { return image }
+        let turns = rotationQuarterTurns % 4
+        let swapped = turns % 2 == 1
+        let width = swapped ? image.height : image.width
+        let height = swapped ? image.width : image.height
+        guard let context = CGContext(data: nil, width: width, height: height,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            return image
+        }
+        context.translateBy(x: CGFloat(width) / 2, y: CGFloat(height) / 2)
+        context.rotate(by: -CGFloat(turns) * .pi / 2)
+        context.translateBy(x: -CGFloat(image.width) / 2, y: -CGFloat(image.height) / 2)
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return context.makeImage() ?? image
+    }
+
+    private func bakedImage() -> CGImage? {
         guard let image else { return nil }
         let width = image.width
         let height = image.height

@@ -22,6 +22,7 @@ pub const Model = struct {
     palette_index: u32 = 0,
     stroke_weight: StrokeWeight = .medium,
     filled: bool = false,
+    toolbar_compact: bool = false,
     can_undo: bool = false,
     can_redo: bool = false,
     retention: Retention = .week,
@@ -104,6 +105,7 @@ pub const Model = struct {
     }
 
     pub fn toolSelect(model: *const Model) bool { return model.tool == .select; }
+    pub fn toolCrop(model: *const Model) bool { return model.tool == .crop; }
     pub fn toolArrow(model: *const Model) bool { return model.tool == .arrow; }
     pub fn toolBox(model: *const Model) bool { return model.tool == .box; }
     pub fn toolEllipse(model: *const Model) bool { return model.tool == .ellipse; }
@@ -123,6 +125,9 @@ pub const Model = struct {
     pub fn weightThin(model: *const Model) bool { return model.stroke_weight == .thin; }
     pub fn weightMedium(model: *const Model) bool { return model.stroke_weight == .medium; }
     pub fn weightThick(model: *const Model) bool { return model.stroke_weight == .thick; }
+    pub fn toolbarCompact(model: *const Model) bool { return model.toolbar_compact; }
+    pub fn toolbarWide(model: *const Model) bool { return !model.toolbar_compact; }
+
     pub fn fillOn(model: *const Model) bool { return model.filled; }
     pub fn fillOff(model: *const Model) bool { return !model.filled; }
 
@@ -168,6 +173,7 @@ pub const StrokeWeight = enum {
 
 pub const AnnotationTool = enum {
     select,
+    crop,
     arrow,
     box,
     ellipse,
@@ -207,6 +213,7 @@ pub const Action = enum {
     autosave_off,
     open_folder,
     tool_select,
+    tool_crop,
     tool_arrow,
     tool_box,
     tool_ellipse,
@@ -223,6 +230,7 @@ pub const Action = enum {
     editor_copy,
     editor_close,
     editor_scan,
+    editor_rotate,
     colour_0,
     colour_1,
     colour_2,
@@ -269,6 +277,7 @@ pub const Msg = union(enum) {
     autosave_off,
     open_folder,
     tool_select,
+    tool_crop,
     tool_arrow,
     tool_box,
     tool_ellipse,
@@ -285,6 +294,7 @@ pub const Msg = union(enum) {
     editor_copy,
     editor_close,
     editor_scan,
+    editor_rotate,
     colour_0,
     colour_1,
     colour_2,
@@ -314,6 +324,7 @@ pub const Msg = union(enum) {
     set_colour: u32,
     set_weight: StrokeWeight,
     set_fill: bool,
+    set_toolbar_compact: bool,
     set_can_redo: bool,
     set_autosave: bool,
     set_interaction_hover: Action,
@@ -340,6 +351,7 @@ const command_can_undo_prefix = "editor.can_undo:";
 const command_colour_prefix = "editor.colour:";
 const command_weight_prefix = "editor.weight:";
 const command_fill_prefix = "editor.fill:";
+const command_compact_toolbar_prefix = "editor.compact:";
 const command_can_redo_prefix = "editor.can_redo:";
 const command_autosave_prefix = "settings.autosave:";
 const command_interaction_hover_prefix = "ui.hover:";
@@ -430,6 +442,7 @@ fn update(model: *Model, msg: Msg) void {
         },
         .open_folder => model.last_action = .open_folder,
         .tool_select => { model.tool = .select; model.last_action = .tool_select; },
+        .tool_crop => { model.tool = .crop; model.last_action = .tool_crop; },
         .tool_arrow => { model.tool = .arrow; model.last_action = .tool_arrow; },
         .tool_box => { model.tool = .box; model.last_action = .tool_box; },
         .tool_ellipse => { model.tool = .ellipse; model.last_action = .tool_ellipse; },
@@ -446,6 +459,7 @@ fn update(model: *Model, msg: Msg) void {
         .editor_copy => model.last_action = .editor_copy,
         .editor_close => model.last_action = .editor_close,
         .editor_scan => model.last_action = .editor_scan,
+        .editor_rotate => model.last_action = .editor_rotate,
         .colour_0 => { model.palette_index = 0; model.last_action = .colour_0; },
         .colour_1 => { model.palette_index = 1; model.last_action = .colour_1; },
         .colour_2 => { model.palette_index = 2; model.last_action = .colour_2; },
@@ -477,6 +491,7 @@ fn update(model: *Model, msg: Msg) void {
         .set_colour => |value| model.palette_index = value,
         .set_weight => |value| model.stroke_weight = value,
         .set_fill => |value| model.filled = value,
+        .set_toolbar_compact => |value| model.toolbar_compact = value,
         .set_can_redo => |value| model.can_redo = value,
         .set_autosave => |enabled| model.autosave = enabled,
         .set_interaction_hover => |action| model.interaction_hover = action,
@@ -553,6 +568,9 @@ fn onCommand(name: []const u8) ?Msg {
     if (std.mem.startsWith(u8, name, command_fill_prefix)) {
         return .{ .set_fill = parseBool(name[command_fill_prefix.len..]) orelse return null };
     }
+    if (std.mem.startsWith(u8, name, command_compact_toolbar_prefix)) {
+        return .{ .set_toolbar_compact = parseBool(name[command_compact_toolbar_prefix.len..]) orelse return null };
+    }
     if (std.mem.startsWith(u8, name, command_can_redo_prefix)) {
         return .{ .set_can_redo = parseBool(name[command_can_redo_prefix.len..]) orelse return null };
     }
@@ -591,6 +609,7 @@ fn parseWeight(raw: []const u8) ?StrokeWeight {
 
 fn parseTool(raw: []const u8) ?AnnotationTool {
     if (std.mem.eql(u8, raw, "select")) return .select;
+    if (std.mem.eql(u8, raw, "crop")) return .crop;
     if (std.mem.eql(u8, raw, "arrow")) return .arrow;
     if (std.mem.eql(u8, raw, "box")) return .box;
     if (std.mem.eql(u8, raw, "ellipse")) return .ellipse;
@@ -614,7 +633,7 @@ fn parseRetention(raw: []const u8) ?Retention {
 
 fn parseAction(raw: []const u8) ?Action {
     const value = std.fmt.parseUnsigned(u8, raw, 10) catch return null;
-    if (value > @intFromEnum(Action.fill_off)) return null;
+    if (value > @intFromEnum(Action.editor_rotate)) return null;
     return @enumFromInt(value);
 }
 
@@ -663,6 +682,7 @@ fn actionForMessage(msg: Msg) Action {
         .autosave_off => .autosave_off,
         .open_folder => .open_folder,
         .tool_select => .tool_select,
+        .tool_crop => .tool_crop,
         .tool_arrow => .tool_arrow,
         .tool_box => .tool_box,
         .tool_ellipse => .tool_ellipse,
@@ -679,6 +699,7 @@ fn actionForMessage(msg: Msg) Action {
         .editor_copy => .editor_copy,
         .editor_close => .editor_close,
         .editor_scan => .editor_scan,
+        .editor_rotate => .editor_rotate,
         .colour_0 => .colour_0,
         .colour_1 => .colour_1,
         .colour_2 => .colour_2,

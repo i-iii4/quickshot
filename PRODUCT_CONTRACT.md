@@ -203,6 +203,23 @@ fullscreen behavior remain explicit runtime release checks.
 5. A two-finger swipe over the hub button expands a collapsed tray and
    collapses an open one; clicking keeps working as before.
 
+## Editor Interface
+
+1. Every control in the editor toolbar and on a tray card dispatches its
+   command: a control that does nothing when pressed is a defect of the same
+   weight as a crash.
+2. Control labels explain the action. One- and two-letter codes are prohibited:
+   they require a legend the user does not have.
+3. The toolbar lays out without clipping or overlapping the canvas at every
+   window width from the minimum to full screen, splitting its rows when the
+   window is narrow rather than pushing controls past the edge.
+4. Commands are grouped by purpose: tools, style, history and delivery.
+5. Crop and rotate exist as first-class operations and change the size and
+   orientation of the exported image.
+6. Editor state persists across an application restart while the screenshot
+   file is alive, as internal state with no compatibility guarantees: a
+   mismatch discards it whole and leaves the screenshot as an image.
+
 ## UI Architecture
 
 1. UI architecture changes must improve interaction consistency, state

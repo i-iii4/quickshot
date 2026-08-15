@@ -96,6 +96,9 @@ struct AnnotationObject: Equatable, Identifiable {
     var number: Int?
     /// Заблокированный объект не выделяется и не меняется (`C-10`).
     var isLocked: Bool
+    /// Группа или связка «метка + подпись» (`C-9`, `D-38`, `D-39`): объекты с
+    /// одним идентификатором двигаются вместе.
+    var groupID: UUID?
 
     init(id: UUID = UUID(),
          kind: AnnotationKind,
@@ -103,7 +106,8 @@ struct AnnotationObject: Equatable, Identifiable {
          style: AnnotationStyle = .default,
          text: String? = nil,
          number: Int? = nil,
-         isLocked: Bool = false) {
+         isLocked: Bool = false,
+         groupID: UUID? = nil) {
         self.id = id
         self.kind = kind
         self.geometry = geometry
@@ -111,6 +115,7 @@ struct AnnotationObject: Equatable, Identifiable {
         self.text = text
         self.number = number
         self.isLocked = isLocked
+        self.groupID = groupID
     }
 }
 
@@ -362,6 +367,64 @@ final class AnnotationDocument {
             }
             state.objects.append(contentsOf: copies)
             state.selection = Set(copies.map(\.id))
+        }
+    }
+
+    // MARK: группы и связки (`C-9`, `D-38`, `D-39`)
+
+    func groupSelection() {
+        guard state.selection.count > 1 else { return }
+        let group = UUID()
+        perform { state in
+            for index in state.objects.indices where state.selection.contains(state.objects[index].id) {
+                state.objects[index].groupID = group
+            }
+        }
+    }
+
+    func ungroupSelection() {
+        perform { state in
+            for index in state.objects.indices where state.selection.contains(state.objects[index].id) {
+                state.objects[index].groupID = nil
+            }
+        }
+    }
+
+    /// Связка метки шага с подписью: та же механика, что и группа, но создаётся
+    /// парой, а не выделением.
+    func pair(_ first: UUID, with second: UUID) {
+        let group = UUID()
+        perform { state in
+            for index in state.objects.indices
+            where state.objects[index].id == first || state.objects[index].id == second {
+                state.objects[index].groupID = group
+            }
+        }
+    }
+
+    /// Выделение расширяется до целых групп: половина группы под курсором
+    /// означает всю группу.
+    func expandSelectionToGroups() {
+        let groups = Set(state.objects
+            .filter { state.selection.contains($0.id) }
+            .compactMap(\.groupID))
+        guard !groups.isEmpty else { return }
+        perform { state in
+            let extra = state.objects.filter { object in
+                guard let group = object.groupID else { return false }
+                return groups.contains(group)
+            }
+            state.selection.formUnion(extra.map(\.id))
+        }
+    }
+
+    /// Перенос стиля на выделение (`F-6`).
+    func applyStyle(_ style: AnnotationStyle, to ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        perform { state in
+            for index in state.objects.indices where ids.contains(state.objects[index].id) {
+                state.objects[index].style = style
+            }
         }
     }
 

@@ -16,6 +16,7 @@ struct AnnotationHandleTests {
         print("AnnotationHandleTests: passed")
     }
 
+    /// `D-8`, `D-11`, `G-5`
     private static func segmentHasEndsAndCurve() {
         let geometry = AnnotationGeometry.segment(from: .zero, to: CGPoint(x: 100, y: 0), curve: 0)
         let handles = AnnotationHandle.handles(for: geometry)
@@ -28,6 +29,7 @@ struct AnnotationHandleTests {
                "an unbent segment keeps its curve handle on the line")
     }
 
+    /// `D-16`, `G-5`, `G-7`
     private static func rectHasEightHandles() {
         let geometry = AnnotationGeometry.rect(CGRect(x: 10, y: 20, width: 100, height: 60),
                                                cornerRadius: 0)
@@ -87,6 +89,7 @@ struct AnnotationHandleTests {
         expect(radius == 4, "corner radius survives a resize")
     }
 
+    /// `G-6`, `H-3`
     private static func proportionalResizeMakesSquares() {
         let geometry = AnnotationGeometry.rect(CGRect(x: 0, y: 0, width: 100, height: 100),
                                                cornerRadius: 0)
@@ -108,6 +111,7 @@ struct AnnotationHandleTests {
     }
 
     /// `D-10`: модификатор ограничивает угол шагом 15 градусов.
+    /// `D-10`, `G-8`, `G-9`
     private static func constrainedAngleSnapsToFifteenDegrees() {
         let origin = CGPoint.zero
         let almostFlat = constrainedAngle(from: origin,

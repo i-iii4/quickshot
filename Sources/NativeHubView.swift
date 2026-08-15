@@ -164,6 +164,7 @@ private enum NativeHubPressedButton: Int32 {
     case autosaveOff
     case openFolder
     case toolSelect
+    case toolCrop
     case toolArrow
     case toolBox
     case toolEllipse
@@ -180,6 +181,7 @@ private enum NativeHubPressedButton: Int32 {
     case editorCopy
     case editorClose
     case editorScan
+    case editorRotate
     case colour0
     case colour1
     case colour2
@@ -431,6 +433,10 @@ private final class NativeHubRenderView: NSView {
 
     func sendEditorTool(_ rawValue: String) {
         sendCommand("editor.tool:\(rawValue)")
+    }
+
+    func sendToolbarCompact(_ compact: Bool) {
+        sendCommand("editor.compact:\(compact ? 1 : 0)")
     }
 
     func sendEditorStyle(paletteIndex: Int, weight: String, filled: Bool) {
@@ -790,6 +796,7 @@ private final class NativeHubRenderView: NSView {
         case "Autosave off": return .autosaveOff
         case "Open folder": return .openFolder
         case "Tool select": return .toolSelect
+        case "Tool crop": return .toolCrop
         case "Tool arrow": return .toolArrow
         case "Tool box": return .toolBox
         case "Tool ellipse": return .toolEllipse
@@ -806,6 +813,7 @@ private final class NativeHubRenderView: NSView {
         case "Editor copy": return .editorCopy
         case "Editor close": return .editorClose
         case "Editor scan": return .editorScan
+        case "Editor rotate": return .editorRotate
         case "Colour red": return .colour0
         case "Colour amber": return .colour1
         case "Colour green": return .colour2
@@ -1296,6 +1304,7 @@ final class NativeHubShellView: NSView {
                  .retentionForever, .autosaveOn, .autosaveOff, .openFolder,
                  .toolSelect, .toolArrow, .toolBox, .toolEllipse, .toolLine, .toolPen, .toolText, .toolMark, .toolStep, .toolHide, .toolBlur,
                  .editorUndo, .editorRedo, .editorSave, .editorCopy, .editorClose, .editorScan,
+                 .editorRotate, .toolCrop,
                  .colour0, .colour1, .colour2, .colour3, .colour4, .colour5, .weightThin, .weightMedium, .weightThick, .fillOn, .fillOff:
                 break
             }
@@ -2799,6 +2808,8 @@ final class NativeAnnotationToolbarSurface: NSView {
     private let nativeView = NativeHubRenderView(frame: .zero)
     private var measuredFittingSize = NSSize(width: 720, height: 40)
     private var selectedTool: AnnotationTool = .select
+    private var isCompact = false
+    private var wideLayoutWidth: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -2843,6 +2854,20 @@ final class NativeAnnotationToolbarSurface: NSView {
         needsDisplay = true
     }
 
+    /// Ширина, при которой инструменты перестают помещаться в одну строку.
+    /// Порог берётся из измеренной ширины широкого варианта, а не из
+    /// угаданного числа.
+    func setAvailableWidth(_ width: CGFloat) {
+        let compact = width < wideLayoutWidth
+        guard compact != isCompact else { return }
+        isCompact = compact
+        nativeView.setSurface(.annotationToolbar)
+        nativeView.sendToolbarCompact(compact)
+        nativeView.renderNow()
+        remeasure()
+        needsDisplay = true
+    }
+
     func setStyle(paletteIndex: Int, weight: AnnotationStrokeWeight, filled: Bool) {
         nativeView.setSurface(.annotationToolbar)
         nativeView.sendEditorStyle(paletteIndex: paletteIndex,
@@ -2859,16 +2884,35 @@ final class NativeAnnotationToolbarSurface: NSView {
         needsDisplay = true
     }
 
+    /// Высота считается по фактическим узлам кнопок, а не по кадру измерения:
+    /// колонка без заданной высоты растягивается на весь пробный кадр, и
+    /// «высота содержимого» оказывалась равна высоте кадра.
     private func remeasure() {
-        let contentSize = nativeView.measureSemanticContentSize(width: 1600)
-        measuredFittingSize = NSSize(width: max(720, contentSize.width),
-                                     height: max(40, contentSize.height))
+        let probe = NSSize(width: 2400, height: 400)
+        let previousFrame = nativeView.frame
+        nativeView.frame = NSRect(origin: .zero, size: probe)
+        nativeView.setSurface(.annotationToolbar)
+        nativeView.renderNow()
+        let frames = nativeView.buttonNodes().map(\.frame)
+        nativeView.frame = previousFrame
+
+        guard let first = frames.first else {
+            measuredFittingSize = NSSize(width: 720, height: 40)
+            return
+        }
+        let content = frames.dropFirst().reduce(first) { $0.union($1) }
+        let inset = NativeHubMetrics.shellInset
+        let width = ceil(content.maxX + inset)
+        let height = ceil(content.height + inset * 2)
+        if !isCompact { wideLayoutWidth = width }
+        measuredFittingSize = NSSize(width: width, height: max(40, height))
         invalidateIntrinsicContentSize()
     }
 
     private static func command(for pressed: NativeHubPressedButton) -> AnnotationToolbarView.Command? {
         switch pressed {
         case .toolSelect: return .tool(.select)
+        case .toolCrop: return .tool(.crop)
         case .toolArrow: return .tool(.arrow)
         case .toolBox: return .tool(.box)
         case .toolEllipse: return .tool(.ellipse)
@@ -2885,6 +2929,7 @@ final class NativeAnnotationToolbarSurface: NSView {
         case .editorCopy: return .copy
         case .editorClose: return .close
         case .editorScan: return .scan
+        case .editorRotate: return .rotate
         case .colour0: return .colour(0)
         case .colour1: return .colour(1)
         case .colour2: return .colour(2)

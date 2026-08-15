@@ -23,6 +23,7 @@ final class AnnotationToolbarView: NSView {
         case copy
         case close
         case scan
+        case rotate
     }
 
     var onCommand: ((Command) -> Void)?
@@ -59,6 +60,10 @@ final class AnnotationToolbarView: NSView {
     func setStyle(paletteIndex: Int, weight: AnnotationStrokeWeight, filled: Bool) {
         surface.setStyle(paletteIndex: paletteIndex, weight: weight, filled: filled)
     }
+
+    /// Панель перестраивается в две строки инструментов, когда окно узкое:
+    /// иначе контролы уходят за край и становятся недоступны.
+    func setAvailableWidth(_ width: CGFloat) { surface.setAvailableWidth(width) }
 
 #if TESTING
     func debugButtons() -> [NativeControlDebugButtonSnapshot] { surface.debugButtons() }

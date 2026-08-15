@@ -138,3 +138,77 @@ func thumbnailLayoutShowingNewest(screenFrame: NSRect,
                                    firstVisibleIndex: newestIndex)
     return .init(firstVisibleIndex: newestIndex, layout: fallback)
 }
+
+
+/// Раскладка ленты по непрерывному смещению прокрутки (`TR-1`…`TR-3`).
+///
+/// Отличие от `thumbnailLayout`: карточки не выпадают из ленты по индексу, а
+/// сдвигаются на `offset` и собираются в стопку у краёв. Видимость определяется
+/// геометрией, а не номером первой карточки, поэтому остановка между карточками
+/// становится возможной.
+func thumbnailScrollLayout(screenFrame: NSRect,
+                           edge: ThumbnailLayoutEdge,
+                           cardWidth: CGFloat,
+                           cardHeights: [CGFloat],
+                           hubSize: NSSize,
+                           margin: CGFloat,
+                           gap: CGFloat,
+                           offset: CGFloat) -> ThumbnailLayoutResult {
+    guard !cardHeights.isEmpty else { return .init(visible: [], hidden: []) }
+
+    let lengths = edge.isVertical ? cardHeights : Array(repeating: cardWidth, count: cardHeights.count)
+    let viewportLength = edge.isVertical
+        ? screenFrame.height - margin * 2 - hubSize.height - gap
+        : screenFrame.width - margin * 2 - hubSize.width - gap
+    let placements = TrayStackLayout.placements(cardLengths: lengths,
+                                                gap: gap,
+                                                offset: offset,
+                                                viewportLength: max(1, viewportLength))
+
+    var visible: [ThumbnailLayoutSlot] = []
+    var hidden: [Int] = []
+    let strip = stripOrigin(screenFrame: screenFrame,
+                            edge: edge,
+                            hubSize: hubSize,
+                            margin: margin,
+                            gap: gap)
+
+    for (index, placement) in placements.enumerated() {
+        // Карточка глубже стопки не рисуется: три слоя достаточно, чтобы
+        // показать «дальше есть ещё», остальное — лишние окна.
+        guard placement.opacity > 0.26 else {
+            hidden.append(index)
+            continue
+        }
+        let origin: NSPoint
+        switch edge {
+        case .right, .left:
+            origin = NSPoint(x: strip.x, y: strip.y + placement.position)
+        case .bottom, .top:
+            origin = NSPoint(x: strip.x - placement.position, y: strip.y)
+        }
+        visible.append(.init(index: index, origin: origin))
+    }
+    return .init(visible: visible, hidden: hidden)
+}
+
+private func stripOrigin(screenFrame: NSRect,
+                         edge: ThumbnailLayoutEdge,
+                         hubSize: NSSize,
+                         margin: CGFloat,
+                         gap: CGFloat) -> NSPoint {
+    switch edge {
+    case .right:
+        return NSPoint(x: screenFrame.maxX - margin - hubSize.width,
+                       y: screenFrame.minY + margin + hubSize.height + gap)
+    case .left:
+        return NSPoint(x: screenFrame.minX + margin,
+                       y: screenFrame.minY + margin + hubSize.height + gap)
+    case .bottom:
+        return NSPoint(x: screenFrame.maxX - margin - hubSize.width - gap,
+                       y: screenFrame.minY + margin)
+    case .top:
+        return NSPoint(x: screenFrame.maxX - margin - hubSize.width - gap,
+                       y: screenFrame.maxY - margin)
+    }
+}

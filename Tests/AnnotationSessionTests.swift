@@ -19,6 +19,7 @@ struct AnnotationSessionTests {
 
     /// `ED-3`, `ED-5`: сохранение помечает снимок изменённым и запоминает
     /// объекты редактируемыми.
+    /// `ED-2`, `ED-3`
     @MainActor private static func savingMarksEditedAndKeepsObjects() {
         let store = AnnotationSessionStore()
         let id = UUID()
@@ -29,6 +30,7 @@ struct AnnotationSessionTests {
         expect(store.objects(for: id).count == 1, "objects survive for a later edit")
     }
 
+    /// `ED-1`, `ED-5`, `ED-6`, `ED-9`
     @MainActor private static func reopeningReturnsEditableObjects() {
         let store = AnnotationSessionStore()
         let id = UUID()
@@ -66,6 +68,7 @@ struct AnnotationSessionTests {
     }
 
     /// `ED-7`: закрытие трея уничтожает редактируемое состояние.
+    /// `ED-7`, `ST-9`, `ST-10`
     @MainActor private static func closingTheTrayDestroysEverything() {
         let sessions = AnnotationSessionStore()
         let images = EditedImageStore()
@@ -80,6 +83,7 @@ struct AnnotationSessionTests {
     }
 
     /// `ED-4`: после сохранения выдача берёт изменённую версию.
+    /// `ED-4`, `K-1`, `K-2`
     @MainActor private static func editedImageIsUsedForDelivery() {
         let images = EditedImageStore()
         let id = UUID()

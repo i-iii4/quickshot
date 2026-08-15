@@ -17,6 +17,7 @@ struct ScreenshotLibraryModelTests {
         print("ScreenshotLibraryModelTests: passed")
     }
 
+    /// `ST-3`, `ST-4`
     private static func retentionAgesAreExplicit() {
         expect(ScreenshotRetention.day.maximumAge == 86_400, "day must be 24h")
         expect(ScreenshotRetention.week.maximumAge == 604_800, "week must be 7 days")
@@ -43,6 +44,7 @@ struct ScreenshotLibraryModelTests {
     }
 
     /// `ST-8`: уменьшение срока применяется к уже сохранённым снимкам.
+    /// `ST-7`, `ST-8`
     private static func shorterRetentionCatchesOlderFiles() {
         let twoDaysOld = record("c.png", ageSeconds: 2 * 24 * 60 * 60)
         expect(expiredScreenshots([twoDaysOld], now: now, retention: .week).isEmpty,
@@ -52,6 +54,7 @@ struct ScreenshotLibraryModelTests {
     }
 
     /// `ST-17`: уборка удаляет только собственные файлы.
+    /// `ST-6`, `ST-17`
     private static func ownershipGuardsForeignFiles() {
         expect(isScreenshotOwnedByQuickShot(fileName: "QuickShot 2026-08-13 at 10.00.00.png"),
                "own screenshot must be recognised")
@@ -86,6 +89,7 @@ struct ScreenshotLibraryModelTests {
         expect(third != name && third != second, "second collision must resolve too")
     }
 
+    /// `ST-1`, `ST-2`, `ST-5`, `ST-12`
     private static func defaultsMatchRequirements() {
         let settings = ScreenshotStorageSettings.makeDefault()
         expect(settings.autosaveEnabled, "autosave is on by default (ST-5)")

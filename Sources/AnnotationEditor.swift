@@ -11,6 +11,19 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     /// открыть дважды (`ED-15`).
     private static var open: [UUID: AnnotationEditorController] = [:]
 
+    /// Учёт открытых окон существует: один снимок нельзя редактировать дважды.
+    static var debugTracksOpenEditors: Bool { true }
+
+    /// `A-7`: изображение из буфера обмена как источник для аннотирования.
+    static func imageFromPasteboard() -> CGImage? {
+        let pasteboard = NSPasteboard.general
+        if let data = pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff),
+           let source = CGImageSourceCreateWithData(data as CFData, nil) {
+            return CGImageSourceCreateImageAtIndex(source, 0, nil)
+        }
+        return nil
+    }
+
     private let artifact: CaptureArtifact
     private let library: ScreenshotLibrary?
     private let onSaved: (CaptureArtifact, CGImage, [AnnotationObject]) -> Void
@@ -101,6 +114,9 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     }
 
     private func layoutContents(in container: NSView) {
+        // Панель узнаёт доступную ширину раньше, чем считает свою высоту:
+        // в компактном режиме строк больше и высота другая.
+        toolbar.setAvailableWidth(container.bounds.width)
         let toolbarHeight = toolbar.fittingSize.height
         toolbar.frame = NSRect(x: 0,
                                y: container.bounds.maxY - toolbarHeight,
@@ -151,6 +167,8 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
             window?.performClose(nil)
         case .scan:
             scanForSensitiveData()
+        case .rotate:
+            canvas.rotateQuarterTurn()
         }
     }
 

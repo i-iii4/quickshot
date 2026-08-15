@@ -71,6 +71,10 @@ final class ThumbnailManager {
     /// Редактируемые состояния и запечённые версии живут, пока снимок в трее.
     private let sessions = AnnotationSessionStore()
     private let editedImages = EditedImageStore()
+    /// `ED-16`: служебное состояние переживает перезапуск, пока жив снимок.
+    private lazy var stateStore = AnnotationStateStore(
+        directory: (library?.settings.folderURL ?? FileManager.default.temporaryDirectory)
+            .appendingPathComponent(".quickshot-state", isDirectory: true))
     private var trayHoverActive = false
     private var pointerInsideHoverIsland = false
     private var capturePresentationSessions: Set<UUID> = []
@@ -600,6 +604,7 @@ final class ThumbnailManager {
         for item in removed {
             sessions.discard(item.artifact.id)
             editedImages.discard(item.artifact.id)
+            stateStore.discard(for: item.artifact.id)
         }
         finishCollectionMotion()
         finishTrayMotion()
@@ -856,6 +861,7 @@ final class ThumbnailManager {
         guard !items.isEmpty else { return }
         sessions.discardAll()
         editedImages.discardAll()
+        stateStore.discardAll()
         animateRemoval(items)
     }
 
@@ -919,9 +925,15 @@ final class ThumbnailManager {
 
     /// Открыть редактор аннотаций для карточки (`ED-1`).
     func openEditor(_ t: ThumbnailWindow) {
+        // Состояние берётся из памяти, а при её отсутствии — с диска: после
+        // перезапуска трей пуст, но объекты снимка ещё живы.
+        var restored = sessions.objects(for: t.artifact.id)
+        if restored.isEmpty, library?.settings.autosaveEnabled == true {
+            restored = stateStore.load(for: t.artifact.id)
+        }
         AnnotationEditorController.present(artifact: t.artifact,
                                            library: library,
-                                           restoring: sessions.objects(for: t.artifact.id)) {
+                                           restoring: restored) {
             [weak self, weak t] artifact, image, objects in
             self?.applyEditedImage(image, objects: objects, to: artifact, card: t)
         }
@@ -942,6 +954,9 @@ final class ThumbnailManager {
                                   card: ThumbnailWindow?) {
         sessions.store(objects: objects, for: artifact.id)
         editedImages.store(image, for: artifact.id)
+        if library?.settings.autosaveEnabled == true {
+            stateStore.save(objects: objects, for: artifact.id)
+        }
         card?.isEdited = sessions.isEdited(artifact.id)
         card?.setDisplayImage(image)
 
@@ -1161,7 +1176,6 @@ final class ThumbnailManager {
     /// Координаты глобальные; вызывающий конвертирует их через toLocal.
     private func cardLayout(on screen: NSScreen) -> (visible: [(ThumbnailWindow, NSPoint)], hidden: [ThumbnailWindow]) {
         let result = resolvedViewportLayout(on: screen)
-        syncScrollModel(on: screen)
         return (
             result.visible.map { (items[$0.index], $0.origin) },
             result.hidden.map { items[$0] }
@@ -1188,6 +1202,22 @@ final class ThumbnailManager {
         guard !items.isEmpty else {
             collectionModel.removeAll()
             return .init(visible: [], hidden: [])
+        }
+
+        // Смещение прокрутки — источник истины для координат карточек
+        // (`TR-1`…`TR-3`). Пока лента помещается целиком, смещение нулевое, и
+        // раскладка совпадает с прежней.
+        syncScrollModel(on: screen)
+        if scrollModel.isScrollable {
+            let geometry = viewportGeometry(on: screen)
+            return thumbnailScrollLayout(screenFrame: screen.frame,
+                                         edge: geometry.edge,
+                                         cardWidth: cardWidth,
+                                         cardHeights: items.map(\.cardHeight),
+                                         hubSize: geometry.hubSize,
+                                         margin: geometry.margin,
+                                         gap: ThumbStyle.gap,
+                                         offset: scrollModel.offset)
         }
 
         let newest = newestViewportLayout(on: screen)

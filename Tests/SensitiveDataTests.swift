@@ -12,6 +12,7 @@ struct SensitiveDataTests {
         print("SensitiveDataTests: passed")
     }
 
+    /// `E-6`
     private static func findsObviousSecrets() {
         expectKind(.email, in: "write to anna.smith@example.com today")
         expectKind(.ipAddress, in: "server at 192.168.1.14 is down")
@@ -36,6 +37,7 @@ struct SensitiveDataTests {
 
     /// Ложное срабатывание закрывает нужное содержимое и подрывает доверие ко
     /// всей функции, поэтому обычный текст обязан оставаться нетронутым.
+    /// `E-7`, `E-8`
     private static func doesNotFireOnOrdinaryText() {
         let ordinary = "The build finished in 12.4 seconds with 3 warnings."
         let matches = SensitivePatterns.matches(in: ordinary)

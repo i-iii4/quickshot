@@ -30,6 +30,7 @@ enum AnnotationStrokeWeight: String, CaseIterable {
 /// поэтому строковое представление — часть контракта, а не деталь.
 enum AnnotationTool: String, CaseIterable {
     case select
+    case crop
     case arrow
     case box
     case ellipse
@@ -45,6 +46,7 @@ enum AnnotationTool: String, CaseIterable {
     var shortcut: String {
         switch self {
         case .select: return "v"
+        case .crop: return "c"
         case .arrow: return "a"
         case .box: return "r"
         case .ellipse: return "o"
@@ -65,7 +67,7 @@ enum AnnotationTool: String, CaseIterable {
     /// Тип объекта, создаваемого инструментом. `select` ничего не создаёт.
     var kind: AnnotationKind? {
         switch self {
-        case .select: return nil
+        case .select, .crop: return nil
         case .arrow: return .arrow
         case .box: return .rectangle
         case .ellipse: return .ellipse

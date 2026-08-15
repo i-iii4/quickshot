@@ -31,6 +31,20 @@ enum Clipboard {
         imageData(cgImage: cgImage, type: .png)
     }
 
+    /// `J-6`: экспорт в PDF. Растровый снимок кладётся страницей своего
+    /// размера — векторизовать нечего, но PDF нужен для вставки в документы.
+    static func pdfData(cgImage: CGImage) -> Data? {
+        let data = NSMutableData()
+        var box = CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height)
+        guard let consumer = CGDataConsumer(data: data),
+              let context = CGContext(consumer: consumer, mediaBox: &box, nil) else { return nil }
+        context.beginPDFPage(nil)
+        context.draw(cgImage, in: box)
+        context.endPDFPage()
+        context.closePDF()
+        return data as Data
+    }
+
     static func prepareImage(cgImage: CGImage, fileURL: URL? = nil) -> PreparedImage {
         let png = pngData(cgImage: cgImage)
         let tiff = imageData(cgImage: cgImage, type: .tiff)

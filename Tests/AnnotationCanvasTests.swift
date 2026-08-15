@@ -16,6 +16,7 @@ struct AnnotationCanvasTests {
         print("AnnotationCanvasTests: passed")
     }
 
+    /// `B-1`, `B-4`
     private static func fitZoomNeverUpscales() {
         let wide = AnnotationCanvasTransform(imageSize: image, viewSize: view)
         expect(abs(wide.fitZoom() - 0.4) < 0.0001,
@@ -27,6 +28,7 @@ struct AnnotationCanvasTests {
                "an image smaller than the view must not be upscaled to fill it")
     }
 
+    /// `B-2`, `B-3`
     private static func roundTripBetweenSpaces() {
         var transform = AnnotationCanvasTransform(imageSize: image, viewSize: view, zoom: 2)
         transform = transform.panned(by: CGVector(dx: -120, dy: -80))
@@ -55,6 +57,7 @@ struct AnnotationCanvasTests {
                "zoom must clamp at the minimum")
     }
 
+    /// `B-3`, `B-6`
     private static func offsetNeverLeavesTheImage() {
         var transform = AnnotationCanvasTransform(imageSize: image, viewSize: view, zoom: 1)
         transform = transform.panned(by: CGVector(dx: 5000, dy: 5000))

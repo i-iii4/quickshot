@@ -46,6 +46,7 @@ struct TrayScrollModelTests {
     }
 
     /// `TR-13`: за краем движение сопротивляется, а не останавливается насухо.
+    /// `TR-2`, `TR-13`
     private static func rubberBandResistsBeyondEdges() {
         let model = TrayScrollModel(contentLength: 1000, viewportLength: 600, offset: 0)
         let pulled = model.scrolled(by: -100)
@@ -88,6 +89,7 @@ struct TrayScrollModelTests {
                "the gesture must not depend on how many screenshots there are")
     }
 
+    /// `TR-9`, `TR-10`, `TR-17`
     private static func collapseDirectionFollowsTheDrag() {
         let model = TrayScrollModel(contentLength: 1000, viewportLength: 600, offset: 0)
         expect(model.collapseDirection(afterOvershoot: -80) == .towardStart,

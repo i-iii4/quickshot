@@ -21,6 +21,7 @@ NATIVE_DESIGN_SYSTEM_ZIG="$ZIG_BIN" \
   "$NATIVE_DESIGN_SYSTEM_DIR/scripts/check.sh" "$PWD/NativeQuickShotUI/src/hub.native"
 
 "$PWD/scripts/test-atomic-replace.sh"
+python3 "$PWD/scripts/check-requirement-coverage.py"
 
 NATIVE_UI_LIB="$PWD/NativeQuickShotUI/zig-out/lib/libquickshot-native-ui.a"
 OUT="$(mktemp -t quickshot-hub-tests)"
@@ -35,6 +36,13 @@ ANNOTATION_RENDER_OUT="$(mktemp -t quickshot-annotation-render-tests)"
 ANNOTATION_SESSION_OUT="$(mktemp -t quickshot-annotation-session-tests)"
 TRAY_SCROLL_OUT="$(mktemp -t quickshot-tray-scroll-tests)"
 SENSITIVE_OUT="$(mktemp -t quickshot-sensitive-tests)"
+TOOLBAR_LIVE_OUT="$(mktemp -t quickshot-toolbar-live-tests)"
+TRANSFORM_OUT="$(mktemp -t quickshot-editor-transform-tests)"
+SCROLL_LAYOUT_OUT="$(mktemp -t quickshot-tray-scroll-layout-tests)"
+SCENARIO_OUT="$(mktemp -t quickshot-scenario-tests)"
+SESSION_EDITOR_OUT="$(mktemp -t quickshot-editor-session-tests)"
+STORAGE_LIFECYCLE_OUT="$(mktemp -t quickshot-storage-lifecycle-tests)"
+REMAINING_OUT="$(mktemp -t quickshot-remaining-tests)"
 THUMBNAIL_LAYOUT_OUT="$(mktemp -t quickshot-thumbnail-layout-tests)"
 THUMBNAIL_MOTION_OUT="$(mktemp -t quickshot-thumbnail-motion-tests)"
 THUMBNAIL_COLLECTION_OUT="$(mktemp -t quickshot-thumbnail-collection-tests)"
@@ -50,7 +58,7 @@ CAPTURE_SEQUENCE_OUT="$(mktemp -t quickshot-capture-sequence-tests)"
 CAPTURE_ARTIFACT_OUT="$(mktemp -t quickshot-capture-artifact-tests)"
 WINDOW_PROTECTION_OUT="$(mktemp -t quickshot-window-protection-tests)"
 THUMBNAIL_MODEL_OUT="$(mktemp -t quickshot-thumbnail-model-tests)"
-trap 'rm -f "$OUT" "$SURFACE_OUT" "$TRAY_POINTER_OUT" "$TRAY_HOVER_OUT" "$LIBRARY_MODEL_OUT" "$ANNOTATION_DOC_OUT" "$ANNOTATION_CANVAS_OUT" "$ANNOTATION_HANDLE_OUT" "$ANNOTATION_RENDER_OUT" "$ANNOTATION_SESSION_OUT" "$TRAY_SCROLL_OUT" "$SENSITIVE_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"' EXIT
+trap 'rm -f "$OUT" "$SURFACE_OUT" "$TRAY_POINTER_OUT" "$TRAY_HOVER_OUT" "$LIBRARY_MODEL_OUT" "$ANNOTATION_DOC_OUT" "$ANNOTATION_CANVAS_OUT" "$ANNOTATION_HANDLE_OUT" "$ANNOTATION_RENDER_OUT" "$ANNOTATION_SESSION_OUT" "$TRAY_SCROLL_OUT" "$SENSITIVE_OUT" "$TOOLBAR_LIVE_OUT" "$TRANSFORM_OUT" "$SCROLL_LAYOUT_OUT" "$SCENARIO_OUT" "$SESSION_EDITOR_OUT" "$STORAGE_LIFECYCLE_OUT" "$REMAINING_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"' EXIT
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -314,8 +322,227 @@ xcrun swiftc \
   -swift-version 6 \
   -strict-concurrency=complete \
   -warnings-as-errors \
+  -D TESTING \
+  -framework AppKit \
+  -framework CoreGraphics \
+  -framework ImageIO \
+  Tests/HubWindowTestSupport.swift \
+  Sources/MotionCurves.swift \
+  Sources/NativeSDKBridge.swift \
+  Sources/TrayHoverRegion.swift \
+  Sources/CaptureSequence.swift \
+  Sources/Clipboard.swift \
+  Sources/AnnotationDocument.swift \
+  Sources/AnnotationCanvas.swift \
+  Sources/AnnotationRenderer.swift \
+  Sources/AnnotationHandle.swift \
+  Sources/AnnotationToolModel.swift \
+  Sources/AnnotationToolbar.swift \
+  Sources/NativeHubView.swift \
+  Sources/HubTooltip.swift \
+  Sources/WindowCaptureProtection.swift \
+  Sources/HubWindow.swift \
+  Sources/AnnotationCanvasView.swift \
+  Tests/EditorToolbarLiveTests.swift \
+  "$NATIVE_UI_LIB" \
+  -o "$TOOLBAR_LIVE_OUT"
+
+"$TOOLBAR_LIVE_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
+  -D TESTING \
+  -framework AppKit \
+  -framework CoreGraphics \
+  -framework ImageIO \
+  Tests/HubWindowTestSupport.swift \
+  Sources/MotionCurves.swift \
+  Sources/NativeSDKBridge.swift \
+  Sources/TrayHoverRegion.swift \
+  Sources/CaptureSequence.swift \
+  Sources/Clipboard.swift \
+  Sources/AnnotationDocument.swift \
+  Sources/AnnotationCanvas.swift \
+  Sources/AnnotationRenderer.swift \
+  Sources/AnnotationHandle.swift \
+  Sources/AnnotationToolModel.swift \
+  Sources/AnnotationToolbar.swift \
+  Sources/NativeHubView.swift \
+  Sources/HubTooltip.swift \
+  Sources/WindowCaptureProtection.swift \
+  Sources/HubWindow.swift \
+  Sources/AnnotationCanvasView.swift \
+  Tests/EditorTransformTests.swift \
+  "$NATIVE_UI_LIB" \
+  -o "$TRANSFORM_OUT"
+
+"$TRANSFORM_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
+  -D TESTING \
+  -framework AppKit \
+  -framework CoreGraphics \
+  -framework ImageIO \
+  Tests/HubWindowTestSupport.swift \
+  Sources/MotionCurves.swift \
+  Sources/NativeSDKBridge.swift \
+  Sources/TrayHoverRegion.swift \
+  Sources/CaptureSequence.swift \
+  Sources/Clipboard.swift \
+  Sources/AnnotationDocument.swift \
+  Sources/AnnotationCanvas.swift \
+  Sources/AnnotationRenderer.swift \
+  Sources/AnnotationHandle.swift \
+  Sources/AnnotationToolModel.swift \
+  Sources/AnnotationToolbar.swift \
+  Sources/NativeHubView.swift \
+  Sources/HubTooltip.swift \
+  Sources/WindowCaptureProtection.swift \
+  Sources/HubWindow.swift \
+  Sources/AnnotationCanvasView.swift \
+  Tests/EndToEndScenarioTests.swift \
+  "$NATIVE_UI_LIB" \
+  -o "$SCENARIO_OUT"
+
+"$SCENARIO_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
+  -D TESTING \
+  -framework AppKit \
+  -framework CoreGraphics \
+  -framework ImageIO \
+  -framework Vision \
+  Tests/HubWindowTestSupport.swift \
+  Sources/MotionCurves.swift \
+  Sources/NativeSDKBridge.swift \
+  Sources/TrayHoverRegion.swift \
+  Sources/CaptureSequence.swift \
+  Sources/Clipboard.swift \
+  Sources/CaptureArtifact.swift \
+  Sources/ScreenshotLibraryModel.swift \
+  Sources/ScreenshotLibrary.swift \
+  Sources/AnnotationDocument.swift \
+  Sources/AnnotationCanvas.swift \
+  Sources/AnnotationRenderer.swift \
+  Sources/AnnotationHandle.swift \
+  Sources/AnnotationToolModel.swift \
+  Sources/AnnotationToolbar.swift \
+  Sources/EditorSettings.swift \
+  Sources/SensitiveDataDetector.swift \
+  Sources/NativeHubView.swift \
+  Sources/HubTooltip.swift \
+  Sources/WindowCaptureProtection.swift \
+  Sources/HubWindow.swift \
+  Sources/AnnotationCanvasView.swift \
+  Sources/AnnotationEditor.swift \
+  Tests/EditorSessionTests.swift \
+  "$NATIVE_UI_LIB" \
+  -o "$SESSION_EDITOR_OUT"
+
+"$SESSION_EDITOR_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
+  -framework AppKit \
+  -framework ImageIO \
+  Sources/CaptureSequence.swift \
+  Sources/Clipboard.swift \
+  Sources/AnnotationDocument.swift \
+  Sources/AnnotationSession.swift \
+  Sources/AnnotationStateStore.swift \
+  Sources/ScreenshotLibraryModel.swift \
+  Sources/ScreenshotLibrary.swift \
+  Sources/AnnotationToolModel.swift \
+  Tests/StorageLifecycleTests.swift \
+  -o "$STORAGE_LIFECYCLE_OUT"
+
+"$STORAGE_LIFECYCLE_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
+  -D TESTING \
+  -framework AppKit \
+  -framework CoreGraphics \
+  -framework ImageIO \
+  -framework Vision \
+  Tests/HubWindowTestSupport.swift \
+  Sources/MotionCurves.swift \
+  Sources/NativeSDKBridge.swift \
+  Sources/TrayHoverRegion.swift \
+  Sources/CaptureSequence.swift \
+  Sources/Clipboard.swift \
+  Sources/CaptureArtifact.swift \
+  Sources/ScreenshotLibraryModel.swift \
+  Sources/ScreenshotLibrary.swift \
+  Sources/AnnotationDocument.swift \
+  Sources/AnnotationSession.swift \
+  Sources/AnnotationStateStore.swift \
+  Sources/AnnotationCanvas.swift \
+  Sources/AnnotationRenderer.swift \
+  Sources/AnnotationHandle.swift \
+  Sources/AnnotationToolModel.swift \
+  Sources/AnnotationToolbar.swift \
+  Sources/EditorSettings.swift \
+  Sources/EditorPreferences.swift \
+  Sources/TrayScrollModel.swift \
+  Sources/SensitiveDataDetector.swift \
+  Sources/NativeHubView.swift \
+  Sources/HubTooltip.swift \
+  Sources/WindowCaptureProtection.swift \
+  Sources/HubWindow.swift \
+  Sources/AnnotationCanvasView.swift \
+  Sources/AnnotationEditor.swift \
+  Tests/RemainingRequirementsTests.swift \
+  "$NATIVE_UI_LIB" \
+  -o "$REMAINING_OUT"
+
+"$REMAINING_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   -framework AppKit \
   Sources/ThumbnailLayout.swift \
+  Sources/TrayScrollModel.swift \
+  Tests/TrayScrollLayoutTests.swift \
+  -o "$SCROLL_LAYOUT_OUT"
+
+"$SCROLL_LAYOUT_OUT"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
+  -framework AppKit \
+  Sources/ThumbnailLayout.swift \
+  Sources/TrayScrollModel.swift \
   Tests/ThumbnailLayoutTests.swift \
   -o "$THUMBNAIL_LAYOUT_OUT"
 
@@ -375,6 +602,9 @@ xcrun swiftc \
   Sources/AnnotationHandle.swift \
   Sources/AnnotationCanvasView.swift \
   Sources/AnnotationSession.swift \
+  Sources/AnnotationStateStore.swift \
+  Sources/EditorSettings.swift \
+  Sources/EditorPreferences.swift \
   Sources/EditedBadge.swift \
   Sources/SensitiveDataDetector.swift \
   Sources/AnnotationEditor.swift \
@@ -452,6 +682,9 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/AnnotationHandle.swift \
   Sources/AnnotationCanvasView.swift \
   Sources/AnnotationSession.swift \
+  Sources/AnnotationStateStore.swift \
+  Sources/EditorSettings.swift \
+  Sources/EditorPreferences.swift \
   Sources/EditedBadge.swift \
   Sources/SensitiveDataDetector.swift \
   Sources/AnnotationEditor.swift \
@@ -848,6 +1081,22 @@ rg -F -q "sessions.discardAll()" Sources/ThumbnailManager.swift
 rg -F -q "scrollModel.scrolled(by: -delta)" Sources/ThumbnailManager.swift
 rg -F -q "collapseThreshold" Sources/TrayScrollModel.swift
 rg -F -q "func handleHubSwipe" Sources/ThumbnailManager.swift
+# Прокрутка доходит до координат карточек, а не живёт только в модели.
+rg -F -q "thumbnailScrollLayout(screenFrame:" Sources/ThumbnailManager.swift
+# Кадрирование и поворот существуют и применяются к результату.
+rg -F -q "func rotateQuarterTurn" Sources/AnnotationCanvasView.swift
+rg -F -q "private func applyCrop" Sources/AnnotationCanvasView.swift
+# Служебное состояние без обязательств совместимости (ED-17).
+rg -F -q "private static let version = 1" Sources/AnnotationStateStore.swift
+rg -F -q "stateStore.load(for: t.artifact.id)" Sources/ThumbnailManager.swift
+rg -F -q 'on-press="tool_crop"' NativeQuickShotUI/src/hub.native
+rg -F -q 'on-press="editor_rotate"' NativeQuickShotUI/src/hub.native
+# Подписи короче трёх символов нечитаемы без легенды: запрещены в разметке.
+if output="$(rg -n '>[A-Za-z0-9]{1,2}</button>' NativeQuickShotUI/src/hub.native)"; then
+  echo "$output"
+  echo "Label regression: control labels must be self-explanatory, not one-letter codes." >&2
+  exit 1
+fi
 # Находки не скрываются молча, а проверка Луна отсекает не-карты.
 rg -F -q "Hide All" Sources/AnnotationEditor.swift
 rg -F -q "passesLuhn" Sources/SensitiveDataDetector.swift
@@ -862,7 +1111,7 @@ if output="$(rg -n "shiftViewport\(by: step\)" Sources/ThumbnailManager.swift)";
   echo "Tray regression: scrolling must be continuous, not stepwise (TR-2)." >&2
   exit 1
 fi
-if output="$(rg -n "CaptureSession|Overlay" Sources/AnnotationEditor.swift Sources/AnnotationCanvasView.swift)"; then
+if output="$(rg -n "CaptureSession|SelectionPresentationCoordinator|DirectScreenSnapshotProvider" Sources/AnnotationEditor.swift Sources/AnnotationCanvasView.swift)"; then
   echo "$output"
   echo "Editor regression: annotation must not reach into the capture overlay (X-1)." >&2
   exit 1
@@ -880,7 +1129,7 @@ fi
 # Панель капсулы рендерится в фактическую ширину ряда: фикс срезанного штриха.
 rg -F -q 'width="{bubbleWidth}"' NativeQuickShotUI/src/hub.native
 rg -F -q "setBubbleWidth(width)" Sources/NativeHubView.swift
-if output="$(rg -n '>Close</button>|>Save As</button>|>Copy All</button>' NativeQuickShotUI/src/hub.native)"; then
+if output="$(rg -n 'on-press="(delete|save_as|copy_all)">[A-Za-z]' NativeQuickShotUI/src/hub.native)"; then
   echo "$output"
   echo "Hub regression: action commands must stay icon-only; names live in tooltips." >&2
   exit 1

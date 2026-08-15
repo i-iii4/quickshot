@@ -19,6 +19,7 @@ struct AnnotationDocumentTests {
 
     /// Приёмка `C-5`: «создать, изменить цвет, переместить, отменить трижды»
     /// возвращает ровно исходное состояние.
+    /// `C-1`, `C-2`, `C-5`
     private static func undoRestoresExactState() {
         let document = AnnotationDocument()
         let empty = document.state
@@ -98,6 +99,7 @@ struct AnnotationDocumentTests {
         expect(!document.canRedo, "new work must clear the redo stack")
     }
 
+    /// `C-3`, `C-4`
     private static func zOrderOperations() {
         let document = AnnotationDocument()
         document.add(object(.rectangle))
@@ -123,6 +125,7 @@ struct AnnotationDocumentTests {
     }
 
     /// `G-2`: повторный клик в ту же точку спускается на уровень ниже.
+    /// `G-1`, `G-2`
     private static func hitTestingWalksDownOverlaps() {
         let document = AnnotationDocument()
         document.add(object(.rectangle, rect: CGRect(x: 0, y: 0, width: 100, height: 100)))
@@ -141,6 +144,7 @@ struct AnnotationDocumentTests {
         expect(third?.id == top, "descending past the bottom wraps to the top")
     }
 
+    /// `C-7`, `C-8`
     private static func duplicateAndPasteOffsetCopies() {
         let document = AnnotationDocument()
         document.add(object(.rectangle, rect: CGRect(x: 0, y: 0, width: 20, height: 20)))

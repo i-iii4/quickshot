@@ -211,8 +211,16 @@ final class ScreenshotLibrary {
     /// молчаливая потеря снимка недопустима, но и модальный диалог на каждый
     /// захват недопустим тоже.
     private var reportedFailures: Set<String> = []
+    private var suppressesFailureAlerts = false
+
+    /// В тестах отказ записи проверяется по результату, а не по модальному
+    /// окну: диалог остановил бы прогон.
+    func setSuppressesFailureAlertsForTesting(_ suppresses: Bool) {
+        suppressesFailureAlerts = suppresses
+    }
 
     private func reportFailure(reason: String) {
+        guard !suppressesFailureAlerts else { return }
         guard reportedFailures.insert(reason).inserted else { return }
         let alert = NSAlert()
         alert.messageText = "Could not save the screenshot to disk"

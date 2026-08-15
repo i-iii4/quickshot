@@ -17,6 +17,7 @@ struct AnnotationRendererTests {
 
     /// `F-4`: цвет по умолчанию обязан читаться и на светлом, и на тёмном
     /// интерфейсе, поэтому в палитре нет ни белого, ни чёрного.
+    /// `F-3`, `F-4`
     private static func paletteAvoidsPureBlackAndWhite() {
         for color in AnnotationPalette.colors {
             let srgb = color.usingColorSpace(.sRGB)!
@@ -58,6 +59,7 @@ struct AnnotationRendererTests {
     }
 
     /// `E-1`, `E-2`: плашка непрозрачна и действительно закрывает пиксели.
+    /// `E-1`, `E-2`, `E-4`
     private static func redactionIsOpaqueAndCoversPixels() {
         let secret = filledImage(color: .white)
         let object = AnnotationObject(kind: .redaction,
@@ -74,6 +76,7 @@ struct AnnotationRendererTests {
                "pixels outside the redaction must survive untouched")
     }
 
+    /// `E-3`
     private static func blurIsVisiblyDifferentFromRedaction() {
         let source = filledImage(color: .white)
         let rect = CGRect(x: 40, y: 30, width: 80, height: 40)
@@ -107,6 +110,7 @@ struct AnnotationRendererTests {
                "a smaller stroke scale must paint fewer rows")
     }
 
+    /// `D-6`, `D-19`, `D-21`, `D-31`, `D-32`
     private static func everyKindRendersSomething() {
         for kind in AnnotationKind.allCases {
             let object = sample(kind)
