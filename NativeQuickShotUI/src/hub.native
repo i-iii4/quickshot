@@ -66,6 +66,7 @@
                     <button size="sm" selected="{toolCrop}" icon="app:tool-crop" label="Crop" on-press="tool_crop"></button>
                   </button-group>
                 </row>
+                <if test="{showsStyle}">
                 <row gap="8" cross="center" label="Style row">
                   <button-group gap="2" cross="center" label="Colour">
                     <button size="sm" selected="{colour0}" icon="app:swatch-red" label="Red" on-press="colour_0"></button>
@@ -82,15 +83,17 @@
                   </button-group>
                   <button size="sm" variant="ghost" selected="{fillOn}" icon="app:shape-fill" label="Fill shapes" on-press="fill_toggle"></button>
                 </row>
+                </if>
                 <row gap="8" cross="center" label="Command row">
                   <button size="sm" variant="ghost" icon="app:undo" label="Undo" disabled="{cannotUndo}" on-press="editor_undo"></button>
                   <button size="sm" variant="ghost" icon="app:redo" label="Redo" disabled="{cannotRedo}" on-press="editor_redo"></button>
-                  <button size="sm" variant="ghost" icon="refresh-cw" label="Rotate" on-press="editor_rotate"></button>
                   <button size="sm" variant="ghost" icon="app:scan" label="Find private data" on-press="editor_scan"></button>
-                  <spacer width="8"/>
+                  <if test="{showsTransform}">
+                    <button size="sm" variant="ghost" icon="refresh-cw" label="Rotate" on-press="editor_rotate"></button>
+                  </if>
+                  <spacer grow="1"/>
                   <button size="sm" variant="secondary" icon="save" label="Save" on-press="editor_save"></button>
                   <button size="sm" variant="secondary" icon="copy" label="Copy" on-press="editor_copy"></button>
-                  <button size="sm" variant="ghost" icon="x" label="Close editor" on-press="editor_close"></button>
                 </row>
               </if>
               <else>
@@ -108,7 +111,7 @@
                     <button size="sm" selected="{toolHide}" icon="app:tool-hide" label="Redact" on-press="tool_hide"></button>
                     <button size="sm" selected="{toolCrop}" icon="app:tool-crop" label="Crop" on-press="tool_crop"></button>
                   </button-group>
-                  <separator/>
+                  <if test="{showsStyle}">
                   <button-group gap="2" cross="center" label="Colour">
                     <button size="sm" selected="{colour0}" icon="app:swatch-red" label="Red" on-press="colour_0"></button>
                     <button size="sm" selected="{colour1}" icon="app:swatch-amber" label="Amber" on-press="colour_1"></button>
@@ -123,15 +126,16 @@
                     <button size="sm" selected="{weightThick}" icon="app:weight-thick" label="Thick stroke" on-press="weight_thick"></button>
                   </button-group>
                   <button size="sm" variant="ghost" selected="{fillOn}" icon="app:shape-fill" label="Fill shapes" on-press="fill_toggle"></button>
-                  <separator/>
+                  </if>
                   <button size="sm" variant="ghost" icon="app:undo" label="Undo" disabled="{cannotUndo}" on-press="editor_undo"></button>
                   <button size="sm" variant="ghost" icon="app:redo" label="Redo" disabled="{cannotRedo}" on-press="editor_redo"></button>
-                  <button size="sm" variant="ghost" icon="refresh-cw" label="Rotate" on-press="editor_rotate"></button>
                   <button size="sm" variant="ghost" icon="app:scan" label="Find private data" on-press="editor_scan"></button>
-                  <separator/>
+                  <if test="{showsTransform}">
+                    <button size="sm" variant="ghost" icon="refresh-cw" label="Rotate" on-press="editor_rotate"></button>
+                  </if>
+                  <spacer grow="1"/>
                   <button size="sm" variant="secondary" icon="save" label="Save" on-press="editor_save"></button>
                   <button size="sm" variant="secondary" icon="copy" label="Copy" on-press="editor_copy"></button>
-                  <button size="sm" variant="ghost" icon="x" label="Close editor" on-press="editor_close"></button>
                 </row>
               </else>
             </column>

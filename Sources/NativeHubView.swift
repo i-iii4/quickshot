@@ -438,6 +438,10 @@ private final class NativeHubRenderView: NSView {
         sendCommand("editor.compact:\(compact ? 1 : 0)")
     }
 
+    func sendSelectionPresence(_ hasSelection: Bool) {
+        sendCommand("editor.selection:\(hasSelection ? 1 : 0)")
+    }
+
     func sendEditorStyle(paletteIndex: Int, weight: String, filled: Bool) {
         sendCommand("editor.colour:\(max(0, paletteIndex))")
         sendCommand("editor.weight:\(weight)")
@@ -2817,6 +2821,7 @@ final class NativeAnnotationToolbarSurface: NSView {
     private var selectedTool: AnnotationTool = .select
     private var isCompact = false
     private var wideLayoutWidth: CGFloat = 0
+    private var showsStyleControls = false
     private let tooltip = HubTooltipWindow()
     private var tooltipNodeID: UInt64?
     private var tooltipWork: DispatchWorkItem?
@@ -2967,6 +2972,17 @@ final class NativeAnnotationToolbarSurface: NSView {
                                    weight: weight.rawValue,
                                    filled: filled)
         nativeView.renderNow()
+        needsDisplay = true
+    }
+
+    /// Контролы стиля показываются только когда есть что настраивать.
+    func setSelectionPresence(_ hasSelection: Bool) {
+        guard hasSelection != showsStyleControls else { return }
+        showsStyleControls = hasSelection
+        nativeView.setSurface(.annotationToolbar)
+        nativeView.sendSelectionPresence(hasSelection)
+        nativeView.renderNow()
+        remeasure()
         needsDisplay = true
     }
 

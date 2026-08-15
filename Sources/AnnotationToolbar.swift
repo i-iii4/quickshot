@@ -70,6 +70,13 @@ final class AnnotationToolbarView: NSView {
         surface.setStyle(paletteIndex: paletteIndex, weight: weight, filled: filled)
     }
 
+    /// Свойства стиля появляются при выделенном объекте: без него настраивать
+    /// нечего, а постоянный ряд из трёх десятков контролов — свалка.
+    func setSelectionPresence(_ hasSelection: Bool) {
+        surface.setSelectionPresence(hasSelection)
+        needsLayout = true
+    }
+
     /// Панель перестраивается в две строки инструментов, когда окно узкое:
     /// иначе контролы уходят за край и становятся недоступны.
     func setAvailableWidth(_ width: CGFloat) { surface.setAvailableWidth(width) }

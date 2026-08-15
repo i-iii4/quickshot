@@ -17,6 +17,7 @@ struct EditorToolbarLiveTests {
                 try labelsAreReadable()               // (3) подписи не однобуквенные
                 try narrowWindowSwitchesToCompact()   // (2) узкое окно перестраивает строки
                 try cardControlsDispatch()            // (1) меню карточки тоже живое
+                try styleControlsAreContextual()      // (6) без выделения панель не свалка
                 print("EditorToolbarLiveTests: passed")
                 exit(0)
             } catch {
@@ -129,6 +130,36 @@ struct EditorToolbarLiveTests {
         }
         guard copied == 1, dismissed == 1 else {
             throw Failure("команды карточки мертвы: copy=\(copied) dismiss=\(dismissed)")
+        }
+    }
+
+    /// Без выделения панель показывает инструменты и команды; свойства стиля
+    /// появляются только когда есть что настраивать. Постоянный ряд из трёх
+    /// десятков контролов — это свалка независимо от того, иконки в нём или
+    /// слова.
+    @MainActor private static func styleControlsAreContextual() throws {
+        let toolbar = AnnotationToolbarView(frame: .zero)
+        _ = Host(view: toolbar, size: NSSize(width: 1600, height: 60))
+
+        toolbar.setSelectionPresence(false)
+        let idle = toolbar.debugButtons()
+        guard idle.count <= 16 else {
+            throw Failure("без выделения панель показывает \(idle.count) контролов: "
+                + idle.map(\.identifier).joined(separator: ", "))
+        }
+        let styleIdentifiers = ["Red", "Amber", "Green", "Blue", "Violet", "Graphite",
+                                "Thin stroke", "Medium stroke", "Thick stroke", "Fill shapes"]
+        for button in idle where styleIdentifiers.contains(button.identifier) {
+            throw Failure("контрол стиля \(button.identifier) виден без выделения")
+        }
+
+        toolbar.setSelectionPresence(true)
+        let active = toolbar.debugButtons()
+        guard active.count > idle.count else {
+            throw Failure("выделение не добавило контролов стиля: \(active.count) против \(idle.count)")
+        }
+        guard active.contains(where: { $0.identifier == "Red" }) else {
+            throw Failure("при выделении нет выбора цвета: \(active.map(\.identifier))")
         }
     }
 

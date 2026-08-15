@@ -228,6 +228,7 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         toolbar.setStyle(paletteIndex: canvas.paletteIndex,
                          weight: canvas.strokeWeight,
                          filled: canvas.isFilled)
+        toolbar.setSelectionPresence(!canvas.document.selection.isEmpty)
     }
 
     /// `ED-2`: сохранение перезаписывает файл в папке; при выключенном

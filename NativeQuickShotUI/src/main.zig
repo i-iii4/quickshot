@@ -86,6 +86,9 @@ pub const Model = struct {
     stroke_weight: StrokeWeight = .medium,
     filled: bool = false,
     toolbar_compact: bool = false,
+    /// Есть ли что настраивать: контролы стиля появляются только при
+    /// выделенном объекте, иначе панель превращается в свалку.
+    has_selection: bool = false,
     can_undo: bool = false,
     can_redo: bool = false,
     retention: Retention = .week,
@@ -188,6 +191,8 @@ pub const Model = struct {
     pub fn weightMedium(model: *const Model) bool { return model.stroke_weight == .medium; }
     pub fn weightThick(model: *const Model) bool { return model.stroke_weight == .thick; }
     pub fn toolbarCompact(model: *const Model) bool { return model.toolbar_compact; }
+    pub fn showsStyle(model: *const Model) bool { return model.has_selection; }
+    pub fn showsTransform(model: *const Model) bool { return model.tool == .crop; }
     pub fn toolbarWide(model: *const Model) bool { return !model.toolbar_compact; }
 
     pub fn fillOn(model: *const Model) bool { return model.filled; }
@@ -387,6 +392,7 @@ pub const Msg = union(enum) {
     set_weight: StrokeWeight,
     set_fill: bool,
     set_toolbar_compact: bool,
+    set_has_selection: bool,
     set_can_redo: bool,
     set_autosave: bool,
     set_interaction_hover: Action,
@@ -414,6 +420,7 @@ const command_colour_prefix = "editor.colour:";
 const command_weight_prefix = "editor.weight:";
 const command_fill_prefix = "editor.fill:";
 const command_compact_toolbar_prefix = "editor.compact:";
+const command_has_selection_prefix = "editor.selection:";
 const command_can_redo_prefix = "editor.can_redo:";
 const command_autosave_prefix = "settings.autosave:";
 const command_interaction_hover_prefix = "ui.hover:";
@@ -562,6 +569,7 @@ fn update(model: *Model, msg: Msg) void {
         .set_weight => |value| model.stroke_weight = value,
         .set_fill => |value| model.filled = value,
         .set_toolbar_compact => |value| model.toolbar_compact = value,
+        .set_has_selection => |value| model.has_selection = value,
         .set_can_redo => |value| model.can_redo = value,
         .set_autosave => |enabled| model.autosave = enabled,
         .set_interaction_hover => |action| model.interaction_hover = action,
@@ -637,6 +645,9 @@ fn onCommand(name: []const u8) ?Msg {
     }
     if (std.mem.startsWith(u8, name, command_fill_prefix)) {
         return .{ .set_fill = parseBool(name[command_fill_prefix.len..]) orelse return null };
+    }
+    if (std.mem.startsWith(u8, name, command_has_selection_prefix)) {
+        return .{ .set_has_selection = parseBool(name[command_has_selection_prefix.len..]) orelse return null };
     }
     if (std.mem.startsWith(u8, name, command_compact_toolbar_prefix)) {
         return .{ .set_toolbar_compact = parseBool(name[command_compact_toolbar_prefix.len..]) orelse return null };

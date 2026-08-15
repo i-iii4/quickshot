@@ -13,7 +13,9 @@ struct ToolbarSnapshotTool {
             let width = arguments.count > 1 ? CGFloat(Double(arguments[1]) ?? 1200) : 1200
             let path = arguments.count > 2 ? arguments[2] : "/tmp/toolbar.png"
 
+            let selected = arguments.count > 3 && arguments[3] == "selected"
             let toolbar = AnnotationToolbarView(frame: .zero)
+            toolbar.setSelectionPresence(selected)
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 400),
                                   styleMask: [.borderless], backing: .buffered, defer: false)
             let root = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 400))

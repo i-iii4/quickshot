@@ -48,4 +48,4 @@ xcrun swiftc \
   "$NATIVE_UI_LIB" \
   -o "$OUT"
 
-exec "$OUT" "${1:-1200}" "${2:-/tmp/toolbar.png}"
+exec "$OUT" "${1:-1200}" "${2:-/tmp/toolbar.png}" "${3:-idle}"

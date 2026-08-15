@@ -222,6 +222,10 @@ fullscreen behavior remain explicit runtime release checks.
    that explains the action and surfaces it as a hover tooltip. Visible one-
    and two-letter codes are prohibited: they require a legend the user does
    not have.
+2a. Style properties are contextual: colour, stroke weight and fill appear only
+   while something is selected, and transform commands only in their own mode.
+   With nothing selected the toolbar shows at most 16 controls. A permanent row
+   of thirty controls is a pile whether it is spelled in words or in icons.
 3. The toolbar lays out without clipping or overlapping the canvas at every
    window width from the minimum to full screen, splitting into short grouped
    rows when the window is narrow rather than pushing controls past the edge.
@@ -233,7 +237,15 @@ fullscreen behavior remain explicit runtime release checks.
    mismatch discards it whole and leaves the screenshot as an image.
 7. The canvas shows the screenshot upright: display orientation matches the
    capture, verified by a pixel test, and export orientation stays
-   authoritative.
+   authoritative. Text and counter digits are drawn in the same orientation on
+   screen and in the export, verified by measuring ink distribution rather than
+   asserting that something was drawn.
+8. One user gesture is one step of undo history. Changing the selection is not
+   an edit and never records a step; a gesture that changes nothing restores
+   the redo it suspended; reopening an editor loads restored annotations as the
+   initial state, so the first undo cannot erase them.
+9. Detection of sensitive data reports only findings. Nothing found means no
+   window at all, and closing the editor cancels a scan in flight.
 
 ## UI Architecture
 
