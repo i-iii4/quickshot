@@ -11,6 +11,11 @@ final class AnnotationCanvasView: NSView {
     private static let handleRadius: CGFloat = 4
     private static let handleHitRadius: CGFloat = 10
     private static let snapDistance: CGFloat = 6
+    /// Пустой текст занимает рамку, в которую помещается поле ввода. Раньше
+    /// объект создавался нулевым, и поле выходило размером в девять точек.
+    static let minimumTextWidth: CGFloat = 120
+    static let minimumTextHeight: CGFloat = 28
+    static let minimumTextFieldSize = NSSize(width: 120, height: 28)
 
     let document = AnnotationDocument()
     var image: CGImage? { didSet { resetZoom(); needsDisplay = true } }   // документ не трогаем: A-6
@@ -130,7 +135,7 @@ final class AnnotationCanvasView: NSView {
         context.setLineWidth(1)
         context.setLineDash(phase: 0, lengths: [4, 3])
         for object in selected {
-            let rect = transform.viewRect(fromImage: object.geometry.boundingBox)
+            let rect = transform.viewRect(fromImage: object.visualBounds)
                 .insetBy(dx: -3, dy: -3)
             context.stroke(rect)
         }
@@ -258,14 +263,23 @@ final class AnnotationCanvasView: NSView {
             object.geometry = .point(point)
             object.number = document.nextCounterNumber()
         case .text:
-            object.geometry = .rect(CGRect(origin: point, size: CGSize(width: 1, height: 1)),
+            // Пустой текст обязан иметь рамку, в которую можно попасть и в
+            // которой помещается поле ввода: нулевой прямоугольник давал поле
+            // в девять точек.
+            object.geometry = .rect(CGRect(origin: point,
+                                           size: CGSize(width: Self.minimumTextWidth,
+                                                        height: max(Self.minimumTextHeight,
+                                                                    currentStyle.fontSize * 1.4))),
                                     cornerRadius: 0)
             object.text = ""
         default:
             object.geometry = .rect(CGRect(origin: point, size: .zero), cornerRadius: 4)
         }
-        // Счётчик ставится одним кликом, ему не нужен протяг.
+        // Счётчик ставится одним кликом, ему не нужен протяг. Второе нажатие
+        // двойного клика приходит отдельным событием и раньше ставило вторую
+        // метку поверх первой.
         if kind == .counter {
+            guard event.clickCount <= 1 else { return }
             document.add(object)
             notifyChange()
             return
@@ -699,6 +713,26 @@ final class AnnotationCanvasView: NSView {
         }
         document.endGesture()
         notifyChange()
+    }
+
+    /// Координаты изображения в координаты холста. Редактор обязан считать
+    /// рамку поля ввода через владельца трансформации, а не конвертировать
+    /// координаты изображения как оконные.
+    func viewRect(forImageRect rect: CGRect) -> CGRect {
+        transform.viewRect(fromImage: rect)
+    }
+
+    var zoomFactor: CGFloat { transform.zoom }
+
+    /// Рамка поля ввода текста: не меньше пригодного размера и целиком внутри
+    /// холста.
+    func textEditingFrame(for object: AnnotationObject) -> NSRect {
+        var rect = transform.viewRect(fromImage: object.visualBounds)
+        rect.size.width = max(rect.width, Self.minimumTextFieldSize.width)
+        rect.size.height = max(rect.height, Self.minimumTextFieldSize.height)
+        rect.origin.x = min(max(0, rect.origin.x), max(0, bounds.width - rect.width))
+        rect.origin.y = min(max(0, rect.origin.y), max(0, bounds.height - rect.height))
+        return rect
     }
 
     /// `L-4`: сколько несжатых копий изображения удерживает редактор.

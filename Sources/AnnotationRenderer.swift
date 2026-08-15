@@ -208,7 +208,7 @@ enum AnnotationRenderer {
                                     color: NSColor,
                                     strokeScale: CGFloat) {
         guard case let .point(centre) = object.geometry else { return }
-        let radius = max(8, object.style.fontSize * strokeScale)
+        let radius = AnnotationObject.counterRadius(fontSize: object.style.fontSize * strokeScale)
         let rect = CGRect(x: centre.x - radius, y: centre.y - radius,
                           width: radius * 2, height: radius * 2)
         context.setFillColor(color.cgColor)
@@ -252,9 +252,13 @@ enum AnnotationRenderer {
              context: context)
     }
 
+    /// Обе точки входа рендерера — экран (перевёрнутая вью) и запекание
+    /// (контекст с явным переворотом) — имеют CTM с осью y вниз. AppKit узнаёт
+    /// об этом только из флага `flipped`; при `false` он не компенсирует
+    /// текстовую матрицу, и весь текст в продукте выходил зеркальным.
     private static func draw(_ text: NSAttributedString, at point: CGPoint, context: CGContext) {
         let previous = NSGraphicsContext.current
-        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
         text.draw(at: point)
         NSGraphicsContext.current = previous
     }

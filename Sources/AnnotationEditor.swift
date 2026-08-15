@@ -266,10 +266,11 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     private func beginTextEditing(_ id: UUID) {
         commitTextEditing()
         guard let object = canvas.document.objects.first(where: { $0.id == id }) else { return }
-        let rect = canvas.convert(object.geometry.boundingBox, from: nil)
-        let field = NSTextField(frame: rect.insetBy(dx: -4, dy: -4))
+        let rect = canvas.textEditingFrame(for: object)
+        let field = NSTextField(frame: rect)
         field.stringValue = object.text ?? ""
-        field.font = .systemFont(ofSize: object.style.fontSize)
+        // Кегль поля совпадает с экранным кеглем текста, то есть учитывает зум.
+        field.font = .systemFont(ofSize: max(11, object.style.fontSize * canvas.zoomFactor))
         field.isBordered = true
         field.backgroundColor = .white
         field.focusRingType = .none

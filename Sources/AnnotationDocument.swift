@@ -116,6 +116,27 @@ struct AnnotationObject: Equatable, Identifiable {
         self.isLocked = isLocked
         self.groupID = groupID
     }
+
+    /// Границы того, что объект реально занимает на снимке. Для большинства
+    /// типов это рамка геометрии, но метка задана точкой: её круг рисуется
+    /// вокруг центра по размеру шрифта, и без этой поправки в метку нельзя
+    /// было ни попасть кликом, ни увидеть осмысленную рамку выделения.
+    var visualBounds: CGRect {
+        switch kind {
+        case .counter:
+            guard case let .point(centre) = geometry else { return geometry.boundingBox }
+            let radius = Self.counterRadius(fontSize: style.fontSize)
+            return CGRect(x: centre.x - radius, y: centre.y - radius,
+                          width: radius * 2, height: radius * 2)
+        default:
+            return geometry.boundingBox
+        }
+    }
+
+    /// Радиус круга метки. Единственный источник для отрисовки и для попадания.
+    static func counterRadius(fontSize: CGFloat) -> CGFloat {
+        max(8, fontSize)
+    }
 }
 
 /// Снимок состояния документа. Выделение входит в состояние намеренно: отмена
@@ -272,7 +293,7 @@ final class AnnotationDocument {
                        tolerance: CGFloat = 6,
                        below currentID: UUID? = nil) -> AnnotationObject? {
         let hits = state.objects.filter {
-            !$0.isLocked && $0.geometry.boundingBox.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
+            !$0.isLocked && $0.visualBounds.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
         }
         guard !hits.isEmpty else { return nil }
         guard let currentID, let position = hits.firstIndex(where: { $0.id == currentID }) else {
