@@ -99,6 +99,7 @@ final class ThumbnailManager {
     /// `TR-5`: лента держится на новых снимках, пока пользователь не увёл её
     /// сам. Новый снимок снова возвращает следование.
     private var scrollFollowsNewest = true
+    private var stackOrderApplied: [ObjectIdentifier] = []
     private var scrollSettleAnimating = false
     private lazy var scrollSettleAnimator = CollectionProgressAnimator(hostView: hostContent)
 
@@ -871,7 +872,19 @@ final class ThumbnailManager {
                 item.placeInstant(origin: localOrigin)
             }
         }
+        applyStackOrder()
         refreshHoverUnderPointer()
+    }
+
+    /// Порядок наложения исполняется порядком сабвью: глубокие слои стопки
+    /// уходят вниз, обычные карточки остаются поверх, хаб — выше всех.
+    private func applyStackOrder() {
+        let ordered = items.sorted { $0.stackOrder < $1.stackOrder }
+        guard ordered.map(ObjectIdentifier.init) != stackOrderApplied else { return }
+        for item in ordered {
+            hostContent.addSubview(item.hostView, positioned: .below, relativeTo: hub.view)
+        }
+        stackOrderApplied = ordered.map(ObjectIdentifier.init)
     }
 
     /// Ровно одна карточка под курсором показывает свои кнопки. Карточка,
@@ -1311,6 +1324,7 @@ final class ThumbnailManager {
                 }
             }
         }
+        applyStackOrder()
         refreshHostPointerRouting()
     }
 

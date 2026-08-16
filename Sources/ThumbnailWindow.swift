@@ -102,6 +102,10 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         displayView.layer?.magnificationFilter = .trilinear
         displayView.layer?.minificationFilter = .trilinear
         sourceForDisplay = image
+        // Слой заполняется сразу: до первой раскладки карточка иначе пустая, и
+        // на экране видна только тень контейнера.
+        displayView.layer?.contents = image
+        displayedContentsWidth = image.width
         addSubview(displayView)
 
     }
@@ -568,6 +572,9 @@ final class ThumbnailWindow {
         let iw = max(0, container.bounds.width - 2 * band)
         let ih = max(0, container.bounds.height - 2 * band)
         view.frame = NSRect(x: band, y: band, width: iw, height: ih)
+        // Содержимое карточки следует за её рамкой по любому пути размещения,
+        // а не только при смене ширины.
+        view.layoutContents()
     }
 
     func applyWidth(_ w: CGFloat, screenHeight: CGFloat) {
@@ -650,11 +657,14 @@ final class ThumbnailWindow {
         CATransaction.commit()
     }
 
-    /// Порядок наложения карточки: больше — ближе к зрителю.
-    var stackOrder: CGFloat { container.layer?.zPosition ?? 0 }
+    /// Порядок наложения карточки: больше — ближе к зрителю. Значение хранится
+    /// само по себе, а на экране его исполняет порядок сабвью: у layer-backed
+    /// вью `zPosition` ломает отрисовку содержимого.
+    private(set) var stackDepth: CGFloat = 0
+    var stackOrder: CGFloat { stackDepth }
 
     func placeInstant(origin: NSPoint) {
-        container.layer?.zPosition = 0
+        stackDepth = 0
         restingFrame = outerRect(cardOrigin: origin)
         container.frame = restingFrame
         layoutCardInContainer()
@@ -667,7 +677,7 @@ final class ThumbnailWindow {
     /// у края тускнеет и слегка уменьшается вокруг своего центра. Глубокая
     /// карточка не интерактивна — клик достаётся верхней.
     func placeScrolled(origin: NSPoint, opacity: CGFloat, scale: CGFloat, stackOrder: CGFloat) {
-        container.layer?.zPosition = stackOrder
+        stackDepth = stackOrder
         restingFrame = outerRect(cardOrigin: origin)
         container.frame = restingFrame
         layoutCardInContainer()
