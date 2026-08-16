@@ -52,6 +52,7 @@ DRAWING_OUT="$(mktemp -t quickshot-editor-drawing-tests)"
 HISTORY_OUT="$(mktemp -t quickshot-editor-history-tests)"
 SCAN_OUT="$(mktemp -t quickshot-editor-scan-tests)"
 CLIPBOARD_OUT="$(mktemp -t quickshot-clipboard-delivery-tests)"
+MOMENT_OUT="$(mktemp -t quickshot-capture-moment-tests)"
 SELECTION_OUT="$(mktemp -t quickshot-selection-tests)"
 CURSOR_LEASE_OUT="$(mktemp -t quickshot-cursor-lease-tests)"
 PRESENTATION_OUT="$(mktemp -t quickshot-selection-presentation-tests)"
@@ -62,7 +63,7 @@ CAPTURE_SEQUENCE_OUT="$(mktemp -t quickshot-capture-sequence-tests)"
 CAPTURE_ARTIFACT_OUT="$(mktemp -t quickshot-capture-artifact-tests)"
 WINDOW_PROTECTION_OUT="$(mktemp -t quickshot-window-protection-tests)"
 THUMBNAIL_MODEL_OUT="$(mktemp -t quickshot-thumbnail-model-tests)"
-trap 'rm -f "$OUT" "$SURFACE_OUT" "$TRAY_POINTER_OUT" "$TRAY_HOVER_OUT" "$LIBRARY_MODEL_OUT" "$ANNOTATION_DOC_OUT" "$ANNOTATION_CANVAS_OUT" "$ANNOTATION_HANDLE_OUT" "$ANNOTATION_RENDER_OUT" "$ANNOTATION_SESSION_OUT" "$TRAY_SCROLL_OUT" "$SENSITIVE_OUT" "$TOOLBAR_LIVE_OUT" "$TRANSFORM_OUT" "$SCROLL_LAYOUT_OUT" "$SCENARIO_OUT" "$SESSION_EDITOR_OUT" "$STORAGE_LIFECYCLE_OUT" "$REMAINING_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$TRAY_LIVE_SCROLL_OUT" "$DRAWING_OUT" "$HISTORY_OUT" "$SCAN_OUT" "$CLIPBOARD_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"' EXIT
+trap 'rm -f "$OUT" "$SURFACE_OUT" "$TRAY_POINTER_OUT" "$TRAY_HOVER_OUT" "$LIBRARY_MODEL_OUT" "$ANNOTATION_DOC_OUT" "$ANNOTATION_CANVAS_OUT" "$ANNOTATION_HANDLE_OUT" "$ANNOTATION_RENDER_OUT" "$ANNOTATION_SESSION_OUT" "$TRAY_SCROLL_OUT" "$SENSITIVE_OUT" "$TOOLBAR_LIVE_OUT" "$TRANSFORM_OUT" "$SCROLL_LAYOUT_OUT" "$SCENARIO_OUT" "$SESSION_EDITOR_OUT" "$STORAGE_LIFECYCLE_OUT" "$REMAINING_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$TRAY_LIVE_SCROLL_OUT" "$DRAWING_OUT" "$HISTORY_OUT" "$SCAN_OUT" "$CLIPBOARD_OUT" "$MOMENT_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"' EXIT
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -99,6 +100,8 @@ xcrun swiftc \
   Sources/CaptureSequence.swift \
   Sources/Clipboard.swift \
   Sources/CaptureArtifact.swift \
+  Sources/CaptureTypes.swift \
+  Sources/CoordinateMath.swift \
   Tests/CaptureArtifactTests.swift \
   -o "$CAPTURE_ARTIFACT_OUT"
 
@@ -503,6 +506,8 @@ xcrun swiftc \
   Sources/CaptureSequence.swift \
   Sources/Clipboard.swift \
   Sources/CaptureArtifact.swift \
+  Sources/CaptureTypes.swift \
+  Sources/CoordinateMath.swift \
   Sources/ScreenshotLibraryModel.swift \
   Sources/ScreenshotLibrary.swift \
   Sources/AnnotationDocument.swift \
@@ -569,6 +574,8 @@ xcrun swiftc \
   Sources/ThumbnailCollectionModel.swift \
   Sources/Clipboard.swift \
   Sources/CaptureArtifact.swift \
+  Sources/CaptureTypes.swift \
+  Sources/CoordinateMath.swift \
   Sources/CardSizing.swift \
   Sources/TrayHostContentView.swift \
   Sources/HubWindow.swift \
@@ -614,6 +621,22 @@ xcrun swiftc \
   Tests/ClipboardDeliveryTests.swift \
   -o "$CLIPBOARD_OUT"
 
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
+  -D TESTING \
+  -framework AppKit \
+  -framework CoreGraphics \
+  Sources/CaptureTypes.swift \
+  Sources/CoordinateMath.swift \
+  Tests/CaptureMomentQualityTests.swift \
+  -o "$MOMENT_OUT"
+
+"$MOMENT_OUT"
+
 "$CLIPBOARD_OUT"
 
 "$SCAN_OUT"
@@ -638,6 +661,8 @@ xcrun swiftc \
   Sources/CaptureSequence.swift \
   Sources/Clipboard.swift \
   Sources/CaptureArtifact.swift \
+  Sources/CaptureTypes.swift \
+  Sources/CoordinateMath.swift \
   Sources/ScreenshotLibraryModel.swift \
   Sources/ScreenshotLibrary.swift \
   Sources/AnnotationDocument.swift \
@@ -732,6 +757,8 @@ xcrun swiftc \
   Sources/ThumbnailCollectionModel.swift \
   Sources/Clipboard.swift \
   Sources/CaptureArtifact.swift \
+  Sources/CaptureTypes.swift \
+  Sources/CoordinateMath.swift \
   Sources/CardSizing.swift \
   Sources/TrayHostContentView.swift \
   Sources/HubWindow.swift \
@@ -812,6 +839,8 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
 	  Sources/ThumbnailCollectionModel.swift \
 	  Sources/Clipboard.swift \
 	  Sources/CaptureArtifact.swift \
+	  Sources/CaptureTypes.swift \
+	  Sources/CoordinateMath.swift \
   Sources/CardSizing.swift \
   Sources/TrayHostContentView.swift \
   Sources/HubWindow.swift \
@@ -894,6 +923,8 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
 	  Sources/ThumbnailCollectionModel.swift \
 	  Sources/Clipboard.swift \
 	  Sources/CaptureArtifact.swift \
+	  Sources/CaptureTypes.swift \
+	  Sources/CoordinateMath.swift \
   Sources/CardSizing.swift \
   Sources/TrayHostContentView.swift \
   Sources/HubWindow.swift \

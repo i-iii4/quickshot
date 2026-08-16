@@ -22,6 +22,10 @@ final class CaptureArtifact {
     /// закрытие трея (`ST-9`) и удаление карточки (`ST-10`), поэтому с
     /// арендами не связан. `nil`, если автосохранение выключено.
     var libraryURL: URL?
+    /// Момент, из которого собран снимок. Разъехавшимся он считается только
+    /// тогда, когда выделение задело несколько дисплеев со снимками разного
+    /// времени: сам результат вырезается из одного экрана.
+    var momentQuality: CaptureMomentQuality = .intact
 
     private var sourceImage: CGImage?
     private var prepared: Clipboard.PreparedImage?

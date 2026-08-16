@@ -99,11 +99,12 @@ final class CaptureController {
             onSelectionReleased: { [weak self] id in
                 self?.releaseSelectionSession(id: id)
             },
-            onImage: { [weak self] sequence, image, screen, mouseUpAt in
+            onImage: { [weak self] sequence, image, screen, mouseUpAt, quality in
                 self?.deliverCapturedImage(sequence: sequence,
                                            image,
                                            on: screen,
-                                           mouseUpAt: mouseUpAt)
+                                           mouseUpAt: mouseUpAt,
+                                           quality: quality)
             },
             onError: { [weak self] error in
                 self?.handleCaptureError(error)
@@ -139,13 +140,15 @@ final class CaptureController {
     private func deliverCapturedImage(sequence: CaptureSequence,
                                       _ image: CGImage,
                                       on screen: NSScreen,
-                                      mouseUpAt: CFAbsoluteTime) {
+                                      mouseUpAt: CFAbsoluteTime,
+                                      quality: CaptureMomentQuality) {
         // Удачный снимок закрывает прошлый эпизод отказов: следующий сбой снова
         // будет показан. Одноразовое уведомление на весь запуск превращало
         // повторные отказы в тишину, неотличимую от мёртвого хоткея.
         didNotifyCaptureStackFailure = false
         do {
             let artifact = try artifactStore.admit(sequence: sequence, image: image)
+            artifact.momentQuality = quality
             thumbnails.add(artifact: artifact, on: screen)
             storeInLibrary(artifact)
             let mouseUpToCardMs = (CFAbsoluteTimeGetCurrent() - mouseUpAt) * 1000
@@ -249,7 +252,7 @@ private final class CaptureSession {
 
     private let snapshotProvider: any ScreenSnapshotProviding
     private let onSelectionReleased: (UUID) -> Void
-    private let onImage: (CaptureSequence, CGImage, NSScreen, CFAbsoluteTime) -> Void
+    private let onImage: (CaptureSequence, CGImage, NSScreen, CFAbsoluteTime, CaptureMomentQuality) -> Void
     private let onError: (Error) -> Void
     private let onEnd: (UUID, CaptureSequence, CaptureSessionOutcome) -> Void
     private let startedAt: CFAbsoluteTime
@@ -260,6 +263,9 @@ private final class CaptureSession {
     private var screens: [NSScreen] = []
     private var snapshotTask: Task<Void, Never>?
     private var cropTask: Task<Void, Never>?
+    /// Бюджет разброса между дисплеями: выше него момент считается разъехавшимся.
+    static let displaySkewBudget: TimeInterval = 0.120
+    private(set) var momentQuality: CaptureMomentQuality = .intact
     private var inputTracker: CaptureInputTracker?
     private var didEnd = false
     private var endOutcome: CaptureSessionOutcome = .unknown
@@ -267,7 +273,7 @@ private final class CaptureSession {
     init(sequence: CaptureSequence,
          snapshotProvider: any ScreenSnapshotProviding,
          onSelectionReleased: @escaping (UUID) -> Void,
-         onImage: @escaping (CaptureSequence, CGImage, NSScreen, CFAbsoluteTime) -> Void,
+         onImage: @escaping (CaptureSequence, CGImage, NSScreen, CFAbsoluteTime, CaptureMomentQuality) -> Void,
          onError: @escaping (Error) -> Void,
          onEnd: @escaping (UUID, CaptureSequence, CaptureSessionOutcome) -> Void,
          startedAt: CFAbsoluteTime) {
@@ -404,6 +410,14 @@ private final class CaptureSession {
 
     private func selectionCompleted(_ globalRect: NSRect, _ screen: NSScreen) {
         guard phase == .selecting, !didEnd else { return }
+        // Качество момента считается по сырой рамке, до обрезки по дисплею
+        // доставки: только она показывает, задел ли пользователь соседний экран.
+        momentQuality = captureMomentQuality(rawSelection: globalRect,
+                                             screens: Array(frozen.values),
+                                             budget: Self.displaySkewBudget)
+        if momentQuality.isDegraded {
+            Self.log.error("capture selection crossed displays with skewMs=\(self.momentQuality.displaySkew * 1000, privacy: .public)")
+        }
         let clamped = globalRect.intersection(screen.frame)
         guard clamped.width >= 3, clamped.height >= 3 else {
             endOutcome = .ignoredSmallSelection
@@ -474,7 +488,7 @@ private final class CaptureSession {
         let mouseUpToHandoffMs = (CFAbsoluteTimeGetCurrent() - mouseUpAt) * 1000
         Self.log.info("capture crop complete width=\(cropped.width, privacy: .public) height=\(cropped.height, privacy: .public) cropMs=\(cropMs, privacy: .public) mouseUpToHandoffMs=\(mouseUpToHandoffMs, privacy: .public)")
         Self.log.info("capture image handoff started width=\(cropped.width, privacy: .public) height=\(cropped.height, privacy: .public)")
-        onImage(sequence, cropped, screen, mouseUpAt)
+        onImage(sequence, cropped, screen, mouseUpAt, momentQuality)
         endOutcome = .completed
         phase = .finished
         end()

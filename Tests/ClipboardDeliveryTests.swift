@@ -18,6 +18,7 @@ struct ClipboardDeliveryTests {
             try pasteboardStillOffersPNGAndTIFF()
             try multipleImagesStillOfferTIFF()
             try preparationDoesNotAccumulateMemory()
+            try promisedTIFFSurvivesTermination()
             print("ClipboardDeliveryTests: passed")
             exit(0)
         } catch {
@@ -86,6 +87,35 @@ struct ClipboardDeliveryTests {
         let growth = footprintMB() - before
         guard growth < 60 else {
             throw Failure("десять подготовок оставили \(Int(growth)) MB")
+        }
+    }
+
+    /// Обещание исполняет живой процесс. При завершении приложения оно обязано
+    /// превратиться в данные, иначе вставка TIFF после закрытия QuickShot
+    /// перестаёт работать.
+    @MainActor private static func promisedTIFFSurvivesTermination() throws {
+        let prepared = Clipboard.prepareImage(cgImage: try image(width: 300, height: 200))
+        NSPasteboard.general.clearContents()
+        Clipboard.copy(preparedImage: prepared)
+
+        Clipboard.debugResetPromiseRequestCount()
+        Clipboard.materializePendingPromises()
+        let afterMaterialize = Clipboard.debugPromiseRequestCount
+        guard afterMaterialize == 1 else {
+            throw Failure("материализация не запросила обещание: \(afterMaterialize)")
+        }
+
+        // Данные теперь лежат в буфере: чтение обязано обойтись без обещания —
+        // именно этим вставка и переживает завершение приложения.
+        guard let tiff = NSPasteboard.general.data(forType: .tiff), !tiff.isEmpty else {
+            throw Failure("после материализации TIFF из буфера пропал")
+        }
+        guard Clipboard.debugPromiseRequestCount == afterMaterialize else {
+            throw Failure("чтение снова обратилось к обещанию — данные не осели в буфере")
+        }
+        guard NSImage(data: tiff) != nil else { throw Failure("оставшийся TIFF нечитаем") }
+        guard NSPasteboard.general.data(forType: .png) != nil else {
+            throw Failure("PNG из буфера пропал")
         }
     }
 

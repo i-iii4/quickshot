@@ -147,6 +147,29 @@ enum Clipboard {
     }
 #endif
 
+    /// Превращение обещаний в данные. Обещание исполняет живой процесс: при
+    /// завершении приложения его надо материализовать, иначе получатель,
+    /// который спросит TIFF уже после закрытия QuickShot, не получит ничего.
+    /// Чтение типа из буфера и есть запрос к владельцу — система вызывает его
+    /// и запоминает отданные данные.
+    static func materializePendingPromises() {
+        let pb = NSPasteboard.general
+        guard let types = pb.types, types.contains(.tiff) else { return }
+        _ = pb.data(forType: .tiff)
+        if let items = pb.pasteboardItems {
+            for item in items where item.types.contains(.tiff) {
+                _ = item.data(forType: .tiff)
+            }
+        }
+    }
+
+#if TESTING
+    /// Сколько раз у обещания спрашивали данные. После материализации данные
+    /// лежат в буфере, и повторное чтение обязано обходиться без обещания.
+    static var debugPromiseRequestCount: Int { TIFFPromise.debugRequestCount }
+    static func debugResetPromiseRequestCount() { TIFFPromise.debugRequestCount = 0 }
+#endif
+
     /// Обещания для набора снимков живут до следующего копирования.
     nonisolated(unsafe) private static var multiCopyPromises: [TIFFPromise] = []
 
@@ -188,6 +211,9 @@ final class TIFFPromise: NSObject, NSPasteboardItemDataProvider, @unchecked Send
     @objc func pasteboard(_ pasteboard: NSPasteboard,
                           provideDataForType type: NSPasteboard.PasteboardType) {
         guard type == .tiff, let tiff = Clipboard.tiffData(fromPNG: png) else { return }
+#if TESTING
+        Self.debugRequestCount += 1
+#endif
         pasteboard.setData(tiff, forType: .tiff)
     }
 
@@ -195,6 +221,13 @@ final class TIFFPromise: NSObject, NSPasteboardItemDataProvider, @unchecked Send
                     item: NSPasteboardItem,
                     provideDataForType type: NSPasteboard.PasteboardType) {
         guard type == .tiff, let tiff = Clipboard.tiffData(fromPNG: png) else { return }
+#if TESTING
+        Self.debugRequestCount += 1
+#endif
         item.setData(tiff, forType: .tiff)
     }
+
+#if TESTING
+    nonisolated(unsafe) static var debugRequestCount = 0
+#endif
 }

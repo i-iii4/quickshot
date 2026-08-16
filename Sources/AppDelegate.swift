@@ -32,6 +32,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Обещание TIFF в буфере исполняет живой процесс: перед выходом оно
+        // превращается в данные, иначе вставка после закрытия QuickShot
+        // получит только PNG.
+        Clipboard.materializePendingPromises()
         capture.shutdown()
         GlobalHotKey.shared.unregister()
     }
