@@ -88,6 +88,9 @@ final class CaptureArtifact {
     var debugRetainedDataBytes: Int {
         (prepared?.png?.count ?? 0) + (prepared?.tiff?.count ?? 0)
     }
+    /// Растр превью: ширина на высоту на четыре байта.
+    var debugPreviewBytes: Int { previewImage.bytesPerRow * previewImage.height }
+    var debugSourceBytes: Int { sourceImage.map { $0.bytesPerRow * $0.height } ?? 0 }
 #endif
 
     func fullImage() -> CGImage? {
@@ -113,6 +116,9 @@ final class CaptureArtifact {
         sourceImage = nil
     }
 
+    /// Превью показывается на карточке и обязано выдерживать САМУЮ ШИРОКУЮ
+    /// карточку: 640 точек при масштабе 2 — это 1280 пикселей. Ниже опускать
+    /// нельзя, экономия памяти не стоит мыла на растянутой карточке.
     private static func makePreview(from image: CGImage,
                                     maximumPixelDimension: Int = 1280) -> CGImage {
         let longest = max(image.width, image.height)
@@ -287,6 +293,12 @@ final class CaptureArtifactStore {
     var debugRetainedSourceCount: Int { artifacts.values.filter(\.debugRetainsSource).count }
     var debugRetainedDataMB: Double {
         Double(artifacts.values.reduce(0) { $0 + $1.debugRetainedDataBytes }) / 1_048_576
+    }
+    var debugRetainedPreviewMB: Double {
+        Double(artifacts.values.reduce(0) { $0 + $1.debugPreviewBytes }) / 1_048_576
+    }
+    var debugRetainedSourceMB: Double {
+        Double(artifacts.values.reduce(0) { $0 + $1.debugSourceBytes }) / 1_048_576
     }
 #endif
 

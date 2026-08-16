@@ -10,6 +10,7 @@ struct ThumbnailCollectionBehaviorTests {
         run("hidden removal never restores an opaque frame", testHiddenRemovalTerminalState)
         run("tray transition preserves the orthogonal card anchor", testAxisLockedTrayTransition)
         run("drag session pins and restores tray pointer routing", testDragSessionLifecycle)
+        run("preview stays large enough for the widest card", testPreviewCoversWidestCard)
         print("ThumbnailCollectionBehaviorTests: passed")
     }
 
@@ -136,6 +137,42 @@ struct ThumbnailCollectionBehaviorTests {
             width: 240,
             screenHeight: screen.frame.height)
         return (thumbnail, manager, store)
+    }
+
+    /// Экономия памяти не имеет права портить картинку: превью обязано быть не
+    /// мельче самой широкой карточки в пикселях, иначе растянутая карточка
+    /// покажет мыло. Слой при этом волен держать копию под свой текущий
+    /// размер — это уже деталь показа, а не источник.
+    private static func testPreviewCoversWidestCard() throws {
+        guard let screen = NSScreen.main else { throw Failure("No screen available") }
+        let scale = screen.backingScaleFactor
+        let needed = Int((ThumbStyle.maxWidth * scale).rounded())
+        // Исходник заведомо крупнее нужного: проверяется потолок превью, а не
+        // размер тестовой картинки.
+        let sourceWidth = needed * 3
+        let context = CGContext(data: nil, width: sourceWidth, height: sourceWidth * 2 / 3,
+                                bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpaceCreateDeviceRGB(),
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        guard let image = context.makeImage() else { throw Failure("Could not create test image") }
+
+        let sequence = CaptureSequence(rawValue: UInt64.random(in: 1...UInt64.max))
+        let store = CaptureArtifactStore(
+            rootURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("QuickShotPreviewTests-\(UUID().uuidString)"),
+            currentPasteboardFiles: { Set<URL>() },
+            publishClipboard: { _ in })
+        store.registerCapture(sequence)
+        let artifact = try store.admit(sequence: sequence, image: image)
+        let thumbnail = ThumbnailWindow(artifact: artifact,
+                                        screen: screen,
+                                        manager: ThumbnailManager(artifactStore: store),
+                                        width: ThumbStyle.defaultWidth,
+                                        screenHeight: screen.frame.height)
+        let preview = thumbnail.debugPreviewPixelWidth
+        try require(preview >= needed,
+                    "превью \(preview) px мельче самой широкой карточки \(needed) px")
+        store.shutdown()
     }
 
     private static func makeThumbnail() throws -> ThumbnailWindow {

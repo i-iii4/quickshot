@@ -21,6 +21,7 @@ struct CaptureStressTool {
                 ? Int(CommandLine.arguments[1]) ?? 10
                 : 10
             await measureDeliveryPath(iterations: iterations)
+            await measureCardCost(iterations: iterations)
             measurePreparation(iterations: iterations)
             exit(0)
         }
@@ -52,7 +53,14 @@ struct CaptureStressTool {
         library.setSuppressesFailureAlertsForTesting(true)
         manager.library = library
 
+        ThumbnailManager.debugDisablesInsertionMotion =
+            ProcessInfo.processInfo.environment["QUICKSHOT_STRESS_NO_MOTION"] != nil
         let baseline = footprintMB()
+        var previousFootprint = baseline
+        var previousNamed = 0.0
+        var previousPreview = 0.0
+        var previousData = 0.0
+        var previousCard = 0.0
         for index in 0..<iterations {
             guard let image = solidImage(width: width, height: height, seed: index) else { continue }
             let skipTray = ProcessInfo.processInfo.environment["QUICKSHOT_STRESS_SKIP_TRAY"] != nil
@@ -93,6 +101,11 @@ struct CaptureStressTool {
             // Настоящее приложение между снимками возвращается в run loop, и
             // autorelease-пулы сливаются. Без этого стенд копит временные
             // объекты и приписывает их продукту.
+            if ProcessInfo.processInfo.environment["QUICKSHOT_STRESS_REMOVE_CARDS"] != nil,
+               let card = manager.debugThumbnail(for: artifact.id) {
+                manager.remove(card)
+                manager.debugFinishMotions()
+            }
             await drainRunLoop()
             // Освобождённые, но не возвращённые системе блоки: если после
             // сброса след падает, память держит аллокатор, а не наш граф.
@@ -110,15 +123,120 @@ struct CaptureStressTool {
                          afterAdmit - baseline, afterCard - baseline,
                          afterPrepare - baseline, footprintMB() - baseline,
                          store.debugRetainedSourceCount, store.debugRetainedDataMB))
-            print(String(format: "    сброс аллокатора: %.0f -> %.0f MB", beforeRelief, afterRelief))
+            _ = beforeRelief
+            _ = afterRelief
+            let previewMB = store.debugRetainedPreviewMB
+            let dataMB = store.debugRetainedDataMB
+            let sourceMB = store.debugRetainedSourceMB
+            let cardMB = manager.debugCardRasterMB
+            let named = previewMB + dataMB + sourceMB + cardMB
+            let now = footprintMB()
+            // Прирост считается ЗА СНИМОК: одноразовые кэши и полноэкранный
+            // слой окна-хоста появляются один раз и к цене снимка отношения
+            // не имеют.
+            let growth = now - previousFootprint
+            let namedGrowth = named - previousNamed
+            let remainder = growth - namedGrowth
+            let share = growth > 0 ? remainder / growth * 100 : 0
+            previousFootprint = now
+            previousNamed = named
+            print(String(format: "    на снимок: прирост %.1f MB; названо %.1f (превью %.1f, данные %.1f, растры карточек %.1f); неучтено %.1f MB (%.0f%%)",
+                         growth, namedGrowth,
+                         previewMB - previousPreview, dataMB - previousData, cardMB - previousCard,
+                         remainder, share))
+            previousPreview = previewMB
+            previousData = dataMB
+            previousCard = cardMB
         }
-        print(String(format: "прирост памяти за серию: %.0f MB", footprintMB() - baseline))
+        // Итог по серии: одиночная итерация шумит на аллокаторе, судить надо по
+        // среднему.
+        let series = max(1, iterations)
+        let totalGrowth = footprintMB() - baseline
+        let namedTotal = store.debugRetainedPreviewMB + store.debugRetainedDataMB
+            + store.debugRetainedSourceMB + manager.debugCardRasterMB
+        let remainderShare = totalGrowth > 0 ? (totalGrowth - namedTotal) / totalGrowth * 100 : 0
+        print(String(format: "прирост памяти за серию: %.0f MB (%.1f MB на снимок)",
+                     totalGrowth, totalGrowth / Double(series)))
+        print(String(format: "названо за серию: %.1f MB (превью %.1f, данные %.1f, кадры %.1f, растры карточек %.1f); неучтено %.1f MB (%.0f%%)",
+                     namedTotal,
+                     store.debugRetainedPreviewMB, store.debugRetainedDataMB,
+                     store.debugRetainedSourceMB, manager.debugCardRasterMB,
+                     totalGrowth - namedTotal, remainderShare))
         manager.shutdown()
         store.shutdown()
+        // Если после разбора след возвращается — память держал наш граф, и
+        // перечень просто неполон. Если остаётся — держат кэши и аллокатор.
+        await drainRunLoop()
+        malloc_zone_pressure_relief(nil, 0)
+        print(String(format: "после разбора трея и хранилища: %.0f MB сверх базы",
+                     footprintMB() - baseline))
         try? FileManager.default.removeItem(at: root)
     }
 
     // MARK: съёмка дисплеев
+
+    /// Из чего состоит цена карточки: сама вью, её слои, размещение в окне.
+    @MainActor private static func measureCardCost(iterations: Int) async {
+        guard let screen = NSScreen.main else { return }
+        print("")
+        print("=== цена карточки: \(iterations) штук ===")
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("QuickShotCardCost-\(UUID().uuidString)")
+        let store = CaptureArtifactStore(rootURL: root)
+        let scale = screen.backingScaleFactor
+        let width = Int(screen.frame.width * scale)
+        let height = Int(screen.frame.height * scale)
+
+        var artifacts: [CaptureArtifact] = []
+        let beforeArtifacts = footprintMB()
+        for index in 0..<iterations {
+            guard let image = solidImage(width: width, height: height, seed: index) else { continue }
+            let sequence = CaptureSequence(rawValue: UInt64(500 + index))
+            store.registerCapture(sequence)
+            if let artifact = try? store.admit(sequence: sequence, image: image) {
+                _ = await artifact.preparedImage()
+                artifacts.append(artifact)
+            }
+            await drainRunLoop()
+        }
+        let afterArtifacts = footprintMB()
+        print(String(format: "артефакт без карточки: %.1f MB на штуку",
+                     (afterArtifacts - beforeArtifacts) / Double(max(1, iterations))))
+
+        let host = NSWindow(contentRect: screen.frame, styleMask: [.borderless],
+                            backing: .buffered, defer: false)
+        let content = NSView(frame: screen.frame)
+        host.contentView = content
+        // Один менеджер на весь замер: он держит окно-хост и хаб, и это цена
+        // трея, а не карточки.
+        let sharedManager = ThumbnailManager(artifactStore: store)
+        await drainRunLoop()
+        var cards: [ThumbnailWindow] = []
+        let beforeCards = footprintMB()
+        for (index, artifact) in artifacts.enumerated() {
+            let card = ThumbnailWindow(artifact: artifact,
+                                       screen: screen,
+                                       manager: sharedManager,
+                                       width: 240,
+                                       screenHeight: screen.frame.height)
+            content.addSubview(card.hostView)
+            card.placeInstant(origin: NSPoint(x: 20, y: 20 + CGFloat(index) * 10))
+            cards.append(card)
+            await drainRunLoop()
+        }
+        content.layoutSubtreeIfNeeded()
+        await drainRunLoop()
+        print(String(format: "карточка поверх артефакта: %.1f MB на штуку",
+                     (footprintMB() - beforeCards) / Double(max(1, cards.count))))
+
+        sharedManager.shutdown()
+        for card in cards { card.close() }
+        cards.removeAll()
+        artifacts.removeAll()
+        store.shutdown()
+        await drainRunLoop()
+        try? FileManager.default.removeItem(at: root)
+    }
 
     /// Бисекция внутри подготовки: что именно оставляет след — кодирование PNG,
     /// кодирование TIFF или запись файла.

@@ -491,7 +491,12 @@ final class ThumbnailManager {
                                   on screen: NSScreen,
                                   previousVisible: Set<ObjectIdentifier>,
                                   oldFrames: [ObjectIdentifier: NSRect]) {
+#if TESTING
+        let reduceMotion = Self.debugDisablesInsertionMotion
+            || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+#else
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+#endif
         let (visible, hidden) = cardLayout(on: screen)
         let visibleIDs = Set(visible.map { ObjectIdentifier($0.0) })
         let outgoing = hidden.filter {
@@ -1114,6 +1119,34 @@ final class ThumbnailManager {
     var debugActiveDragSessionCount: Int { activeDragPayloads.count }
     func debugThumbnail(for id: UUID) -> ThumbnailWindow? { itemByID[id] }
     var debugScrollIsActive: Bool { scrollModel.isScrollable }
+    /// Отключение анимации вставки для замеров: позволяет отделить цену
+    /// анимации от цены самой карточки.
+    static var debugDisablesInsertionMotion = false
+    /// Растры карточек считаются обходом дерева слоёв, а не множителем: у
+    /// каждой карточки контейнер, тело, ручка ресайза и, при тени, ещё один
+    /// буфер того же размера.
+    var debugCardRasterMB: Double {
+        let scale = host.screen?.backingScaleFactor ?? 2
+        var bytes = 0.0
+        for item in items {
+            bytes += Self.debugLayerBytes(of: item.hostView, scale: scale)
+        }
+        return bytes / 1_048_576
+    }
+
+    private static func debugLayerBytes(of view: NSView, scale: CGFloat) -> Double {
+        var bytes = 0.0
+        if let layer = view.layer {
+            let area = Double(layer.bounds.width * scale * layer.bounds.height * scale * 4)
+            bytes += area
+            // Тень рисуется в отдельный буфер того же размера.
+            if layer.shadowOpacity > 0 { bytes += area }
+        }
+        for subview in view.subviews {
+            bytes += debugLayerBytes(of: subview, scale: scale)
+        }
+        return bytes
+    }
 
     /// Достроить идущие анимации немедленно: тестовые окружения без живого
     /// display-clock (окно считается occluded) иначе зависают на alpha=0.

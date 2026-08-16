@@ -277,6 +277,21 @@ fullscreen behavior remain explicit runtime release checks.
    dead.
 3. A prepared artifact retains the PNG and the file URL only - never a
    full-resolution decoded frame or an uncompressed TIFF.
+4. The clipboard promise is materialized before the app terminates, so a paste
+   after QuickShot quits still finds TIFF.
+
+## Retained Memory
+
+1. What a capture retains is named, not assumed: the card preview, the prepared
+   PNG, and the card's layer rasters. `scripts/run-stress.py` prints the growth
+   per capture beside that list; an unexplained remainder above a fifth means
+   something is retained that nobody can point at, and it is removed rather
+   than tolerated.
+2. The preview is never smaller than the widest card in pixels - a stretched
+   card must not show mush. The card's layer may hold a copy scaled to its
+   current size; that is presentation, not the source.
+3. A card creates its controls only when the pointer first reaches it. Each
+   Native SDK surface costs megabytes, and most cards are never hovered.
 
 ## Capture Robustness
 

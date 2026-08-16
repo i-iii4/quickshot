@@ -67,9 +67,18 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     private var image: CGImage { artifact.previewImage }
     private let nsImage: NSImage
     private var displayNSImage: NSImage
+    /// Показ картинки слоем: `NSImageView` кэширует отрисовку в натуральном
+    /// размере изображения и держит вторую копию превью на каждой карточке.
     private let displayView = PassthroughImageView()
-    private let controls = NativeThumbnailControlsView(frame: .zero)
+    /// Создаётся при первом наведении: собственный рантайм Native SDK стоит
+    /// несколько мегабайт, а большинству карточек он никогда не понадобится.
+    private var controls: NativeThumbnailControlsView?
     private var trackingArea: NSTrackingArea?
+
+    /// Кадр, из которого делается картинка слоя. Превью остаётся нетронутым:
+    /// оно нужно в полном размере для перетаскивания, закрепления и редактора.
+    private var sourceForDisplay: CGImage
+    private var displayedContentsWidth = 0
 
     private var startMouse: NSPoint = .zero
     private var movedFar = false
@@ -81,26 +90,40 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         let image = artifact.previewImage
         self.nsImage = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
         self.displayNSImage = nsImage
+        self.sourceForDisplay = image
         super.init(frame: .zero)
 
         wantsLayer = true
         layer?.cornerRadius = QS.radiusCard
         layer?.masksToBounds = true
 
-        displayView.imageScaling = .scaleAxesIndependently
         displayView.wantsLayer = true
+        displayView.layer?.contentsGravity = .resize
+        displayView.layer?.magnificationFilter = .trilinear
+        displayView.layer?.minificationFilter = .trilinear
+        sourceForDisplay = image
         addSubview(displayView)
 
-        controls.onCopy = { [weak self] in self?.doCopy() }
-        controls.toolTip = "Copy"
-        controls.onDismiss = { [weak self] in
+    }
+
+    /// Контролы карточки по требованию.
+    @discardableResult
+    private func makeControlsIfNeeded() -> NativeThumbnailControlsView {
+        if let controls { return controls }
+        let view = NativeThumbnailControlsView(frame: .zero)
+        view.onCopy = { [weak self] in self?.doCopy() }
+        view.toolTip = "Copy"
+        view.onDismiss = { [weak self] in
             guard let s = self, let o = s.owner else { return }
             let mgr = s.manager
             DispatchQueue.main.async { mgr?.remove(o) }
         }
-        controls.alphaValue = 0
-        controls.isHidden = true
-        addSubview(controls)
+        view.alphaValue = 0
+        view.isHidden = true
+        addSubview(view)
+        controls = view
+        layoutContents()
+        return view
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -110,7 +133,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = superview.map { convert(point, from: $0) } ?? point
         guard !isHidden, alphaValue > 0.01, bounds.contains(local) else { return nil }
-        if !controls.isHidden, controls.alphaValue > 0.01 {
+        if let controls, !controls.isHidden, controls.alphaValue > 0.01 {
             if let hit = controls.hitTest(local) { return hit }
         }
         return self
@@ -128,12 +151,16 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     func setDisplay(image displayImage: CGImage) {
         displayNSImage = NSImage(cgImage: displayImage,
                                  size: NSSize(width: displayImage.width, height: displayImage.height))
-        displayView.image = displayNSImage
+        sourceForDisplay = displayImage
+        displayedContentsWidth = 0
+        updateDisplayContents()
     }
 
     /// Раскладка внутренних элементов по текущему `bounds` (frame вью ставит обёртка).
     func layoutContents() {
         displayView.frame = bounds
+        updateDisplayContents()
+        guard let controls else { return }
         let inset = QS.s2
         let rowH = ceil(controls.fittingSize.height)
         let rowY = bounds.height - inset - rowH
@@ -145,6 +172,40 @@ private final class ThumbnailView: NSView, NSDraggingSource {
 
         let groupWidth = min(availableWidth, ceil(controls.fittingSize.width))
         controls.frame = NSRect(x: inset, y: rowY, width: groupWidth, height: rowH)
+    }
+
+    /// Картинка слоя под текущий размер карточки. Пересобирается только когда
+    /// нужная ширина заметно изменилась: ресайз тянут мышью, и пересчёт на
+    /// каждый кадр был бы дороже самой экономии.
+    private func updateDisplayContents() {
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let neededWidth = max(1, Int((bounds.width * scale).rounded()))
+        guard neededWidth > 0 else { return }
+        let sourceWidth = sourceForDisplay.width
+        // Мельче исходника не бывает; запас в четверть, чтобы не пересобирать
+        // на каждое движение ручки ресайза.
+        let target = min(sourceWidth, Int(Double(neededWidth) * 1.25))
+        if displayedContentsWidth > 0,
+           abs(displayedContentsWidth - target) < max(32, target / 8) {
+            return
+        }
+        displayedContentsWidth = target
+        displayView.layer?.contents = target >= sourceWidth
+            ? sourceForDisplay
+            : (Self.scaled(sourceForDisplay, toWidth: target) ?? sourceForDisplay)
+    }
+
+    private static func scaled(_ image: CGImage, toWidth width: Int) -> CGImage? {
+        let height = max(1, Int((Double(width) * Double(image.height) / Double(image.width)).rounded()))
+        guard let context = CGContext(data: nil, width: width, height: height,
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            return nil
+        }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
     }
 
     // MARK: ховер кнопок (плавный fade)
@@ -169,10 +230,14 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         setControlsVisible(active)
     }
 
-    var controlsVisible: Bool { !controls.isHidden && controls.alphaValue > 0.01 }
+    var controlsVisible: Bool {
+        guard let controls else { return false }
+        return !controls.isHidden && controls.alphaValue > 0.01
+    }
 
     private func setControlsVisible(_ visible: Bool, animated: Bool = true) {
         if visible {
+            let controls = makeControlsIfNeeded()
             controls.isHidden = false
             guard animated else { controls.alphaValue = 1; return }
             NSAnimationContext.runAnimationGroup { ctx in
@@ -180,6 +245,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
                 controls.animator().alphaValue = 1
             }
         } else {
+            guard let controls else { return }
             guard animated else {
                 controls.alphaValue = 0
                 controls.isHidden = true
@@ -191,7 +257,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
             }, completionHandler: { [weak self] in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    if self.controls.alphaValue == 0 { self.controls.isHidden = true }
+                    if let controls = self.controls, controls.alphaValue == 0 { controls.isHidden = true }
                 }
             })
         }
@@ -232,6 +298,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     }
 
     func flashCopied() {
+        let controls = makeControlsIfNeeded()
         controls.isHidden = false
         controls.alphaValue = 1
         controls.showCheck(true)
@@ -239,7 +306,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         titleResetWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            self.controls.showCheck(false)
+            self.controls?.showCheck(false)
             self.layoutContents()
             if !self.isMouseInside() { self.setControlsVisible(false) }
         }
@@ -259,21 +326,23 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     }
 
     func debugCloseButtonCenterInSelf() -> NSPoint {
-        convert(controls.buttonCenterInSelf { $0 == "Dismiss screenshot" }, from: controls)
+        convert(makeControlsIfNeeded().buttonCenterInSelf { $0 == "Dismiss screenshot" },
+                from: makeControlsIfNeeded())
     }
 
     func debugCopyButtonCenterInSelf() -> NSPoint {
-        convert(controls.buttonCenterInSelf { $0 == "Copy screenshot" || $0 == "Copied screenshot" }, from: controls)
+        convert(makeControlsIfNeeded().buttonCenterInSelf { $0 == "Copy screenshot" || $0 == "Copied screenshot" },
+                from: makeControlsIfNeeded())
     }
 
     func debugCloseButtonState() -> String {
         let superHit = hitTest(debugCloseButtonCenterInSelf()).map { String(describing: type(of: $0)) } ?? "nil"
-        return "\(controls.debugState(label: "Dismiss screenshot")) thumbHit=\(superHit)"
+        return "\(makeControlsIfNeeded().debugState(label: "Dismiss screenshot")) thumbHit=\(superHit)"
     }
 
     func debugCopyButtonState() -> String {
         let superHit = hitTest(debugCopyButtonCenterInSelf()).map { String(describing: type(of: $0)) } ?? "nil"
-        return "\(controls.debugState(label: "Copy")) thumbHit=\(superHit)"
+        return "\(makeControlsIfNeeded().debugState(label: "Copy")) thumbHit=\(superHit)"
     }
 #endif
 
@@ -556,6 +625,8 @@ final class ThumbnailWindow {
     /// ресайза, и зазор между карточками лежит именно между этими рамками.
     var debugCardFrame: NSRect { container.convert(view.frame, to: container.superview) }
     var debugStackOrder: CGFloat { stackOrder }
+    /// Ширина превью в пикселях: источник показа карточки.
+    var debugPreviewPixelWidth: Int { artifact.previewImage.width }
 
     /// Видимость и живость карточки так, как их видит пользователь: карточка
     /// в стопке может быть отрисована, но не принимать мышь.
