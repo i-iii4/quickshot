@@ -264,6 +264,20 @@ fullscreen behavior remain explicit runtime release checks.
 9. Detection of sensitive data reports only findings. Nothing found means no
    window at all, and closing the editor cancels a scan in flight.
 
+## Capture Robustness
+
+1. A capture is never refused because the multi-display batch is skewed in
+   time. The delivered screenshot comes from one display; skew affects only the
+   frozen backdrop on the other screens. Skew is measured, carried on the batch
+   and logged when it exceeds the budget.
+2. A refused capture is visible to the user. Notifying once per process turns
+   every later refusal into silence indistinguishable from a dead hotkey, so a
+   successful capture re-arms the notice.
+3. A presentation failure tears the overlay down through the same path as a
+   normal dismissal: frozen windows disappear first, then the system cursor
+   returns. Leaving that to the session owner left the cursor suppressed until
+   teardown, and the next capture started with a broken cursor.
+
 ## UI Architecture
 
 1. UI architecture changes must improve interaction consistency, state

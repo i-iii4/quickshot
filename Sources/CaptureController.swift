@@ -140,6 +140,10 @@ final class CaptureController {
                                       _ image: CGImage,
                                       on screen: NSScreen,
                                       mouseUpAt: CFAbsoluteTime) {
+        // Удачный снимок закрывает прошлый эпизод отказов: следующий сбой снова
+        // будет показан. Одноразовое уведомление на весь запуск превращало
+        // повторные отказы в тишину, неотличимую от мёртвого хоткея.
+        didNotifyCaptureStackFailure = false
         do {
             let artifact = try artifactStore.admit(sequence: sequence, image: image)
             thumbnails.add(artifact: artifact, on: screen)

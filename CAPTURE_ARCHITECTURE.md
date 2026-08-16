@@ -21,7 +21,12 @@ and the remaining release gates.
   the 100-card/1-GiB resource bound.
 - `ScreenSnapshotProviding` isolates the fakeable provider boundary. Production
   captures fresh pixels through one serialized direct lane, rejects incomplete
-  or over-skewed display batches, and performs no pixel-producing prewarm.
+  or unusable display batches, and performs no pixel-producing prewarm.
+  Display skew is measured and reported, never grounds for refusing a capture:
+  the delivered screenshot is cropped from one display, so skew degrades only
+  the frozen backdrop on the other screens. Refusing on skew turned every
+  hotkey press into silence exactly when the machine was busy - after a few
+  captures in a row.
 - Window exclusion audits fail closed. The accepted multi-display contract is
   serialized full-resolution display capture with a measured maximum batch skew
   of `120ms`; a batch outside that bound fails instead of pretending to be

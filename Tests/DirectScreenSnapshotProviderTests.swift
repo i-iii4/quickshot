@@ -12,7 +12,7 @@ struct DirectScreenSnapshotProviderTests {
             try await testProviderOwnsFreshImagesPerSession()
             try await testProviderSerializesCompositorRequests()
             try await testProviderFailsAtomically()
-            try await testProviderRejectsExcessiveDisplaySkew()
+            try await testProviderKeepsBatchWithHighDisplaySkew()
             try await testCancellationDiscardsSynchronousResult()
             try await testDuplicateDisplaysFailBeforeCapture()
             try await testHundredFakeBackendLifecycles()
@@ -135,7 +135,11 @@ struct DirectScreenSnapshotProviderTests {
         }, "Provider did not report batch timing")
     }
 
-    private static func testProviderRejectsExcessiveDisplaySkew() async throws {
+    /// Рассинхронизация дисплеев не отменяет снимок: она ухудшает подложку под
+    /// оверлеем на других экранах, но не результат, который вырезается из
+    /// одного дисплея. Прежний жёсткий отказ означал, что под нагрузкой хоткей
+    /// молча переставал работать.
+    private static func testProviderKeepsBatchWithHighDisplaySkew() async throws {
         let provider = DirectScreenSnapshotProvider(maximumAcceptedDisplaySkew: 0.001) { bounds in
             Thread.sleep(forTimeInterval: 0.004)
             return try solidImage(width: max(1, Int(bounds.width)),
@@ -150,12 +154,11 @@ struct DirectScreenSnapshotProviderTests {
                            frame: CGRect(x: 20, y: 0, width: 20, height: 20),
                            quartzBounds: CGRect(x: 20, y: 0, width: 20, height: 20))
         ]
-        do {
-            _ = try await provider.capture(sessionID: UUID(), displays: displays)
-            throw TestFailure("Provider accepted an out-of-contract display skew")
-        } catch CaptureError.snapshotUnavailable {
-            return
-        }
+        let batch = try await provider.capture(sessionID: UUID(), displays: displays)
+        try require(batch.screens.count == displays.count,
+                    "Provider dropped displays from an over-skewed batch")
+        try require(batch.maximumDisplaySkew > 0.001,
+                    "Provider did not report the measured skew: \(batch.maximumDisplaySkew)")
     }
 
     private static func testCancellationDiscardsSynchronousResult() async throws {

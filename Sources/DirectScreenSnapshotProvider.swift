@@ -81,10 +81,15 @@ struct DirectScreenSnapshotProvider: ScreenSnapshotProviding {
         let completedAt = CFAbsoluteTimeGetCurrent()
         let timestamps = screens.map(\.capturedAt)
         let skew = (timestamps.max() ?? startedAt) - (timestamps.min() ?? startedAt)
-        guard skew <= maximumAcceptedDisplaySkew else {
-            throw CaptureError.snapshotUnavailable(
-                "Display batch skew \(Int(skew * 1000))ms exceeds "
-                    + "\(Int(maximumAcceptedDisplaySkew * 1000))ms")
+        // Рассинхронизация НЕ отменяет снимок. Итоговое изображение вырезается
+        // из одного дисплея, а кадры остальных лишь подкладываются под оверлей
+        // на их экранах: разъезд по времени между дисплеями ухудшает подложку,
+        // но не результат. Прежний жёсткий отказ означал, что под нагрузкой —
+        // а несколько снимков подряд её и создают — каждый вызов хоткея молча
+        // отклонялся, и приложение выглядело зависшим.
+        if skew > maximumAcceptedDisplaySkew {
+            let budgetMs = maximumAcceptedDisplaySkew * 1000
+            Self.log.error("capture direct batch skew high session=\(sessionID.uuidString, privacy: .public) skewMs=\(skew * 1000, privacy: .public) budgetMs=\(budgetMs, privacy: .public)")
         }
         let elapsedMs = (completedAt - startedAt) * 1000
         Self.log.info("capture direct batch ready session=\(sessionID.uuidString, privacy: .public) displays=\(screens.count, privacy: .public) skewMs=\(skew * 1000, privacy: .public) ms=\(elapsedMs, privacy: .public)")

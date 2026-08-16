@@ -594,7 +594,14 @@ final class OverlayController {
                 case .cursorSuppressionFailed:
                     Self.log.error("overlay cursor suppression failed")
                 }
-                self.onCancel?()
+                // Разбор здесь, а не только по цепочке отмены: он скрывает
+                // замороженные кадры и лишь затем возвращает системный курсор.
+                // Без этого отказ после захвата аренды оставлял систему без
+                // указателя до тех пор, пока сессию не разберут, и следующий
+                // снимок начинался со сломанным курсором.
+                let cancel = self.onCancel
+                self.dismiss()
+                cancel?()
             }
         )
     }
