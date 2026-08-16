@@ -264,6 +264,20 @@ fullscreen behavior remain explicit runtime release checks.
 9. Detection of sensitive data reports only findings. Nothing found means no
    window at all, and closing the editor cancels a scan in flight.
 
+## Delivery Formats
+
+1. A copied screenshot offers PNG, TIFF and a file URL, as before. PNG and the
+   file URL are real data; TIFF is promised and encoded only if the receiving
+   application asks for it.
+2. TIFF is never encoded eagerly. Measured on a 3456x2234 frame: one TIFF
+   encode costs about 30 MB of process footprint and does not give it back,
+   linearly per capture, while PNG costs about nothing. A few captures in a row
+   pushed the process into hundreds of megabytes, the machine into memory
+   pressure, and display capture into the slowdown that made the hotkey look
+   dead.
+3. A prepared artifact retains the PNG and the file URL only - never a
+   full-resolution decoded frame or an uncompressed TIFF.
+
 ## Capture Robustness
 
 1. A capture is never refused because the multi-display batch is skewed in

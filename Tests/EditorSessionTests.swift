@@ -171,11 +171,20 @@ struct EditorSessionTests {
         guard Clipboard.pngData(cgImage: image) != nil else { throw Failure("PNG недоступен") }
 
         let prepared = Clipboard.prepareImage(cgImage: image)
-        guard prepared.png != nil, prepared.tiff != nil else {
-            throw Failure("для перетаскивания нужны и PNG, и TIFF")
+        // TIFF готовится по запросу получателя, а не заранее: несжатый кадр
+        // весит десятки мегабайт и столько же оставляет за собой при
+        // кодировании. Проверяется, что тип объявлен и отдаётся.
+        guard prepared.png != nil else {
+            throw Failure("для перетаскивания нужен PNG")
         }
-        guard Clipboard.pasteboardItem(preparedImage: prepared) != nil else {
+        guard let item = Clipboard.pasteboardItem(preparedImage: prepared) else {
             throw Failure("перетаскивание из редактора невозможно")
+        }
+        guard item.types.contains(.png), item.types.contains(.tiff) else {
+            throw Failure("перетаскивание не объявляет нужные типы: \(item.types)")
+        }
+        guard let tiff = item.data(forType: .tiff), !tiff.isEmpty else {
+            throw Failure("обещание TIFF при перетаскивании не исполняется")
         }
         guard let pdf = Clipboard.pdfData(cgImage: image), !pdf.isEmpty else {
             throw Failure("экспорт в PDF недоступен")

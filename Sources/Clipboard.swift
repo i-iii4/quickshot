@@ -45,28 +45,53 @@ enum Clipboard {
         return data as Data
     }
 
+    /// Кодирование идёт в собственном autorelease-пуле. Без него временные
+    /// объекты ImageIO — а это десятки мегабайт на кадр — остаются висеть до
+    /// слива пула потока, и после серии снимков процесс раздувается на
+    /// сотни мегабайт.
+    /// TIFF здесь НЕ кодируется: он весит десятки мегабайт на кадр и столько же
+    /// оставляет за собой при каждом кодировании, тогда как спрашивают его
+    /// редко. В буфер он уходит обещанием — см. `copy(preparedImage:)`.
     static func prepareImage(cgImage: CGImage, fileURL: URL? = nil) -> PreparedImage {
-        let png = pngData(cgImage: cgImage)
-        let tiff = imageData(cgImage: cgImage, type: .tiff)
+        autoreleasepool {
+            let png = pngData(cgImage: cgImage)
 
-        var writtenURL: URL?
-        if let png, let fileURL {
-            do {
-                try png.write(to: fileURL, options: .atomic)
-                writtenURL = fileURL
-            } catch {
-                writtenURL = nil
+            var writtenURL: URL?
+            if let png, let fileURL {
+                do {
+                    try png.write(to: fileURL, options: .atomic)
+                    writtenURL = fileURL
+                } catch {
+                    writtenURL = nil
+                }
             }
-        }
 
-        return PreparedImage(png: png, tiff: tiff, fileURL: writtenURL)
+            return PreparedImage(png: png, tiff: nil, fileURL: writtenURL)
+        }
     }
+
+    /// TIFF из готового PNG: артефакт не удерживает несжатый кадр, но
+    /// повторная доставка обязана положить в буфер тот же набор типов.
+    nonisolated static func tiffData(fromPNG png: Data) -> Data? {
+        guard let source = CGImageSourceCreateWithData(png as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        return imageData(cgImage: image, type: .tiff)
+    }
+
+    /// Владельца обещания система не удерживает — ссылку держим сами, до
+    /// следующего копирования.
+    nonisolated(unsafe) private static var tiffPromise: TIFFPromise?
 
     static func copy(preparedImage prepared: PreparedImage) {
         let pb = NSPasteboard.general
-        let types = pasteboardTypes(for: prepared)
+        var types = pasteboardTypes(for: prepared)
+        // TIFF объявляется всегда, когда есть из чего его собрать: приложения,
+        // читающие только его, обязаны продолжать работать.
+        if prepared.png != nil, !types.contains(.tiff) { types.append(.tiff) }
         guard !types.isEmpty else { return }
-        pb.declareTypes(types, owner: nil)
+        let promise = prepared.png.map { TIFFPromise(png: $0) }
+        tiffPromise = promise
+        pb.declareTypes(types, owner: promise)
 
         if let png = prepared.png { pb.setData(png, forType: .png) }
         if let tiff = prepared.tiff { pb.setData(tiff, forType: .tiff) }
@@ -76,6 +101,7 @@ enum Clipboard {
     }
 
     static func copy(preparedImages: [PreparedImage]) {
+        multiCopyPromises.removeAll()
         let preparedImages = preparedImages.filter { !$0.isEmpty }
         guard !preparedImages.isEmpty else { return }
         if preparedImages.count == 1 {
@@ -96,12 +122,33 @@ enum Clipboard {
         guard !types.isEmpty else { return nil }
         let item = NSPasteboardItem()
         if let png = prepared.png { item.setData(png, forType: .png) }
-        if let tiff = prepared.tiff { item.setData(tiff, forType: .tiff) }
+        if let tiff = prepared.tiff {
+            item.setData(tiff, forType: .tiff)
+        } else if let png = prepared.png {
+            // Тот же принцип для набора снимков: TIFF по запросу.
+            let provider = TIFFPromise(png: png)
+            multiCopyPromises.append(provider)
+            item.setDataProvider(provider, forTypes: [.tiff])
+        }
         if let fileURLString = prepared.fileURLString {
             item.setString(fileURLString, forType: .fileURL)
         }
         return item
     }
+
+#if TESTING
+    /// Только для стенда: замер стоимости кодирования TIFF отдельно от PNG.
+    static func debugTIFFData(cgImage: CGImage) -> Data? {
+        imageData(cgImage: cgImage, type: .tiff)
+    }
+
+    static func debugTIFFDataViaAppKit(cgImage: CGImage) -> Data? {
+        NSBitmapImageRep(cgImage: cgImage).representation(using: .tiff, properties: [:])
+    }
+#endif
+
+    /// Обещания для набора снимков живут до следующего копирования.
+    nonisolated(unsafe) private static var multiCopyPromises: [TIFFPromise] = []
 
     private static func imageData(cgImage: CGImage, type: UTType) -> Data? {
         let data = NSMutableData()
@@ -124,5 +171,30 @@ enum Clipboard {
         if prepared.tiff != nil { types.append(.tiff) }
         if prepared.fileURL != nil { types.append(.fileURL) }
         return types
+    }
+}
+
+/// Обещание TIFF: кодирование запускается, только если получатель прямо
+/// попросил этот тип. Хранится сжатый PNG (единицы мегабайт), а не готовый
+/// несжатый кадр — именно он и раздувал процесс.
+final class TIFFPromise: NSObject, NSPasteboardItemDataProvider, @unchecked Sendable {
+    private let png: Data
+
+    init(png: Data) {
+        self.png = png
+        super.init()
+    }
+
+    @objc func pasteboard(_ pasteboard: NSPasteboard,
+                          provideDataForType type: NSPasteboard.PasteboardType) {
+        guard type == .tiff, let tiff = Clipboard.tiffData(fromPNG: png) else { return }
+        pasteboard.setData(tiff, forType: .tiff)
+    }
+
+    func pasteboard(_ pasteboard: NSPasteboard?,
+                    item: NSPasteboardItem,
+                    provideDataForType type: NSPasteboard.PasteboardType) {
+        guard type == .tiff, let tiff = Clipboard.tiffData(fromPNG: png) else { return }
+        item.setData(tiff, forType: .tiff)
     }
 }

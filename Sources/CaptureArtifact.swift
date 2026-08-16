@@ -78,6 +78,14 @@ final class CaptureArtifact {
         return value
     }
 
+#if TESTING
+    /// Держит ли артефакт полноразмерный кадр в памяти.
+    var debugRetainsSource: Bool { sourceImage != nil }
+    var debugRetainedDataBytes: Int {
+        (prepared?.png?.count ?? 0) + (prepared?.tiff?.count ?? 0)
+    }
+#endif
+
     func fullImage() -> CGImage? {
         if let sourceImage { return sourceImage }
         guard let png = prepared?.png,
@@ -91,9 +99,12 @@ final class CaptureArtifact {
         try? FileManager.default.removeItem(at: fileURL)
     }
 
+    /// Подготовленная копия — это PNG и ссылка на файл. TIFF в ней не хранится
+    /// и не готовится: несжатый кадр весит десятки мегабайт и столько же
+    /// оставляет за собой при кодировании. В буфер обмена он уходит обещанием.
     private func finishPreparation(_ value: Clipboard.PreparedImage) {
         guard prepared == nil else { return }
-        prepared = value
+        prepared = Clipboard.PreparedImage(png: value.png, tiff: nil, fileURL: value.fileURL)
         preparationTask = nil
         sourceImage = nil
     }
@@ -265,6 +276,15 @@ final class CaptureArtifactStore {
         prepareWorkingDirectory()
         removeCrashLeftovers()
     }
+
+#if TESTING
+    /// Сколько артефактов удерживают полноразмерный кадр и сколько байт данных
+    /// лежит в подготовленных копиях.
+    var debugRetainedSourceCount: Int { artifacts.values.filter(\.debugRetainsSource).count }
+    var debugRetainedDataMB: Double {
+        Double(artifacts.values.reduce(0) { $0 + $1.debugRetainedDataBytes }) / 1_048_576
+    }
+#endif
 
     var cardCount: Int {
         artifacts.values.filter(\.hasCardLease).count
