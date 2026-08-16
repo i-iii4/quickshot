@@ -97,14 +97,12 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         layer?.cornerRadius = QS.radiusCard
         layer?.masksToBounds = true
 
+        // Картинкой владеет сам NSImageView. Ручной `layer.contents` у этого
+        // класса не живёт дольше одного прохода отрисовки: контрол рисует себя
+        // сам и затирает подложенное — карточка превращалась в одну тень.
+        displayView.imageScaling = .scaleAxesIndependently
         displayView.wantsLayer = true
-        displayView.layer?.contentsGravity = .resize
-        displayView.layer?.magnificationFilter = .trilinear
-        displayView.layer?.minificationFilter = .trilinear
-        sourceForDisplay = image
-        // Слой заполняется сразу: до первой раскладки карточка иначе пустая, и
-        // на экране видна только тень контейнера.
-        displayView.layer?.contents = image
+        displayView.image = nsImage
         displayedContentsWidth = image.width
         addSubview(displayView)
 
@@ -157,13 +155,13 @@ private final class ThumbnailView: NSView, NSDraggingSource {
                                  size: NSSize(width: displayImage.width, height: displayImage.height))
         sourceForDisplay = displayImage
         displayedContentsWidth = 0
-        updateDisplayContents()
+        updateDisplayImage()
     }
 
     /// Раскладка внутренних элементов по текущему `bounds` (frame вью ставит обёртка).
     func layoutContents() {
         displayView.frame = bounds
-        updateDisplayContents()
+        updateDisplayImage()
         guard let controls else { return }
         let inset = QS.s2
         let rowH = ceil(controls.fittingSize.height)
@@ -178,10 +176,11 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         controls.frame = NSRect(x: inset, y: rowY, width: groupWidth, height: rowH)
     }
 
-    /// Картинка слоя под текущий размер карточки. Пересобирается только когда
-    /// нужная ширина заметно изменилась: ресайз тянут мышью, и пересчёт на
-    /// каждый кадр был бы дороже самой экономии.
-    private func updateDisplayContents() {
+    /// Картинка вью под текущий размер карточки: выигрыш памяти остаётся —
+    /// NSImageView получает уменьшенную копию, а не превью целиком.
+    /// Пересобирается только когда нужная ширина заметно изменилась: ресайз
+    /// тянут мышью, и пересчёт на каждый кадр был бы дороже самой экономии.
+    private func updateDisplayImage() {
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         let neededWidth = max(1, Int((bounds.width * scale).rounded()))
         guard neededWidth > 0 else { return }
@@ -194,9 +193,12 @@ private final class ThumbnailView: NSView, NSDraggingSource {
             return
         }
         displayedContentsWidth = target
-        displayView.layer?.contents = target >= sourceWidth
+        let cg = target >= sourceWidth
             ? sourceForDisplay
             : (Self.scaled(sourceForDisplay, toWidth: target) ?? sourceForDisplay)
+        displayView.image = NSImage(cgImage: cg,
+                                    size: NSSize(width: CGFloat(cg.width) / scale,
+                                                 height: CGFloat(cg.height) / scale))
     }
 
     private static func scaled(_ image: CGImage, toWidth width: Int) -> CGImage? {

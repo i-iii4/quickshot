@@ -15,6 +15,7 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.activate(ignoringOtherApps: true)
+        cardSurvivesADisplayPass()
         newestCaptureStaysReachable()
         scrollWheelMovesCards()
         closeButtonWorksOnNewestCard()
@@ -247,6 +248,88 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
         guard travelled >= 20 else {
             failures.append("инерция не двигает ленту: \(travelled) pt")
             return
+        }
+    }
+
+    /// Карточка обязана показывать пиксели снимка ПОСЛЕ прохода отрисовки.
+    /// Проход идёт в конце оборота run loop, и именно он затирал картинку,
+    /// положенную руками в layer.contents: проверки, читающие состояние сразу
+    /// после размещения, оставались зелёными, а экран показывал одну тень.
+    private func cardSurvivesADisplayPass() {
+        guard let screen = NSScreen.main else {
+            failures.append("display-pass: нет экрана")
+            return
+        }
+        TrayPosition.set(.right)
+        let store = CaptureArtifactStore(
+            rootURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("QuickShotDisplayPass-\(UUID().uuidString)"))
+        let manager = ThumbnailManager(artifactStore: store)
+        defer {
+            manager.shutdown()
+            store.shutdown()
+        }
+        let sequence = CaptureSequence(rawValue: 1)
+        store.registerCapture(sequence)
+        guard let image = makeImage(width: 360, height: 220),
+              let artifact = try? store.admit(sequence: sequence, image: image) else {
+            failures.append("display-pass: снимок не создан")
+            return
+        }
+        manager.add(artifact: artifact, on: screen)
+        manager.debugFinishMotions()
+        guard let card = manager.debugThumbnail(for: artifact.id),
+              let window = card.hostView.window else {
+            failures.append("display-pass: карточка не появилась")
+            return
+        }
+
+        // Настоящий проход отрисовки: тот самый триггер, который стирал картинку.
+        card.hostView.needsDisplay = true
+        window.displayIfNeeded()
+        spin(0.15)
+        window.displayIfNeeded()
+
+        let frame = card.debugCardFrame
+        let inner = frame.insetBy(dx: frame.width * 0.25, dy: frame.height * 0.25)
+        guard let host = window.contentView,
+              let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+            failures.append("display-pass: нет буфера отображения")
+            return
+        }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let scaleX = CGFloat(rep.pixelsWide) / host.bounds.width
+        let scaleY = CGFloat(rep.pixelsHigh) / host.bounds.height
+        var sampled = 0
+        var painted = 0
+        var y = inner.minY
+        while y < inner.maxY {
+            var x = inner.minX
+            while x < inner.maxX {
+                let px = Int(x * scaleX)
+                // rep хранит строки сверху вниз, host не перевёрнут.
+                let py = Int((host.bounds.height - y) * scaleY)
+                if px >= 0, py >= 0, px < rep.pixelsWide, py < rep.pixelsHigh,
+                   let colour = rep.colorAt(x: px, y: py) {
+                    sampled += 1
+                    // Снимок в фикстуре — синяя заливка: пиксель карточки обязан
+                    // быть заметно синим и непрозрачным.
+                    if colour.alphaComponent > 0.5, colour.blueComponent > 0.4,
+                       colour.blueComponent > colour.redComponent + 0.1 {
+                        painted += 1
+                    }
+                }
+                x += 4
+            }
+            y += 4
+        }
+        guard sampled > 50 else {
+            failures.append("display-pass: рамка карточки вне буфера (\(sampled) точек)")
+            return
+        }
+        if Double(painted) / Double(sampled) < 0.5 {
+            failures.append("display-pass: после прохода отрисовки карточка пуста — "
+                + "закрашено \(painted) из \(sampled) точек")
         }
     }
 

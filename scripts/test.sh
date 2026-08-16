@@ -1341,7 +1341,7 @@ rg -F -q "sessions.discardAll()" Sources/ThumbnailManager.swift
 rg -F -q "scrollModel.scrolled(by: delta, rubberBand: hasPhases)" Sources/ThumbnailManager.swift
 # Своя трансформация слоя у layer-backed вью карточки ломает отрисовку её
 # содержимого: остаётся тень контейнера без карточки. Геометрию ведёт рамка.
-if output="$(rg -n 'layer\?\.transform = CATransform3DMakeScale|layer\?\.zPosition' Sources/ThumbnailWindow.swift)"; then
+if output="$(rg -n 'layer\?\.transform = CATransform3DMakeScale|layer\?\.zPosition|displayView.layer\?\.contents' Sources/ThumbnailWindow.swift)"; then
   echo "$output"
   echo "Tray regression: card geometry belongs to the frame, not to layer transforms." >&2
   exit 1
