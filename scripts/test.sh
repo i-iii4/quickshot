@@ -1339,6 +1339,21 @@ rg -F -q "editedImages.preparedImage(for: t.artifact.id)" Sources/ThumbnailManag
 rg -F -q "sessions.discardAll()" Sources/ThumbnailManager.swift
 # Прокрутка непрерывная, а не пошаговая; сворачивание требует намерения.
 rg -F -q "scrollModel.scrolled(by: delta, rubberBand: hasPhases)" Sources/ThumbnailManager.swift
+# Своя трансформация слоя у layer-backed вью карточки ломает отрисовку её
+# содержимого: остаётся тень контейнера без карточки. Геометрию ведёт рамка.
+if output="$(rg -n 'layer\?\.transform = CATransform3DMakeScale|layer\?\.zPosition' Sources/ThumbnailWindow.swift)"; then
+  echo "$output"
+  echo "Tray regression: card geometry belongs to the frame, not to layer transforms." >&2
+  exit 1
+fi
+# Разброс между дисплеями НЕ отменяет снимок ни на одном пути: итог вырезается
+# из одного экрана. Первая правка сняла отказ в провайдере, а вторая проверка в
+# контроллере осталась и продолжала гасить хоткей.
+if output="$(rg -n 'skew|Skew' Sources | rg -i 'fail\(|throw ')"; then
+  echo "$output"
+  echo "Capture regression: display skew must never refuse a capture." >&2
+  exit 1
+fi
 rg -F -q "collapseThreshold" Sources/TrayScrollModel.swift
 rg -F -q "func handleHubSwipe" Sources/ThumbnailManager.swift
 # Прокрутка доходит до координат карточек, а не живёт только в модели.

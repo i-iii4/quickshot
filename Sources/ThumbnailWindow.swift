@@ -678,16 +678,22 @@ final class ThumbnailWindow {
     /// карточка не интерактивна — клик достаётся верхней.
     func placeScrolled(origin: NSPoint, opacity: CGFloat, scale: CGFloat, stackOrder: CGFloat) {
         stackDepth = stackOrder
-        restingFrame = outerRect(cardOrigin: origin)
+        // Уменьшение задаётся РАМКОЙ, а не трансформацией слоя: у layer-backed
+        // вью AppKit сам ведёт геометрию слоя, и своя трансформация ломает
+        // отрисовку содержимого — на экране остаётся одна тень контейнера.
+        let full = outerRect(cardOrigin: origin)
+        restingFrame = full.insetBy(dx: full.width * (1 - scale) / 2,
+                                    dy: full.height * (1 - scale) / 2)
         container.frame = restingFrame
         layoutCardInContainer()
-        var transform = CATransform3DMakeScale(scale, scale, 1)
-        transform.m41 = restingFrame.width * (1 - scale) / 2
-        transform.m42 = restingFrame.height * (1 - scale) / 2
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        container.layer?.transform = transform
+        container.layer?.transform = CATransform3DIdentity
         container.layer?.shadowOpacity = Float(TrayAnim.restingShadowOpacity * opacity)
+        container.layer?.shadowPath = CGPath(roundedRect: view.frame,
+                                             cornerWidth: QS.radiusCard,
+                                             cornerHeight: QS.radiusCard,
+                                             transform: nil)
         container.alphaValue = max(0, min(1, opacity))
         CATransaction.commit()
         // Карточка в стопке остаётся живой: клик достаётся верхней по

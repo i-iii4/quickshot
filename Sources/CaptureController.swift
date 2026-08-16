@@ -346,10 +346,11 @@ private final class CaptureSession {
                 "Display set mismatch expected=\(expectedIDs) received=\(receivedIDs)"))
             return
         }
-        guard batch.maximumDisplaySkew <= 0.120 else {
-            fail(CaptureError.snapshotUnavailable(
-                "Display batch skew exceeds the 120ms product bound"))
-            return
+        // Разброс между дисплеями снимок не отменяет: итог вырезается из одного
+        // экрана. Он оценивается при кадрировании и только для тех дисплеев,
+        // которых коснулось выделение (`captureMomentQuality`).
+        if batch.maximumDisplaySkew > Self.displaySkewBudget {
+            Self.log.error("capture batch skew above budget skewMs=\(batch.maximumDisplaySkew * 1000, privacy: .public)")
         }
 
         frozen = Dictionary(uniqueKeysWithValues: batch.screens.map { ($0.displayID, $0) })
