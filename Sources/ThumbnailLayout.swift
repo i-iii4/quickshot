@@ -12,6 +12,9 @@ struct ThumbnailLayoutSlot: Equatable {
     /// Глубина стопки у края (`TR-3`): тусклость и уменьшение, 1 — обычная карточка.
     var opacity: CGFloat = 1
     var scale: CGFloat = 1
+    /// Порядок наложения: больше — ближе к зрителю. Слои стопки обязаны лежать
+    /// ЗА карточками ленты, иначе самый прозрачный слой рисуется поверх всех.
+    var stackOrder: CGFloat = 0
 }
 
 struct ThumbnailLayoutResult: Equatable {
@@ -179,7 +182,7 @@ func thumbnailScrollLayout(screenFrame: NSRect,
     for (index, placement) in placements.enumerated() {
         // Карточка глубже стопки не рисуется: три слоя достаточно, чтобы
         // показать «дальше есть ещё», остальное — лишние окна.
-        guard placement.opacity > 0.26 else {
+        guard placement.depth < CGFloat(TrayStackLayout.stackDepth) else {
             hidden.append(index)
             continue
         }
@@ -202,8 +205,12 @@ func thumbnailScrollLayout(screenFrame: NSRect,
             origin = NSPoint(x: strip.x - cardWidth - placement.position,
                              y: screenFrame.maxY - margin - cardHeights[index])
         }
+        // Чем глубже слой, тем он дальше: порядок наложения задаётся явно, а не
+        // порядком добавления сабвью. Иначе дальняя стопка (в ней лежат самые
+        // новые снимки, добавленные последними) рисуется задом наперёд.
         visible.append(.init(index: index, origin: origin,
-                             opacity: placement.opacity, scale: placement.scale))
+                             opacity: placement.opacity, scale: placement.scale,
+                             stackOrder: -placement.depth))
     }
     return .init(visible: visible, hidden: hidden)
 }

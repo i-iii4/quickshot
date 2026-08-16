@@ -555,6 +555,7 @@ final class ThumbnailWindow {
     /// Видимая рамка карточки в координатах хоста: контейнер шире неё на поля
     /// ресайза, и зазор между карточками лежит именно между этими рамками.
     var debugCardFrame: NSRect { container.convert(view.frame, to: container.superview) }
+    var debugStackOrder: CGFloat { stackOrder }
 
     /// Видимость и живость карточки так, как их видит пользователь: карточка
     /// в стопке может быть отрисована, но не принимать мышь.
@@ -578,7 +579,11 @@ final class ThumbnailWindow {
         CATransaction.commit()
     }
 
+    /// Порядок наложения карточки: больше — ближе к зрителю.
+    var stackOrder: CGFloat { container.layer?.zPosition ?? 0 }
+
     func placeInstant(origin: NSPoint) {
+        container.layer?.zPosition = 0
         restingFrame = outerRect(cardOrigin: origin)
         container.frame = restingFrame
         layoutCardInContainer()
@@ -590,7 +595,8 @@ final class ThumbnailWindow {
     /// Позиция в прокручиваемой ленте со стопочной глубиной (`TR-3`): карточка
     /// у края тускнеет и слегка уменьшается вокруг своего центра. Глубокая
     /// карточка не интерактивна — клик достаётся верхней.
-    func placeScrolled(origin: NSPoint, opacity: CGFloat, scale: CGFloat) {
+    func placeScrolled(origin: NSPoint, opacity: CGFloat, scale: CGFloat, stackOrder: CGFloat) {
+        container.layer?.zPosition = stackOrder
         restingFrame = outerRect(cardOrigin: origin)
         container.frame = restingFrame
         layoutCardInContainer()

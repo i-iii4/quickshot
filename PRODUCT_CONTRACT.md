@@ -195,7 +195,10 @@ fullscreen behavior remain explicit runtime release checks.
    is hidden because of a lack of space.
 2. Cards past either edge collect into a stack with a shrinking step, fading
    and scaling instead of disappearing: the stack is the signal that more
-   exists.
+   exists. Depth owns the draw order — a deeper layer is always behind — and
+   the stack fits inside the viewport: the near edge tucks behind the hub, the
+   far edge reserves a band, because there the screen edge would simply cut the
+   layers into translucent stubs.
 3. The default position shows the newest screenshots; a new capture returns to
    that position.
 4. A continued pull past an edge collapses the tray. The threshold is measured

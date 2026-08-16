@@ -20,6 +20,8 @@ struct TrayScrollLayoutTests {
         shortStripIsUnaffected()
         edgesKeepCardsOnScreen()
         stackDepthReachesSlots()
+        trailingStackStaysOnScreen()
+        deeperLayersGoBehind()
         print("TrayScrollLayoutTests: passed")
     }
 
@@ -143,6 +145,45 @@ struct TrayScrollLayoutTests {
         let ordinary = result.visible.filter { $0.opacity >= 0.999 }
         expect(ordinary.allSatisfy { $0.scale >= 0.999 },
                "обычные карточки не должны масштабироваться")
+    }
+
+    /// Дальняя стопка не имеет за чем прятаться: у ближнего края её закрывает
+    /// хаб, а у дальнего — край экрана, который просто срезает слои. Стопка
+    /// обязана целиком помещаться в окно просмотра.
+    private static func trailingStackStaysOnScreen() {
+        let heights = Array(repeating: CGFloat(200), count: 14)
+        // Смещение к началу ленты: за дальним краем оказываются новые карточки.
+        let result = layout(heights: heights, offset: 0)
+        for slot in result.visible {
+            let top = slot.origin.y + heights[slot.index]
+            expect(top <= screen.maxY - margin + 0.5,
+                   "карточка \(slot.index) уходит за верхний край: \(top) при пределе \(screen.maxY - margin)")
+        }
+    }
+
+    /// Слой стопки лежит ЗА карточками ленты: иначе самый прозрачный слой
+    /// рисуется поверх остальных и стопка превращается в мешанину.
+    private static func deeperLayersGoBehind() {
+        let heights = Array(repeating: CGFloat(200), count: 14)
+        let result = layout(heights: heights, offset: 0)
+        let stacked = result.visible.filter { $0.opacity < 0.999 }
+        expect(!stacked.isEmpty, "в ленте нет ни одного слоя стопки")
+        for slot in stacked {
+            expect(slot.stackOrder < 0,
+                   "слой стопки \(slot.index) не уведён за ленту: \(slot.stackOrder)")
+        }
+        for front in result.visible where front.opacity > 0.999 {
+            for behind in stacked {
+                expect(behind.stackOrder < front.stackOrder,
+                       "слой \(behind.index) не за карточкой \(front.index)")
+            }
+        }
+        // Внутри стопки порядок монотонен: тусклее — дальше.
+        let sorted = stacked.sorted { $0.opacity < $1.opacity }
+        for (dim, bright) in zip(sorted, sorted.dropFirst()) {
+            expect(dim.stackOrder <= bright.stackOrder,
+                   "порядок в стопке нарушен: \(dim.index) поверх \(bright.index)")
+        }
     }
 
     private static func layout(heights: [CGFloat], offset: CGFloat) -> ThumbnailLayoutResult {

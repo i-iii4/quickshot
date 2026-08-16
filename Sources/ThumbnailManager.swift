@@ -858,7 +858,10 @@ final class ThumbnailManager {
         for (item, slot) in visible {
             let localOrigin = toLocal(slot.origin)
             if slot.opacity < 0.999 || slot.scale < 0.999 {
-                item.placeScrolled(origin: localOrigin, opacity: slot.opacity, scale: slot.scale)
+                item.placeScrolled(origin: localOrigin,
+                                   opacity: slot.opacity,
+                                   scale: slot.scale,
+                                   stackOrder: slot.stackOrder)
             } else {
                 item.placeInstant(origin: localOrigin)
             }
@@ -873,9 +876,16 @@ final class ThumbnailManager {
         let pointer = toLocal(NSEvent.mouseLocation)
         // Порядок массива — порядок наложения: побеждает последняя подходящая
         // карточка, она лежит поверх остальных.
+        // Побеждает передняя карточка: в стопке слои перекрываются, и владельцем
+        // ховера обязан быть верхний слой, а не последний по порядку массива.
         var hovered: ThumbnailWindow?
+        var hoveredOrder = -CGFloat.greatestFiniteMagnitude
         for item in items where !item.hostView.isHidden {
-            if item.layoutFrame.contains(pointer) { hovered = item }
+            guard item.layoutFrame.contains(pointer) else { continue }
+            if item.stackOrder >= hoveredOrder {
+                hoveredOrder = item.stackOrder
+                hovered = item
+            }
         }
         for item in items { item.applyHover(item === hovered) }
     }
@@ -1261,7 +1271,8 @@ final class ThumbnailManager {
                 if slot.opacity < 0.999 || slot.scale < 0.999 {
                     item.placeScrolled(origin: localOrigin,
                                        opacity: slot.opacity,
-                                       scale: slot.scale)
+                                       scale: slot.scale,
+                                       stackOrder: slot.stackOrder)
                 } else {
                     item.placeInstant(origin: localOrigin)
                 }

@@ -86,6 +86,9 @@ struct TrayCardPlacement: Equatable {
     var opacity: CGFloat
     /// Масштаб: та же глубина отражается размером.
     var scale: CGFloat
+    /// Глубина в стопке: 0 — карточка в ленте, дальше — слои стопки. Задаёт и
+    /// порядок наложения: чем глубже, тем дальше от зрителя.
+    var depth: CGFloat = 0
 }
 
 /// Раскладка ленты: карточки за краем не исчезают, а собираются в стопку с
@@ -114,6 +117,12 @@ enum TrayStackLayout {
         return placements
     }
 
+    /// Полоса, зарезервированная под дальнюю стопку внутри окна просмотра.
+    /// Ближняя стопка растёт наружу и прячется за хабом; у дальнего края
+    /// прятаться не за что — там край экрана, и стопка, растущая наружу,
+    /// срезалась им, оставляя обрубки полупрозрачных слоёв.
+    static var trailingReserve: CGFloat { CGFloat(stackDepth) * stackStep }
+
     private static func placement(rawPosition: CGFloat,
                                   length: CGFloat,
                                   viewportLength: CGFloat) -> TrayCardPlacement {
@@ -121,20 +130,35 @@ enum TrayStackLayout {
             // Карточка ушла за начало: собираем в стопку у края.
             let depth = min(CGFloat(stackDepth), -rawPosition / max(1, length))
             let position = -depth * stackStep
-            let fade = depth / CGFloat(stackDepth)
             return TrayCardPlacement(position: position,
-                                     opacity: max(0.25, 1 - fade * 0.75),
-                                     scale: max(0.88, 1 - fade * 0.12))
+                                     opacity: fadedOpacity(depth: depth),
+                                     scale: fadedScale(depth: depth),
+                                     depth: depth)
         }
-        let trailing = rawPosition + length - viewportLength
+        let usable = max(1, viewportLength - trailingReserve)
+        let trailing = rawPosition + length - usable
         if trailing > 0 {
             let depth = min(CGFloat(stackDepth), trailing / max(1, length))
-            let position = viewportLength - length + depth * stackStep
-            let fade = depth / CGFloat(stackDepth)
+            // Шаг растёт наружу, но стартует внутри зарезервированной полосы:
+            // самый глубокий слой ложится ровно на край окна просмотра.
+            let position = usable - length + depth * stackStep
             return TrayCardPlacement(position: position,
-                                     opacity: max(0.25, 1 - fade * 0.75),
-                                     scale: max(0.88, 1 - fade * 0.12))
+                                     opacity: fadedOpacity(depth: depth),
+                                     scale: fadedScale(depth: depth),
+                                     depth: depth)
         }
-        return TrayCardPlacement(position: rawPosition, opacity: 1, scale: 1)
+        return TrayCardPlacement(position: rawPosition, opacity: 1, scale: 1, depth: 0)
+    }
+
+    /// Слои стопки обязаны различаться: три ступени прозрачности вместо
+    /// плавного ухода в ноль, где несколько карточек выглядят одинаково.
+    private static func fadedOpacity(depth: CGFloat) -> CGFloat {
+        let fade = min(1, depth / CGFloat(stackDepth))
+        return max(0.3, 1 - fade * 0.7)
+    }
+
+    private static func fadedScale(depth: CGFloat) -> CGFloat {
+        let fade = min(1, depth / CGFloat(stackDepth))
+        return max(0.88, 1 - fade * 0.12)
     }
 }
