@@ -80,6 +80,10 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     private var sourceForDisplay: CGImage
     private var displayedContentsWidth = 0
 
+    /// Вью показывает полосу стопки: контролы позиционируются в её видимой
+    /// нижней части, а не у срезанного верха.
+    private var sliceLayout = false
+
     private var startMouse: NSPoint = .zero
     private var movedFar = false
     private var activeDragPayload: CaptureArtifactDragPayload?
@@ -108,7 +112,9 @@ private final class ThumbnailView: NSView, NSDraggingSource {
 
     }
 
-    /// Контролы карточки по требованию.
+    /// Контролы карточки по требованию. Раскладываются отдельным методом:
+    /// полный `layoutContents` здесь ломал бы срез полосы стопки, сбрасывая
+    /// геометрию изображения при первом ховере.
     @discardableResult
     private func makeControlsIfNeeded() -> NativeThumbnailControlsView {
         if let controls { return controls }
@@ -124,7 +130,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         view.isHidden = true
         addSubview(view)
         controls = view
-        layoutContents()
+        layoutControls()
         return view
     }
 
@@ -160,6 +166,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
 
     /// Раскладка внутренних элементов по текущему `bounds` (frame вью ставит обёртка).
     func layoutContents() {
+        sliceLayout = false
         displayView.frame = bounds
         layer?.cornerRadius = QS.radiusCard
         layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner,
@@ -167,10 +174,16 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         displayView.layer?.cornerRadius = 0
         displayView.layer?.masksToBounds = false
         updateDisplayImage()
+        layoutControls()
+    }
+
+    /// Позиция контролов: у полной карточки — верхний край; у полосы стопки
+    /// верх срезан соседкой, и контролы живут у нижнего, гарантированно
+    /// видимого края её выступа.
+    private func layoutControls() {
         guard let controls else { return }
         let inset = QS.s2
         let rowH = ceil(controls.fittingSize.height)
-        let rowY = bounds.height - inset - rowH
         let availableWidth = max(rowH, bounds.width - inset * 2)
 
         controls.setCompact(false)
@@ -178,6 +191,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         controls.setCompact(fullGroupWidth > availableWidth)
 
         let groupWidth = min(availableWidth, ceil(controls.fittingSize.width))
+        let rowY = sliceLayout ? inset : bounds.height - inset - rowH
         controls.frame = NSRect(x: inset, y: rowY, width: groupWidth, height: rowH)
     }
 
@@ -209,7 +223,8 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         displayView.layer?.cornerRadius = cornerRadius
         displayView.layer?.masksToBounds = true
         updateDisplayImage()
-        controls?.isHidden = true
+        sliceLayout = true
+        layoutControls()
     }
 
     /// Картинка вью под текущий размер карточки: выигрыш памяти остаётся —

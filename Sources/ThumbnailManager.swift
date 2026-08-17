@@ -908,16 +908,40 @@ final class ThumbnailManager {
         // ховера обязан быть верхний слой, а не последний по порядку массива.
         var hovered: ThumbnailWindow?
         var hoveredOrder = -CGFloat.greatestFiniteMagnitude
-        // Кромка стопки — не карточка: ховер и контролы положены только
-        // развёрнутым карточкам, иначе кнопки всплывают на полосе в 7pt.
-        for item in items where !item.hostView.isHidden && !item.isSliceBand {
+        // Ховер положен и перекрытым карточкам — по их видимой части:
+        // побеждает верхняя в точке курсора.
+        for item in items where !item.hostView.isHidden {
             guard item.layoutFrame.contains(pointer) else { continue }
             if item.stackOrder >= hoveredOrder {
                 hoveredOrder = item.stackOrder
                 hovered = item
             }
         }
+        // Крошечный видимый выступ (тоньше ряда кнопок) ховер не получает:
+        // кнопкам физически негде встать.
+        if let candidate = hovered, candidate.isSliceBand,
+           visibleProtrusion(of: candidate) < Self.hoverableProtrusion {
+            hovered = nil
+        }
         for item in items { item.applyHover(item === hovered) }
+    }
+
+    /// Минимальная видимая часть карточки, на которой ховер осмыслен: ряд
+    /// кнопок с отступами.
+    private static let hoverableProtrusion: CGFloat = 44
+
+    /// Видимый выступ полосы: до ближайшего края вышележащей пересекающейся
+    /// карточки со стороны кнопки хаба.
+    private func visibleProtrusion(of candidate: ThumbnailWindow) -> CGFloat {
+        let frame = candidate.layoutFrame
+        let vertical = TrayPosition.current.isVertical
+        var limit = vertical ? frame.maxY : frame.maxX
+        for item in items where !item.hostView.isHidden && item !== candidate {
+            guard item.stackOrder > candidate.stackOrder,
+                  item.layoutFrame.intersects(frame) else { continue }
+            limit = min(limit, vertical ? item.layoutFrame.minY : item.layoutFrame.minX)
+        }
+        return limit - (vertical ? frame.minY : frame.minX)
     }
 
     private func shiftViewport(by delta: Int) {
