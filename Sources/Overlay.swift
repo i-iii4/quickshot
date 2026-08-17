@@ -487,6 +487,51 @@ final class OverlayController {
         dismiss()
     }
 
+    /// Окна одного экрана: подложка-заморозка и хром выделения.
+    @discardableResult
+    private func appendScreen(_ screen: NSScreen,
+                              backdrops: [CGDirectDisplayID: CGImage]) -> (OverlayWindow, OverlayWindow)? {
+        let displayID = CGDirectDisplayID(
+            (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
+        guard let backdrop = backdrops[displayID] else {
+            Self.log.error("overlay missing frozen backdrop display=\(displayID, privacy: .public)")
+            return nil
+        }
+
+        let bounds = NSRect(origin: .zero, size: screen.frame.size)
+
+        let backdropView = BackdropView(image: backdrop)
+        backdropView.frame = bounds
+        backdropView.autoresizingMask = [.width, .height]
+
+        let backdropWindow = makeWindow(for: screen,
+                                        level: CaptureWindowLevels.backdrop,
+                                        receivesPointer: false)
+        backdropWindow.contentView = backdropView
+        backdropWindow.displayIfNeeded()
+        backdropWindows.append(backdropWindow)
+
+        let chrome = SelectionView(frame: bounds)
+        chrome.autoresizingMask = [.width, .height]
+        chrome.screenRef = screen
+        chrome.onComplete = { [weak self] rect, scr in self?.completeOnce(rect, scr) }
+        chrome.onCancel = { [weak self] in self?.onCancel?() }
+        chrome.onPointerActivity = { [weak self, weak chrome] in
+            guard let chrome else { return }
+            self?.activateCrosshair(chrome)
+        }
+        selectionViews.append(chrome)
+
+        let chromeWindow = makeWindow(for: screen,
+                                      level: CaptureWindowLevels.selectionChrome,
+                                      receivesPointer: true)
+        chromeWindow.contentView = chrome
+        chromeWindow.displayIfNeeded()
+        windows.append(chromeWindow)
+        return (backdropWindow, chromeWindow)
+    }
+
+
     func beginFrozenSelection(screens: [NSScreen],
                               backdrops: [CGDirectDisplayID: CGImage],
                               pendingGesture: @escaping () -> CaptureGestureResolution,
@@ -570,81 +615,6 @@ final class OverlayController {
         )
     }
 
-    /// Окна одного экрана: подложка-заморозка и хром выделения.
-    @discardableResult
-    private func appendScreen(_ screen: NSScreen,
-                              backdrops: [CGDirectDisplayID: CGImage]) -> (OverlayWindow, OverlayWindow)? {
-        let displayID = CGDirectDisplayID(
-            (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
-        guard let backdrop = backdrops[displayID] else {
-            Self.log.error("overlay missing frozen backdrop display=\(displayID, privacy: .public)")
-            return nil
-        }
-
-        let bounds = NSRect(origin: .zero, size: screen.frame.size)
-
-        let backdropView = BackdropView(image: backdrop)
-        backdropView.frame = bounds
-        backdropView.autoresizingMask = [.width, .height]
-
-        let backdropWindow = makeWindow(for: screen,
-                                        level: CaptureWindowLevels.backdrop,
-                                        receivesPointer: false)
-        backdropWindow.contentView = backdropView
-        backdropWindow.displayIfNeeded()
-        backdropWindows.append(backdropWindow)
-
-        let chrome = SelectionView(frame: bounds)
-        chrome.autoresizingMask = [.width, .height]
-        chrome.screenRef = screen
-        chrome.onComplete = { [weak self] rect, scr in self?.completeOnce(rect, scr) }
-        chrome.onCancel = { [weak self] in self?.onCancel?() }
-        chrome.onPointerActivity = { [weak self, weak chrome] in
-            guard let chrome else { return }
-            self?.activateCrosshair(chrome)
-        }
-        selectionViews.append(chrome)
-
-        let chromeWindow = makeWindow(for: screen,
-                                      level: CaptureWindowLevels.selectionChrome,
-                                      receivesPointer: true)
-        chromeWindow.contentView = chrome
-        chromeWindow.displayIfNeeded()
-        windows.append(chromeWindow)
-        return (backdropWindow, chromeWindow)
-    }
-
-    /// Достроить окна для дисплеев, чьи кадры доехали после показа: экран с
-    /// курсором замораживается и показывается первым, остальные — по мере
-    /// готовности, не задерживая реакцию на хоткей.
-    func addFrozenScreens(screens: [NSScreen],
-                          backdrops: [CGDirectDisplayID: CGImage]) {
-        guard !isDismissed else { return }
-        var appended: [(OverlayWindow, OverlayWindow)] = []
-        for screen in screens {
-            if let pair = appendScreen(screen, backdrops: backdrops) {
-                appended.append(pair)
-            }
-        }
-        guard !appended.isEmpty else { return }
-        for (backdropWindow, _) in appended { backdropWindow.orderFrontRegardless() }
-        for (_, chromeWindow) in appended { chromeWindow.orderFrontRegardless() }
-        if isPresented {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0
-                context.allowsImplicitAnimation = false
-                for (backdropWindow, chromeWindow) in appended {
-                    backdropWindow.alphaValue = 1
-                    backdropWindow.displayIfNeeded()
-                    chromeWindow.ignoresMouseEvents = false
-                    chromeWindow.alphaValue = 1
-                    chromeWindow.displayIfNeeded()
-                }
-            }
-        }
-        Self.log.info("overlay extended screens=\(appended.count, privacy: .public)")
-    }
-
     private func makeWindow(for screen: NSScreen,
                             level: NSWindow.Level,
                             receivesPointer: Bool) -> OverlayWindow {
@@ -723,6 +693,38 @@ final class OverlayController {
         Self.log.info("overlay activation completed")
         onReady()
     }
+
+    /// Достроить окна для дисплеев, чьи кадры доехали после показа: экран с
+    /// курсором замораживается и показывается первым, остальные — по мере
+    /// готовности, не задерживая реакцию на хоткей.
+    func addFrozenScreens(screens: [NSScreen],
+                          backdrops: [CGDirectDisplayID: CGImage]) {
+        guard !isDismissed else { return }
+        var appended: [(OverlayWindow, OverlayWindow)] = []
+        for screen in screens {
+            if let pair = appendScreen(screen, backdrops: backdrops) {
+                appended.append(pair)
+            }
+        }
+        guard !appended.isEmpty else { return }
+        for (backdropWindow, _) in appended { backdropWindow.orderFrontRegardless() }
+        for (_, chromeWindow) in appended { chromeWindow.orderFrontRegardless() }
+        if isPresented {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0
+                context.allowsImplicitAnimation = false
+                for (backdropWindow, chromeWindow) in appended {
+                    backdropWindow.alphaValue = 1
+                    backdropWindow.displayIfNeeded()
+                    chromeWindow.ignoresMouseEvents = false
+                    chromeWindow.alphaValue = 1
+                    chromeWindow.displayIfNeeded()
+                }
+            }
+        }
+        Self.log.info("overlay extended screens=\(appended.count, privacy: .public)")
+    }
+
 
     private static func activationRestore(for source: NSRunningApplication?) -> () -> Void {
         let quickShotPID = ProcessInfo.processInfo.processIdentifier

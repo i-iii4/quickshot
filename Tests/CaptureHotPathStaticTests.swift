@@ -71,14 +71,29 @@ struct CaptureHotPathStaticTests {
         try require(!start.contains("beginOverlay"),
                     "CaptureSession.start must not expose UI before pixels are ready")
 
-        let completed = try functionBody(named: "snapshotCompleted", in: capture,
-                                         after: "private final class CaptureSession")
-        try require(completed.contains("batch.sessionID == id"),
-                    "Snapshot completion must verify session ownership")
-        try require(completed.contains("expectedIDs == receivedIDs"),
-                    "Snapshot completion must reject partial display batches")
-        try require(completed.contains("beginOverlay(backdrops:"),
-                    "Frozen overlay must start only from a complete snapshot batch")
+        // Заморозка двухфазная: экран с курсором показывается сразу, остальные
+        // дисплеи доезжают в живой оверлей — реакция на хоткей не ждёт съёмки
+        // всех дисплеев (под нагрузкой это сотни миллисекунд на каждый, и
+        // повторные нажатия тихо игнорировались как «через раз»).
+        let primary = try functionBody(named: "primarySnapshotCompleted", in: capture,
+                                       after: "private final class CaptureSession")
+        try require(primary.contains("batch.sessionID == id"),
+                    "Primary snapshot completion must verify session ownership")
+        try require(primary.contains("beginOverlay(backdrops:"),
+                    "Frozen overlay must start from the cursor display frame")
+        let rest = try functionBody(named: "restSnapshotCompleted", in: capture,
+                                    after: "private final class CaptureSession")
+        try require(rest.contains("batch.sessionID == id"),
+                    "Rest snapshot completion must verify session ownership")
+        try require(rest.contains("completeBufferedGestureIfNeeded"),
+                    "A gesture finished on a late display must complete on its frame")
+        try require(rest.contains("addFrozenScreens"),
+                    "Late display frames must join the live overlay")
+        let buffered = try functionBody(named: "completeBufferedGestureIfNeeded",
+                                        in: capture,
+                                        after: "private final class CaptureSession")
+        try require(buffered.contains("frozen[Self.displayID(of: screen)] != nil"),
+                    "A buffered gesture must wait for its display frame, not fail")
 
         let beginOverlay = try functionBody(named: "beginOverlay", in: capture,
                                             after: "private final class CaptureSession")
@@ -313,7 +328,8 @@ struct CaptureHotPathStaticTests {
 
     private static func testObservableTimingAndDelivery(capture: String,
                                                         artifact: String) throws {
-        for token in ["capture direct snapshot pending", "capture frozen ready",
+        for token in ["capture direct snapshot pending", "capture frozen primary ready",
+                      "capture frozen rest ready",
                       "capture overlay ready", "mouseUpToCardMs", "capture end outcome="] {
             try require(capture.contains(token), "Missing capture timing token: \(token)")
         }
