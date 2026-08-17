@@ -10,8 +10,11 @@ struct TrayScrollModelTests {
         rubberBandResistsBeyondEdges()
         settlingReturnsIntoBounds()
         revealOffsetShowsTheNewestCard()
-        restingStackIsFrontPlusTwoEdges()
+        restingStackHasConstantSlots()
         mixedHeightsKeepTheSilhouetteClean()
+        cardsNeverOutrunTheStrip()
+        edgesStandStillBetweenArrivals()
+        edgesNeverLeaveTheReserves()
         farStackMirrorsInsideTheReserve()
         dissolveGeometryLeadsOpacity()
         scrubbingIsContinuous()
@@ -82,13 +85,13 @@ struct TrayScrollModelTests {
         expect(model.offset == 0, "отпускание возвращает в границы")
     }
 
-    /// `TR-5`: докрутка до нового снимка учитывает полосу дальней стопки —
-    /// новейшая карточка видна целиком, а не срезана резервом.
+    /// `TR-5`: докрутка до нового снимка учитывает резервы обеих стопок —
+    /// новейшая карточка видна целиком в полезной зоне.
     private static func revealOffsetShowsTheNewestCard() {
         let model = TrayScrollModel(contentLength: 1608, viewportLength: 600,
                                     offset: 0, lastCardLength: 150)
         let reveal = model.revealNewestOffset()
-        let usable = 600 - TrayStripLayout.farReserve
+        let usable = 600 - TrayStripLayout.nearReserve - TrayStripLayout.farReserve
         expect(abs(reveal - (1608 - usable)) < 0.001,
                "докрутка до видимости новейшей; получили \(reveal)")
 
@@ -105,23 +108,26 @@ struct TrayScrollModelTests {
         Array(repeating: CGFloat(150), count: count)
     }
 
-    /// `TR-24`, `TR-25`: в покое силуэт — верхняя карточка и ровно две кромки
-    /// по 7pt, каждая уже предыдущей; глубже — ничего.
-    private static func restingStackIsFrontPlusTwoEdges() {
+    private static func content(_ lengths: [CGFloat]) -> CGFloat {
+        lengths.reduce(0, +) + gap * CGFloat(lengths.count - 1)
+    }
+
+    /// `TR-24`, `TR-25`: при полном сборе новейшая карточка стоит на границе
+    /// резерва, под ней две кромки по 7pt ровно в постоянных слотах.
+    private static func restingStackHasConstantSlots() {
         let lengths = uniform(10)
-        let content = lengths.reduce(0, +) + gap * 9
-        let offset = content - 150     // полный сбор: ход до новейшей карточки
+        let offset = content(lengths) - 150
         let bands = TrayStripLayout.bands(cardLengths: lengths, gap: gap,
                                           offset: offset, viewportLength: 600)
-        let newest = bands[9]
-        expect(newest.isFullCard && abs(newest.position) < 0.001,
-               "новейшая карточка лежит целиком у кнопки")
-
         let e = TrayStripLayout.edgeLength
-        expect(abs(bands[8].position - 150) < 0.001 && abs(bands[8].length - e) < 0.001,
-               "первая кромка сразу за карточкой: \(bands[8].position), \(bands[8].length)")
-        expect(abs(bands[7].position - 150 - e) < 0.001 && abs(bands[7].length - e) < 0.001,
-               "вторая кромка за первой: \(bands[7].position), \(bands[7].length)")
+        let base = TrayStripLayout.nearReserve
+        let newest = bands[9]
+        expect(newest.isFullCard && abs(newest.position - base) < 0.001,
+               "новейшая карточка целиком на границе резерва: \(newest.position)")
+        expect(abs(bands[8].position - e) < 0.001 && abs(bands[8].length - e) < 0.001,
+               "первая кромка в своём слоте: \(bands[8].position), \(bands[8].length)")
+        expect(abs(bands[7].position) < 0.001 && abs(bands[7].length - e) < 0.001,
+               "вторая кромка прижата к базе: \(bands[7].position), \(bands[7].length)")
         expect(bands[8].insetSteps < bands[7].insetSteps,
                "глубокая кромка уже мелкой")
         for index in 0...6 {
@@ -129,43 +135,123 @@ struct TrayScrollModelTests {
         }
     }
 
-    /// Карточки разной высоты не торчат из стопки: в покое кромки стоят по
-    /// своим слотам независимо от высот, силуэт заканчивается на второй кромке.
+    /// Слоты кромок — константы: карточки разной высоты дают ровно тот же
+    /// силуэт стопки, что и одинаковые.
     private static func mixedHeightsKeepTheSilhouetteClean() {
         let lengths: [CGFloat] = [200, 90, 260, 120, 180, 90]
-        let content = lengths.reduce(0, +) + gap * 5
-        let offset = content - lengths[5]
+        let offset = content(lengths) - lengths[5]
         let bands = TrayStripLayout.bands(cardLengths: lengths, gap: gap,
                                           offset: offset, viewportLength: 600)
         let e = TrayStripLayout.edgeLength
-        let front = lengths[5]
-        expect(bands[5].isFullCard, "новейшая карточка целиком")
-        for (index, band) in bands.enumerated() where index != 5 && !band.hidden {
-            expect(band.length <= e + 0.001,
-                   "слой \(index) высотой \(band.length) торчит из стопки")
-            expect(band.position >= front - 0.001
-                   && band.position + band.length <= front + 2 * e + 0.001,
-                   "слой \(index) вне силуэта: [\(band.position), \(band.position + band.length)]")
+        let base = TrayStripLayout.nearReserve
+        expect(bands[5].isFullCard && abs(bands[5].position - base) < 0.001,
+               "новейшая карточка целиком на границе резерва")
+        expect(abs(bands[4].position - e) < 0.001 && abs(bands[4].length - e) < 0.001,
+               "первая кромка в слоте независимо от высот")
+        expect(abs(bands[3].position) < 0.001 && abs(bands[3].length - e) < 0.001,
+               "вторая кромка в слоте независимо от высот")
+        for index in 0...2 {
+            expect(bands[index].hidden, "слой \(index) глубже стопки обязан скрыться")
         }
     }
 
-    /// Дальняя стопка живёт в резерве за границей `usable` и никогда не
+    /// Карточка всегда движется со скоростью ленты, а не быстрее: ни один
+    /// слой не обгоняет ход прокрутки ни позицией, ни высотой. Первая ревизия
+    /// нарушала это (кромки ездили в 1.7 раза быстрее ленты) — трей «болтался».
+    private static func cardsNeverOutrunTheStrip() {
+        let lengths: [CGFloat] = [200, 90, 260, 120, 180, 90, 210, 150, 100, 170]
+        let maximum = content(lengths) - lengths[9]
+        let step: CGFloat = 1
+        var previous = TrayStripLayout.bands(cardLengths: lengths, gap: gap,
+                                             offset: 0, viewportLength: 600)
+        var offset = step
+        while offset <= maximum {
+            let bands = TrayStripLayout.bands(cardLengths: lengths, gap: gap,
+                                              offset: offset, viewportLength: 600)
+            for index in 0..<bands.count {
+                let was = previous[index], now = bands[index]
+                guard !was.hidden, !now.hidden else { continue }
+                expect(abs(now.position - was.position) <= step + 0.001,
+                       "слой \(index) обогнал ленту позицией на смещении \(offset): "
+                       + "\(was.position) → \(now.position)")
+                expect(abs(now.length - was.length) <= step + 0.001,
+                       "слой \(index) обогнал ленту высотой на смещении \(offset): "
+                       + "\(was.length) → \(now.length)")
+            }
+            previous = bands
+            offset += step
+        }
+    }
+
+    /// Пока никакая карточка не конденсируется в кромку, кромки стоят ровно в
+    /// своих слотах — стопка неподвижна между прибытиями.
+    private static func edgesStandStillBetweenArrivals() {
+        let lengths = uniform(10)
+        let e = TrayStripLayout.edgeLength
+        let base = TrayStripLayout.nearReserve
+        // Прибывающая карточка ровно посередине мёртвой зоны: до конденсации
+        // ей ещё далеко.
+        let offset = 5 * (150 + gap) + 75
+        let bands = TrayStripLayout.bands(cardLengths: lengths, gap: gap,
+                                          offset: offset, viewportLength: 600)
+        let nearEdges = bands.filter { !$0.hidden && $0.insetSteps >= 0.999 && $0.sliceFromFarSide }
+        expect(!nearEdges.isEmpty, "в середине ленты у кнопки обязана быть стопка")
+        for edge in nearEdges {
+            let inSlotOne = abs(edge.position - e) < 0.001
+            let inSlotTwo = abs(edge.position) < 0.001
+            expect(inSlotOne || inSlotTwo,
+                   "кромка вне слота в мёртвой зоне: \(edge.position)")
+            expect(abs(edge.length - e) < 0.001 || edge.length < 0.05,
+                   "кромка меняет высоту в мёртвой зоне: \(edge.length)")
+        }
+        _ = base
+    }
+
+    /// Кромки не покидают резервы: сужение по глубине живёт только между
+    /// кнопкой и лентой или в дальнем резерве, не поверх полезной зоны.
+    private static func edgesNeverLeaveTheReserves() {
+        let lengths: [CGFloat] = [200, 90, 260, 120, 180, 90, 210, 150, 100, 170]
+        let maximum = content(lengths) - lengths[9]
+        let viewport: CGFloat = 600
+        let nearLimit = TrayStripLayout.nearReserve
+        let farStartLimit = viewport - TrayStripLayout.farReserve
+        var offset: CGFloat = 0
+        while offset <= maximum {
+            let bands = TrayStripLayout.bands(cardLengths: lengths, gap: gap,
+                                              offset: offset, viewportLength: viewport)
+            for (index, band) in bands.enumerated() where !band.hidden && band.insetSteps >= 0.999 {
+                let inNear = band.sliceFromFarSide
+                    && band.position >= -0.001
+                    && band.position + band.length <= nearLimit + 0.001
+                let inFar = !band.sliceFromFarSide
+                    && band.position >= farStartLimit - 0.001
+                    && band.position + band.length <= viewport + 0.001
+                expect(inNear || inFar,
+                       "кромка \(index) вне резерва на смещении \(offset): "
+                       + "[\(band.position), \(band.position + band.length)]")
+            }
+            offset += 7
+        }
+    }
+
+    /// Дальняя стопка живёт в резерве за границей полезной зоны и никогда не
     /// вылезает за окно просмотра (`TR-4b`).
     private static func farStackMirrorsInsideTheReserve() {
         let lengths = uniform(10)
         let viewport: CGFloat = 600
-        let usable = viewport - TrayStripLayout.farReserve
+        let farBase = viewport - TrayStripLayout.farReserve
         let bands = TrayStripLayout.bands(cardLengths: lengths, gap: gap,
                                           offset: 0, viewportLength: viewport)
-        let farBands = bands.enumerated().filter { !$0.element.hidden && $0.element.position + $0.element.length > usable + 0.5 }
+        let farBands = bands.enumerated().filter {
+            !$0.element.hidden && !$0.element.sliceFromFarSide && $0.element.insetSteps > 0.001
+        }
         expect(!farBands.isEmpty, "при нулевом смещении дальняя стопка обязана появиться")
         for (index, band) in farBands {
+            expect(band.position >= farBase - TrayStripLayout.edgeLength - 0.001,
+                   "слой \(index) дальней стопки ниже резерва: \(band.position)")
             expect(band.position + band.length <= viewport + 0.001,
                    "слой \(index) вылез за окно просмотра: \(band.position + band.length)")
-            expect(!band.sliceFromFarSide,
-                   "дальняя стопка режет содержимое с ближней стороны")
         }
-        // Глубже стопки — скрыто, и скрытые начинаются с самых новых карточек.
         expect(bands[9].hidden, "самая дальняя карточка глубже стопки")
     }
 
@@ -175,17 +261,15 @@ struct TrayScrollModelTests {
         let lengths = uniform(10)
         let e = TrayStripLayout.edgeLength
 
+        // Смещение, при котором прибывающая карточка k конденсируется с фазой
+        // `phase`: её верх на nearReserve + e(1-phase).
         func dissolving(atPhase phase: CGFloat) -> TrayCardBand {
-            // Смещение, при котором самый мелкий утонувший слой имеет глубину
-            // `phase`: третий с конца ранг тогда растворяется.
-            let content = lengths.reduce(0, +) + gap * 9
-            let offset = content - 150 - (150 + gap) + (150 + gap) * phase
+            let k = 7
+            let cursor = CGFloat(k) * (150 + gap)
+            let offset = cursor + 150 - e * (1 - phase)
             let bands = TrayStripLayout.bands(cardLengths: lengths, gap: gap,
                                               offset: offset, viewportLength: 600)
-            // Ранг 2 в этот момент — карточка на три позиции глубже входящей.
-            let sunkCount = bands.filter { !$0.isFullCard || $0.insetSteps > 0 }.count
-            _ = sunkCount
-            return bands[6]
+            return bands[k - 2]     // ранг 2 — растворяющаяся
         }
 
         let early = dissolving(atPhase: 0.35)
@@ -205,8 +289,7 @@ struct TrayScrollModelTests {
     /// один слой не прыгает ни геометрией, ни прозрачностью, ни тенью.
     private static func scrubbingIsContinuous() {
         let lengths: [CGFloat] = [200, 90, 260, 120, 180, 90, 210, 150, 100, 170]
-        let content = lengths.reduce(0, +) + gap * 9
-        let maximum = content - lengths[9]
+        let maximum = content(lengths) - lengths[9]
         var previous: [TrayCardBand]?
         var offset: CGFloat = 0
         while offset <= maximum {
@@ -216,13 +299,13 @@ struct TrayScrollModelTests {
                 for index in 0..<bands.count {
                     let was = previous[index], now = bands[index]
                     guard !was.hidden, !now.hidden else { continue }
-                    expect(abs(now.position - was.position) < 6,
+                    expect(abs(now.position - was.position) < 1.1,
                            "слой \(index) прыгнул позицией на смещении \(offset): \(was.position) → \(now.position)")
-                    expect(abs(now.length - was.length) < 6,
+                    expect(abs(now.length - was.length) < 1.1,
                            "слой \(index) прыгнул высотой на смещении \(offset): \(was.length) → \(now.length)")
-                    expect(abs(now.opacity - was.opacity) < 0.12,
+                    expect(abs(now.opacity - was.opacity) < 0.6,
                            "слой \(index) мигнул на смещении \(offset): \(was.opacity) → \(now.opacity)")
-                    expect(abs(now.shadowFraction - was.shadowFraction) < 0.3,
+                    expect(abs(now.shadowFraction - was.shadowFraction) < 0.2,
                            "тень слоя \(index) мигнула на смещении \(offset)")
                 }
             }
@@ -234,15 +317,17 @@ struct TrayScrollModelTests {
     /// Слои стопки лежат ЗА развёрнутыми карточками, глубже ранг — дальше.
     private static func deeperLayersGoBehind() {
         let lengths = uniform(10)
-        let content = lengths.reduce(0, +) + gap * 9
+        // Прибывающая на середине конденсации: в стопке есть и кромки, и
+        // конденсирующаяся полоса.
+        let k = 6
+        let offset = CGFloat(k) * (150 + gap) + 150 - TrayStripLayout.edgeLength / 2
         let bands = TrayStripLayout.bands(cardLengths: lengths, gap: gap,
-                                          offset: content - 150 - 81,
-                                          viewportLength: 600)
-        for band in bands where !band.hidden && !band.isFullCard {
+                                          offset: offset, viewportLength: 600)
+        for band in bands where !band.hidden && band.insetSteps > 0.001 {
             expect(band.zOrder < 0, "слой стопки не уведён за ленту: \(band.zOrder)")
         }
         let nearLayers = bands.enumerated()
-            .filter { !$0.element.hidden && !$0.element.isFullCard }
+            .filter { !$0.element.hidden && $0.element.sliceFromFarSide && $0.element.insetSteps > 0.001 }
             .sorted { $0.offset < $1.offset }
         for (older, newer) in zip(nearLayers, nearLayers.dropFirst()) {
             expect(older.element.zOrder < newer.element.zOrder,

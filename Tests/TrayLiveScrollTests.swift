@@ -217,7 +217,9 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
             failures.append("не нашёл зазора между карточками")
             return
         }
-        if fixture.cards.contains(where: { $0.debugCardFrame.contains(point) }) {
+        // Скрытые карточки сохраняют последний кадр где попало — точку зазора
+        // проверяем только против видимых.
+        if fixture.cards.contains(where: { !$0.hostView.isHidden && $0.debugCardFrame.contains(point) }) {
             failures.append("точка замера попала на карточку, а не в зазор")
             return
         }
@@ -519,18 +521,24 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
             return sampled > 0 ? Double(painted) / Double(sampled) : 0
         }
 
+        // Кромки лежат между кнопкой и карточкой: слоты — константы под её
+        // нижним краем.
         let e = TrayStripLayout.edgeLength
-        let first = paintedRatio(atY: frame.maxY + e * 0.5)
+        let first = paintedRatio(atY: frame.minY - e * 0.5)
         if first < 0.5 {
             failures.append("edges: первая кромка пуста после прохода отрисовки: \(first)")
         }
-        let second = paintedRatio(atY: frame.maxY + e * 1.5)
+        let second = paintedRatio(atY: frame.minY - e * 1.5)
         if second < 0.5 {
             failures.append("edges: вторая кромка пуста после прохода отрисовки: \(second)")
         }
-        let above = paintedRatio(atY: frame.maxY + e * 2 + 4)
+        let below = paintedRatio(atY: frame.minY - e * 2 - 4)
+        if below > 0.05 {
+            failures.append("edges: ниже второй кромки торчит содержимое: \(below)")
+        }
+        let above = paintedRatio(atY: frame.maxY + 4)
         if above > 0.05 {
-            failures.append("edges: выше второй кромки торчит содержимое: \(above)")
+            failures.append("edges: над собранной стопкой торчит содержимое: \(above)")
         }
     }
 

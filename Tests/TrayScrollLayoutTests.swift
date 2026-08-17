@@ -163,11 +163,12 @@ struct TrayScrollLayoutTests {
     }
 
     /// Слой стопки лежит ЗА карточками ленты: иначе кромка рисуется поверх
-    /// развёрнутых карточек и стопка превращается в мешанину.
+    /// развёрнутых карточек и стопка превращается в мешанину. Срез карточки у
+    /// границы — не слой стопки: он часть потока и живёт на нулевом уровне.
     private static func deeperLayersGoBehind() {
         let heights = Array(repeating: CGFloat(200), count: 14)
         let result = layout(heights: heights, offset: 0)
-        let stacked = result.visible.filter { !$0.isFullCard }
+        let stacked = result.visible.filter { $0.insetSteps > 0.001 }
         expect(!stacked.isEmpty, "в ленте нет ни одного слоя стопки")
         for slot in stacked {
             expect(slot.stackOrder < 0,
