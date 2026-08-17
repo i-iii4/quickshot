@@ -310,14 +310,20 @@ fullscreen behavior remain explicit runtime release checks.
    normal dismissal: frozen windows disappear first, then the system cursor
    returns. Leaving that to the session owner left the cursor suppressed until
    teardown, and the next capture started with a broken cursor.
-4. The hotkey reaction never waits for the full multi-display batch. The
-   display under the cursor is frozen and presented first; the remaining
-   displays are captured next and joined into the live overlay as their
-   frames arrive. Waiting for every display (hundreds of milliseconds each
-   under load) delayed the overlay long enough that users pressed the hotkey
-   again — and the repeat press was silently ignored because a session was
-   already active. That ignore is logged at error level so it survives in the
-   persistent log.
+4. The hotkey reaction never waits for ANY pixels. The selection overlay
+   (crosshair chrome on every display) appears immediately on trigger, over
+   the live screen; frames are captured in the background (cursor display
+   first) and slid under the chrome as they arrive. A selection finished
+   before its display frame arrives is stored and cropped when the frame
+   lands — the session never fails over a late frame. Rationale: the legacy
+   one-shot capture call has a cold-start latency of 1-2 seconds on a 5K
+   display (WindowServer capture channel spin-up, ~1.5 s TTL); waiting for
+   it made users press the hotkey again, and the repeat press was silently
+   ignored because a session was already active. That ignore is logged at
+   error level so it survives in the persistent log. Trade-off, accepted
+   deliberately: the first moments of selection run over the live screen, so
+   WYSIWYG is exact only once the frozen frame lands — the same tolerance
+   the cold path already imposed, minus the wait.
 
 ## UI Architecture
 

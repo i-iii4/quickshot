@@ -64,36 +64,37 @@ struct CaptureHotPathStaticTests {
     private static func testDirectSnapshotPrecedesOverlay(capture: String,
                                                           provider: String,
                                                           gestureBuffer: String) throws {
+        // Оверлей поднимается НЕМЕДЛЕННО, до единого пикселя: реакция на
+        // хоткей не зависит от холодного старта системного захвата (секунды
+        // на 5K). Кадры подкладываются в живой оверлей по прибытии; выделение,
+        // завершённое раньше кадра, ждёт его, не роняя сессию.
         let start = try functionBody(named: "start", in: capture,
                                      after: "private final class CaptureSession")
+        try require(start.contains("beginOverlay()"),
+                    "CaptureSession.start must expose the overlay before any pixels")
         try require(start.contains("startSnapshotTask(displays: displays)"),
-                    "CaptureSession must start pixels before constructing overlay")
-        try require(!start.contains("beginOverlay"),
-                    "CaptureSession.start must not expose UI before pixels are ready")
+                    "CaptureSession.start must begin capturing frames immediately")
 
-        // Заморозка двухфазная: экран с курсором показывается сразу, остальные
-        // дисплеи доезжают в живой оверлей — реакция на хоткей не ждёт съёмки
-        // всех дисплеев (под нагрузкой это сотни миллисекунд на каждый, и
-        // повторные нажатия тихо игнорировались как «через раз»).
         let primary = try functionBody(named: "primarySnapshotCompleted", in: capture,
                                        after: "private final class CaptureSession")
         try require(primary.contains("batch.sessionID == id"),
                     "Primary snapshot completion must verify session ownership")
-        try require(primary.contains("beginOverlay(backdrops:"),
-                    "Frozen overlay must start from the cursor display frame")
+        try require(primary.contains("addBackdrops"),
+                    "The cursor display frame must join the live overlay")
+        try require(primary.contains("resumePendingSelectionIfReady"),
+                    "A selection waiting for the cursor display frame must resume")
         let rest = try functionBody(named: "restSnapshotCompleted", in: capture,
                                     after: "private final class CaptureSession")
         try require(rest.contains("batch.sessionID == id"),
                     "Rest snapshot completion must verify session ownership")
-        try require(rest.contains("completeBufferedGestureIfNeeded"),
-                    "A gesture finished on a late display must complete on its frame")
-        try require(rest.contains("addFrozenScreens"),
+        try require(rest.contains("addBackdrops"),
                     "Late display frames must join the live overlay")
-        let buffered = try functionBody(named: "completeBufferedGestureIfNeeded",
-                                        in: capture,
-                                        after: "private final class CaptureSession")
-        try require(buffered.contains("frozen[Self.displayID(of: screen)] != nil"),
-                    "A buffered gesture must wait for its display frame, not fail")
+        try require(rest.contains("resumePendingSelectionIfReady"),
+                    "A selection waiting for a late display frame must resume")
+        let completed = try functionBody(named: "selectionCompleted", in: capture,
+                                         after: "private final class CaptureSession")
+        try require(completed.contains("pendingSelection = PendingSelection"),
+                    "A selection finished before its frame must wait, not fail the session")
 
         let beginOverlay = try functionBody(named: "beginOverlay", in: capture,
                                             after: "private final class CaptureSession")
@@ -183,7 +184,7 @@ struct CaptureHotPathStaticTests {
         try require(makeWindow.contains("window.alphaValue = 0")
                     && makeWindow.contains("window.ignoresMouseEvents = true"),
                     "Prepared windows must remain transparent and pointer-passive")
-        guard let prepareBackdrop = overlay.range(of: "let backdropWindow = makeWindow"),
+        guard let prepareChrome = overlay.range(of: "let chromeWindow = makeWindow"),
               let orderFront = overlay.range(of: "window.orderFrontRegardless()"),
               let beginOwnership = overlay.range(of: "presentation.begin("),
               let reveal = overlay.range(of: "window.alphaValue = 1"),
@@ -191,10 +192,16 @@ struct CaptureHotPathStaticTests {
               let finishOwnership = overlay.range(of: "presentation.finish") else {
             throw Failure("Cursor lifecycle markers are missing")
         }
-        try require(prepareBackdrop.lowerBound < orderFront.lowerBound
+        try require(prepareChrome.lowerBound < orderFront.lowerBound
                     && orderFront.lowerBound < beginOwnership.lowerBound
                     && beginOwnership.lowerBound < reveal.lowerBound,
                     "Transparent windows must request ownership before reveal")
+        // Подложки доезжают после показа: их показ обязан уважать состояние
+        // презентации, а не светить окно до захвата курсора.
+        let addBackdrops = try functionBody(named: "addBackdrops", in: overlay,
+                                            after: "final class OverlayController")
+        try require(addBackdrops.contains("if isPresented"),
+                    "Late backdrops must stay hidden until the overlay is presented")
         let present = try functionBody(named: "presentAfterOwnership", in: overlay,
                                        after: "final class OverlayController")
         try require(present.contains("for window in windows {\n                window.ignoresMouseEvents = false\n                window.alphaValue = 1"),

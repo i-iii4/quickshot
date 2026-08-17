@@ -262,6 +262,15 @@ private final class CaptureSession {
     private var phase: Phase = .snapshotting
     private var overlay: OverlayController?
     private var frozen: [CGDirectDisplayID: FrozenScreen] = [:]
+    /// Выделение, завершённое до прибытия кадра своего дисплея: кроп стартует,
+    /// как только кадр доедет.
+    private struct PendingSelection {
+        let rawSelection: NSRect
+        let selection: NSRect
+        let screen: NSScreen
+        let mouseUpAt: CFAbsoluteTime
+    }
+    private var pendingSelection: PendingSelection?
     private var screens: [NSScreen] = []
     private var snapshotTask: Task<Void, Never>?
     private var cropTask: Task<Void, Never>?
@@ -306,6 +315,12 @@ private final class CaptureSession {
         let displays = orderedScreens.map(Self.captureDisplay)
         let displayList = displays.map { String($0.id) }.joined(separator: ",")
         Self.log.info("capture direct snapshot pending displays=\(displayList, privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
+        // Оверлей поднимается НЕМЕДЛЕННО, до единого пикселя: реакция на
+        // хоткей не зависит от холодного старта системного захвата (1-2 с на
+        // 5K-дисплее). Выделение до прибытия кадра идёт по живому экрану;
+        // кроп дождётся кадра (`pendingSelection`).
+        phase = .selecting
+        beginOverlay()
         startSnapshotTask(displays: displays)
     }
 
@@ -354,16 +369,16 @@ private final class CaptureSession {
     }
 
     private func primarySnapshotCompleted(_ batch: FrozenSnapshotBatch) {
-        guard phase == .snapshotting, !didEnd else { return }
+        guard !didEnd else { return }
         guard batch.sessionID == id, let shot = batch.screens.first,
               batch.screens.count == 1 else {
             fail(CaptureError.snapshotUnavailable("Primary snapshot mismatch"))
             return
         }
         frozen[shot.displayID] = shot
-        phase = .selecting
-        if completeBufferedGestureIfNeeded() { return }
-        beginOverlay(backdrops: [shot.displayID: shot.image])
+        overlay?.addBackdrops([shot.displayID: shot.image])
+        resumePendingSelectionIfReady()
+        _ = completeBufferedGestureIfNeeded()
     }
 
     private func restSnapshotCompleted(_ batch: FrozenSnapshotBatch) {
@@ -377,17 +392,29 @@ private final class CaptureSession {
         for shot in batch.screens {
             frozen[shot.displayID] = shot
         }
-        guard phase == .selecting else { return }
-        // Жест мог завершиться на дисплее, чей кадр только что доехал.
-        if completeBufferedGestureIfNeeded() { return }
-        let frozenIDs = Set(frozen.keys)
-        let lateScreens = screens.filter { screen in
-            frozenIDs.contains(Self.displayID(of: screen))
-                && batch.screens.contains { $0.displayID == Self.displayID(of: screen) }
-        }
-        overlay?.addFrozenScreens(screens: lateScreens,
-                                  backdrops: Dictionary(uniqueKeysWithValues:
-                                      batch.screens.map { ($0.displayID, $0.image) }))
+        overlay?.addBackdrops(Dictionary(uniqueKeysWithValues:
+            batch.screens.map { ($0.displayID, $0.image) }))
+        resumePendingSelectionIfReady()
+        _ = completeBufferedGestureIfNeeded()
+    }
+
+    /// Выделение, завершённое до прибытия кадра своего дисплея, кропается,
+    /// как только кадр доехал. Пользователь к этому моменту уже отпустил
+    /// мышь и продолжил работать — задержка живёт только у карточки.
+    private func resumePendingSelectionIfReady() {
+        guard let pending = pendingSelection, !didEnd else { return }
+        let displayID = Self.displayID(of: pending.screen)
+        guard let shot = frozen[displayID] else { return }
+        pendingSelection = nil
+        momentQuality = captureMomentQuality(rawSelection: pending.rawSelection,
+                                             screens: Array(frozen.values),
+                                             budget: Self.displaySkewBudget)
+        Self.log.info("capture pending selection resumed display=\(displayID, privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
+        frozen.removeAll()
+        startCropTask(shot: shot,
+                      selection: pending.selection,
+                      deliveryDisplayID: displayID,
+                      mouseUpAt: pending.mouseUpAt)
     }
 
     private func completeBufferedGestureIfNeeded() -> Bool {
@@ -398,9 +425,6 @@ private final class CaptureSession {
                 fail(CaptureError.noDisplay)
                 return true
             }
-            // Кадр этого дисплея мог ещё не доехать (замораживаются по
-            // очереди): жест подождёт его прибытия, а не провалит сессию.
-            guard frozen[Self.displayID(of: screen)] != nil else { return false }
             inputTracker?.stopMouseMonitoring()
             let rect = CGRect(x: min(start.point.x, end.point.x),
                               y: min(start.point.y, end.point.y),
@@ -416,13 +440,12 @@ private final class CaptureSession {
         }
     }
 
-    private func beginOverlay(backdrops: [CGDirectDisplayID: CGImage]) {
+    private func beginOverlay() {
         let overlayStartedAt = CFAbsoluteTimeGetCurrent()
         let overlay = OverlayController()
         self.overlay = overlay
         overlay.beginFrozenSelection(
             screens: screens,
-            backdrops: backdrops,
             pendingGesture: { [weak self] in
                 self?.inputTracker?.resolution
                     ?? .cancelled
@@ -444,14 +467,6 @@ private final class CaptureSession {
 
     private func selectionCompleted(_ globalRect: NSRect, _ screen: NSScreen) {
         guard phase == .selecting, !didEnd else { return }
-        // Качество момента считается по сырой рамке, до обрезки по дисплею
-        // доставки: только она показывает, задел ли пользователь соседний экран.
-        momentQuality = captureMomentQuality(rawSelection: globalRect,
-                                             screens: Array(frozen.values),
-                                             budget: Self.displaySkewBudget)
-        if momentQuality.isDegraded {
-            Self.log.error("capture selection crossed displays with skewMs=\(self.momentQuality.displaySkew * 1000, privacy: .public)")
-        }
         let clamped = globalRect.intersection(screen.frame)
         guard clamped.width >= 3, clamped.height >= 3 else {
             endOutcome = .ignoredSmallSelection
@@ -461,19 +476,34 @@ private final class CaptureSession {
         }
 
         let displayID = Self.displayID(of: screen)
-        guard let shot = frozen[displayID] else {
-            fail(CaptureError.snapshotUnavailable(
-                "Missing frozen image for display \(displayID)"))
-            return
-        }
-
         phase = .delivering
         let mouseUpAt = CFAbsoluteTimeGetCurrent()
         Self.log.info("capture selection completed display=\(displayID, privacy: .public) width=\(Int(clamped.width), privacy: .public) height=\(Int(clamped.height), privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
         overlay?.dismiss()
         overlay = nil
-        frozen.removeAll()
         onSelectionReleased(id)
+
+        guard let shot = frozen[displayID] else {
+            // Кадр этого дисплея ещё едет (холодный старт системного захвата
+            // достигает секунд на 5K): выделение сохранено, кроп стартует по
+            // прибытии кадра. Пользователь уже свободен.
+            pendingSelection = PendingSelection(rawSelection: globalRect,
+                                                selection: clamped,
+                                                screen: screen,
+                                                mouseUpAt: mouseUpAt)
+            Self.log.info("capture selection awaiting frame display=\(displayID, privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
+            return
+        }
+
+        // Качество момента считается по сырой рамке, до обрезки по дисплею
+        // доставки: только она показывает, задел ли пользователь соседний экран.
+        momentQuality = captureMomentQuality(rawSelection: globalRect,
+                                             screens: Array(frozen.values),
+                                             budget: Self.displaySkewBudget)
+        if momentQuality.isDegraded {
+            Self.log.error("capture selection crossed displays with skewMs=\(self.momentQuality.displaySkew * 1000, privacy: .public)")
+        }
+        frozen.removeAll()
         startCropTask(shot: shot,
                       selection: clamped,
                       deliveryDisplayID: displayID,

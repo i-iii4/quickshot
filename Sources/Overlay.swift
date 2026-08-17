@@ -470,6 +470,10 @@ final class OverlayController {
 
     private(set) var windows: [OverlayWindow] = []
     private var backdropWindows: [OverlayWindow] = []
+    /// Экраны, показанные хромом, и дисплеи, уже получившие подложку: кадры
+    /// доезжают после показа и подкладываются по одному.
+    private var screensByDisplay: [CGDirectDisplayID: NSScreen] = [:]
+    private var backdropDisplayIDs: Set<CGDirectDisplayID> = []
     private var localEscapeMonitor: Any?
     private var globalEscapeMonitor: Any?
     private var spaceObserver: Any?
@@ -487,30 +491,15 @@ final class OverlayController {
         dismiss()
     }
 
-    /// Окна одного экрана: подложка-заморозка и хром выделения.
-    @discardableResult
-    private func appendScreen(_ screen: NSScreen,
-                              backdrops: [CGDirectDisplayID: CGImage]) -> (OverlayWindow, OverlayWindow)? {
+    /// Хром выделения одного экрана. Подложка-заморозка сюда не входит: она
+    /// подкладывается отдельно, когда её кадр доезжает (`addBackdrops`) —
+    /// реакция на хоткей не ждёт ни одного пикселя.
+    private func appendScreen(_ screen: NSScreen) {
         let displayID = CGDirectDisplayID(
             (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
-        guard let backdrop = backdrops[displayID] else {
-            Self.log.error("overlay missing frozen backdrop display=\(displayID, privacy: .public)")
-            return nil
-        }
+        screensByDisplay[displayID] = screen
 
         let bounds = NSRect(origin: .zero, size: screen.frame.size)
-
-        let backdropView = BackdropView(image: backdrop)
-        backdropView.frame = bounds
-        backdropView.autoresizingMask = [.width, .height]
-
-        let backdropWindow = makeWindow(for: screen,
-                                        level: CaptureWindowLevels.backdrop,
-                                        receivesPointer: false)
-        backdropWindow.contentView = backdropView
-        backdropWindow.displayIfNeeded()
-        backdropWindows.append(backdropWindow)
-
         let chrome = SelectionView(frame: bounds)
         chrome.autoresizingMask = [.width, .height]
         chrome.screenRef = screen
@@ -528,18 +517,15 @@ final class OverlayController {
         chromeWindow.contentView = chrome
         chromeWindow.displayIfNeeded()
         windows.append(chromeWindow)
-        return (backdropWindow, chromeWindow)
     }
 
 
     func beginFrozenSelection(screens: [NSScreen],
-                              backdrops: [CGDirectDisplayID: CGImage],
                               pendingGesture: @escaping () -> CaptureGestureResolution,
                               onReady: @escaping () -> Void,
                               onComplete: @escaping (NSRect, NSScreen) -> Void,
                               onCancel: @escaping () -> Void) {
         begin(screens: screens,
-              backdrops: backdrops,
               onReady: onReady,
               onComplete: onComplete,
               onCancel: onCancel,
@@ -547,7 +533,6 @@ final class OverlayController {
     }
 
     private func begin(screens: [NSScreen],
-                       backdrops: [CGDirectDisplayID: CGImage],
                        onReady: @escaping () -> Void,
                        onComplete: @escaping (NSRect, NSScreen) -> Void,
                        onCancel: @escaping () -> Void,
@@ -557,7 +542,7 @@ final class OverlayController {
         let sourceApplication = NSWorkspace.shared.frontmostApplication
 
         for screen in screens {
-            appendScreen(screen, backdrops: backdrops)
+            appendScreen(screen)
         }
 
         for window in backdropWindows { window.orderFrontRegardless() }
@@ -694,35 +679,41 @@ final class OverlayController {
         onReady()
     }
 
-    /// Достроить окна для дисплеев, чьи кадры доехали после показа: экран с
-    /// курсором замораживается и показывается первым, остальные — по мере
-    /// готовности, не задерживая реакцию на хоткей.
-    func addFrozenScreens(screens: [NSScreen],
-                          backdrops: [CGDirectDisplayID: CGImage]) {
+    /// Подложить замороженные кадры под уже живой хром выделения: кадры
+    /// доезжают по одному (экран с курсором первым), и каждый встаёт под свой
+    /// экран, не задерживая реакцию на хоткей.
+    func addBackdrops(_ backdrops: [CGDirectDisplayID: CGImage]) {
         guard !isDismissed else { return }
-        var appended: [(OverlayWindow, OverlayWindow)] = []
-        for screen in screens {
-            if let pair = appendScreen(screen, backdrops: backdrops) {
-                appended.append(pair)
-            }
+        var added: [OverlayWindow] = []
+        for (displayID, image) in backdrops {
+            guard backdropDisplayIDs.insert(displayID).inserted,
+                  let screen = screensByDisplay[displayID] else { continue }
+            let bounds = NSRect(origin: .zero, size: screen.frame.size)
+            let backdropView = BackdropView(image: image)
+            backdropView.frame = bounds
+            backdropView.autoresizingMask = [.width, .height]
+            let backdropWindow = makeWindow(for: screen,
+                                            level: CaptureWindowLevels.backdrop,
+                                            receivesPointer: false)
+            backdropWindow.contentView = backdropView
+            backdropWindow.displayIfNeeded()
+            backdropWindows.append(backdropWindow)
+            added.append(backdropWindow)
         }
-        guard !appended.isEmpty else { return }
-        for (backdropWindow, _) in appended { backdropWindow.orderFrontRegardless() }
-        for (_, chromeWindow) in appended { chromeWindow.orderFrontRegardless() }
+        guard !added.isEmpty else { return }
+        // Уровень подложки ниже уровня хрома: порядок гарантируют уровни окон.
+        for window in added { window.orderFrontRegardless() }
         if isPresented {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0
                 context.allowsImplicitAnimation = false
-                for (backdropWindow, chromeWindow) in appended {
-                    backdropWindow.alphaValue = 1
-                    backdropWindow.displayIfNeeded()
-                    chromeWindow.ignoresMouseEvents = false
-                    chromeWindow.alphaValue = 1
-                    chromeWindow.displayIfNeeded()
+                for window in added {
+                    window.alphaValue = 1
+                    window.displayIfNeeded()
                 }
             }
         }
-        Self.log.info("overlay extended screens=\(appended.count, privacy: .public)")
+        Self.log.info("overlay backdrops added count=\(added.count, privacy: .public)")
     }
 
 
