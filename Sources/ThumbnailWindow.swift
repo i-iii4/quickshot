@@ -254,13 +254,17 @@ private final class ThumbnailView: NSView, NSDraggingSource {
 
     // MARK: ховер кнопок (плавный fade)
 
+    // Tracking-области получают mouseEntered ВСЕ под курсором, независимо от
+    // перекрытия по z: прямой показ контролов зажигал их и на карточке,
+    // лежащей ПОД наведённой. Владельца ховера назначает только менеджер —
+    // ровно одна карточка, верхняя в точке курсора.
     override func mouseEntered(with event: NSEvent) {
         guard !collapsed else { return }
         manager?.hostBecomeKey()
-        setControlsVisible(true)
+        manager?.pointerHoverChanged()
     }
     override func mouseExited(with event: NSEvent) {
-        setControlsVisible(false)
+        manager?.pointerHoverChanged()
     }
 
     /// Показ контролов по решению менеджера. При прокрутке карточка уезжает

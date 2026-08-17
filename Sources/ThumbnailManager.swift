@@ -890,6 +890,13 @@ final class ThumbnailManager {
         stackOrderApplied = ordered.map(ObjectIdentifier.init)
     }
 
+    /// Вход и выход курсора на карточке: владельца ховера пересчитывает
+    /// менеджер — tracking-области шлют события всем карточкам под точкой,
+    /// а кнопки положены ровно одной, верхней.
+    func pointerHoverChanged() {
+        refreshHoverUnderPointer()
+    }
+
     /// Ровно одна карточка под курсором показывает свои кнопки. Карточка,
     /// уехавшая из-под курсора при прокрутке, `mouseExited` не получает.
     private func refreshHoverUnderPointer() {

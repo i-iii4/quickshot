@@ -299,9 +299,12 @@ private final class CaptureSession {
 
     func start() {
         let inputTracker = CaptureInputTracker(onEscape: { [weak self] in self?.cancel() })
-        guard inputTracker.escapeIsRegistered else {
-            fail(CaptureError.captureStackUnavailable("Escape hotkey registration failed"))
-            return
+        // Carbon-регистрация Escape — вспомогательный канал отмены: у оверлея
+        // есть собственные локальный и глобальный Escape-мониторы. Сбой
+        // регистрации (например, гонка с сессией, чей кроп ещё ждёт кадр) не
+        // повод ронять захват целиком.
+        if !inputTracker.escapeIsRegistered {
+            Self.log.error("capture escape hotkey registration failed; overlay monitors remain")
         }
         self.inputTracker = inputTracker
         Self.log.info("capture hot path gesture snapshot ready ms=\(self.elapsedMs, privacy: .public)")
@@ -481,6 +484,12 @@ private final class CaptureSession {
         Self.log.info("capture selection completed display=\(displayID, privacy: .public) width=\(Int(clamped.width), privacy: .public) height=\(Int(clamped.height), privacy: .public) ms=\(self.elapsedMs, privacy: .public)")
         overlay?.dismiss()
         overlay = nil
+        // Escape и монитор мыши нужны только пока идёт выделение. Сессия,
+        // чей кроп ждёт опоздавший кадр, обязана отпустить Carbon-регистрацию
+        // Escape СЕЙЧАС: иначе следующая сессия быстрой серии не может
+        // зарегистрировать ту же клавишу и умирает, не подняв оверлей.
+        inputTracker?.stop()
+        inputTracker = nil
         onSelectionReleased(id)
 
         guard let shot = frozen[displayID] else {
