@@ -1,33 +1,33 @@
 import CoreGraphics
 import Foundation
 
-/// Модель прокрутки трея: непрерывное смещение, стопки на краях и порог
-/// сворачивания жестом.
+/// Модель прокрутки трея: асимметричная лента (`TR-4`), прижатая ближним
+/// концом к кнопке хаба.
+///
+/// Одна степень свободы: насколько лента собрана в стопку у кнопки. Смещение 0
+/// — лента полностью развёрнута от кнопки; максимум — все карточки собраны в
+/// стопку, верхним элементом лежит новейшая, целиком видимая (`TR-4a`).
+/// Дальний конец никогда не прилипает к краю экрана (`TR-4b`).
 ///
 /// Модель намеренно не знает ни о вью, ни о таймерах: она отвечает на вопрос
-/// «где сейчас лента и как выглядят карточки», а инерцию крутит аниматор.
+/// «где сейчас лента», а раскладку кромок считает `TrayStripLayout`.
 struct TrayScrollModel: Equatable {
-    /// Зазор между карточками равен `ThumbStyle.gap`; здесь он приходит
-    /// параметром, чтобы модель проверялась без глобальных констант.
     var contentLength: CGFloat
     var viewportLength: CGFloat
     var offset: CGFloat
+    /// Длина новейшей карточки: полный сбор оставляет её целиком видимой,
+    /// поэтому максимальный ход — до её начала, а не до конца ленты.
+    var lastCardLength: CGFloat = 0
 
-    /// Максимальный сдвиг: дальше лента упирается в конец.
-    var maximumOffset: CGFloat { max(0, contentLength - viewportLength) }
+    /// Максимальный сдвиг: все карточки в стопке, новейшая — верхний элемент,
+    /// целиком видимый.
+    var maximumOffset: CGFloat { max(0, contentLength - lastCardLength) }
 
-    /// Прокрутка нужна только если содержимое не помещается (`TR-1`).
-    var isScrollable: Bool { contentLength > viewportLength + 0.5 }
-
-    /// Состояние по умолчанию: лента открыта на новых снимках, старые собраны
-    /// в стопку у дальнего края (`TR-4`, `TR-5`).
-    static func defaultOffset(contentLength: CGFloat, viewportLength: CGFloat) -> CGFloat {
-        max(0, contentLength - viewportLength)
-    }
+    /// Прокрутка осмысленна, как только есть хотя бы одна карточка: даже две
+    /// карточки можно собрать в стопку у кнопки.
+    var isScrollable: Bool { contentLength > 0.5 }
 
     /// Смещение после жеста с резиновым сопротивлением за краями (`TR-13`).
-    /// За границей движение идёт вчетверо медленнее — это не украшение, а
-    /// сигнал: лента сообщает, что дальше ничего нет.
     func scrolled(by delta: CGFloat, rubberBand: Bool = true) -> TrayScrollModel {
         var next = self
         let raw = offset + delta
@@ -55,110 +55,230 @@ struct TrayScrollModel: Equatable {
         return 0
     }
 
-    /// Продолженное движение за краем сворачивает трей (`TR-7`). Порог именно
-    /// в перетянутом расстоянии, а не в самом факте касания края: иначе трей
-    /// схлопывался бы при обычной прокрутке до конца (`TR-8` — порог не
-    /// зависит от числа карточек).
-    static let collapseThreshold: CGFloat = 48
-
-    func shouldCollapse(afterOvershoot value: CGFloat) -> Bool {
-        abs(value) >= Self.collapseThreshold
-    }
-
-    /// Направление сворачивания: к началу ленты или к её концу. Нужно, чтобы
-    /// карточки уходили в ту сторону, куда их тянули.
-    func collapseDirection(afterOvershoot value: CGFloat) -> TrayCollapseDirection? {
-        guard shouldCollapse(afterOvershoot: value) else { return nil }
-        return value < 0 ? .towardStart : .towardEnd
+    /// Наименьшее смещение, при котором новейшая карточка целиком видна в окне
+    /// просмотра с учётом полосы дальней стопки (`TR-5`: вставка в дальнюю
+    /// стопку докручивает ленту ровно до этого положения).
+    func revealNewestOffset() -> CGFloat {
+        let usable = max(1, viewportLength - TrayStripLayout.farReserve)
+        return min(maximumOffset, max(0, contentLength - usable))
     }
 }
 
-enum TrayCollapseDirection: Equatable {
-    case towardStart
-    case towardEnd
-}
-
-/// Раскладка карточки в ленте с учётом стопок на краях.
-struct TrayCardPlacement: Equatable {
-    /// Смещение вдоль оси ленты.
+/// Кромка или карточка ленты: результат раскладки для одного снимка.
+struct TrayCardBand: Equatable {
+    /// Начало видимой полосы вдоль оси ленты, от основания у кнопки.
     var position: CGFloat
-    /// Прозрачность: карточки в глубине стопки тускнеют.
+    /// Видимая длина вдоль оси. Для развёрнутой карточки — её полная длина.
+    var length: CGFloat
+    /// Сужение по глубине, в ступенях (непрерывно). 0 — полная ширина.
+    var insetSteps: CGFloat
+    /// Доля собственного изображения, видимая в полосе, со стороны
+    /// выглядывающего края. 1 — карточка целиком.
+    var contentFraction: CGFloat
+    /// Откуда берётся срез: true — с дальней от кнопки стороны снимка
+    /// (ближняя стопка), false — с ближней (дальняя стопка).
+    var sliceFromFarSide: Bool
+    /// Прозрачность: 1 всюду, кроме хвоста растворения последней кромки.
     var opacity: CGFloat
-    /// Масштаб: та же глубина отражается размером.
-    var scale: CGFloat
-    /// Глубина в стопке: 0 — карточка в ленте, дальше — слои стопки. Задаёт и
-    /// порядок наложения: чем глубже, тем дальше от зрителя.
-    var depth: CGFloat = 0
+    /// Доля тени: привязана к оставшейся высоте кромки (`TR-26`).
+    var shadowFraction: CGFloat
+    /// Порядок наложения: больше — ближе к зрителю.
+    var zOrder: CGFloat
+    var hidden: Bool
+
+    /// Полоса без сужения и среза — обычная развёрнутая карточка.
+    var isFullCard: Bool { !hidden && insetSteps < 0.001 && contentFraction > 0.999 }
+
+    static let hiddenBand = TrayCardBand(position: 0, length: 0, insetSteps: 0,
+                                         contentFraction: 0, sliceFromFarSide: true,
+                                         opacity: 0, shadowFraction: 0, zOrder: -100,
+                                         hidden: true)
 }
 
-/// Раскладка ленты: карточки за краем не исчезают, а собираются в стопку с
-/// уменьшающимся шагом (`TR-3`).
+/// Раскладка ленты со стопками-кромками (`TR-23`…`TR-26`).
 ///
-/// Стопка нужна не для красоты: без неё лента обрывается, и по картинке нельзя
-/// понять, есть ли что-то дальше.
-enum TrayStackLayout {
-    /// Шаг между карточками в стопке и предел глубины.
-    static let stackStep: CGFloat = 6
-    static let stackDepth = 3
+/// Состояние — чистая функция смещения: без таймеров и отдельных анимаций,
+/// обратная прокрутка проходит тот же путь задом наперёд. Ранг слоя — его
+/// порядковый номер в стопке от мелкого к глубокому; фаза перехода ОБЩАЯ для
+/// всей стопки и равна глубине самого мелкого утонувшего слоя. Именно общая
+/// фаза держит силуэт чистым при разной высоте карточек: собственные глубины
+/// глубоких слоёв не кратны единице, и раздельные фазы оставляли кромки
+/// вразнобой.
+enum TrayStripLayout {
+    /// Высота кромки.
+    static let edgeLength: CGFloat = 7
+    /// Сужение на ступень глубины, в точках на каждую сторону.
+    static let insetStep: CGFloat = 8
+    /// В покое видны верхняя карточка и две кромки; третья кромка живёт
+    /// только в переходе (`TR-25`).
+    static let restingEdges = 3
+    /// Полоса под дальнюю стопку внутри окна просмотра.
+    static var farReserve: CGFloat { CGFloat(restingEdges) * edgeLength }
 
-    static func placements(cardLengths: [CGFloat],
-                           gap: CGFloat,
-                           offset: CGFloat,
-                           viewportLength: CGFloat) -> [TrayCardPlacement] {
-        var placements: [TrayCardPlacement] = []
+    static func bands(cardLengths: [CGFloat],
+                      gap: CGFloat,
+                      offset: CGFloat,
+                      viewportLength: CGFloat) -> [TrayCardBand] {
+        guard !cardLengths.isEmpty else { return [] }
+        let count = cardLengths.count
+        let usable = max(1, viewportLength - farReserve)
+
         var cursor: CGFloat = 0
+        var raws: [CGFloat] = []
         for length in cardLengths {
-            let rawPosition = cursor - offset
-            placements.append(placement(rawPosition: rawPosition,
-                                        length: length,
-                                        viewportLength: viewportLength))
+            raws.append(cursor - offset)
             cursor += length + gap
         }
-        return placements
-    }
 
-    /// Полоса, зарезервированная под дальнюю стопку внутри окна просмотра.
-    /// Ближняя стопка растёт наружу и прячется за хабом; у дальнего края
-    /// прятаться не за что — там край экрана, и стопка, растущая наружу,
-    /// срезалась им, оставляя обрубки полупрозрачных слоёв.
-    static var trailingReserve: CGFloat { CGFloat(stackDepth) * stackStep }
-
-    private static func placement(rawPosition: CGFloat,
-                                  length: CGFloat,
-                                  viewportLength: CGFloat) -> TrayCardPlacement {
-        if rawPosition < 0 {
-            // Карточка ушла за начало: собираем в стопку у края.
-            let depth = min(CGFloat(stackDepth), -rawPosition / max(1, length))
-            let position = -depth * stackStep
-            return TrayCardPlacement(position: position,
-                                     opacity: fadedOpacity(depth: depth),
-                                     scale: fadedScale(depth: depth),
-                                     depth: depth)
+        func nearDepth(_ index: Int) -> CGFloat {
+            max(0, -raws[index] / (cardLengths[index] + gap))
         }
-        let usable = max(1, viewportLength - trailingReserve)
-        let trailing = rawPosition + length - usable
-        if trailing > 0 {
-            let depth = min(CGFloat(stackDepth), trailing / max(1, length))
-            // Шаг растёт наружу, но стартует внутри зарезервированной полосы:
-            // самый глубокий слой ложится ровно на край окна просмотра.
-            let position = usable - length + depth * stackStep
-            return TrayCardPlacement(position: position,
-                                     opacity: fadedOpacity(depth: depth),
-                                     scale: fadedScale(depth: depth),
-                                     depth: depth)
+        func farDepth(_ index: Int) -> CGFloat {
+            max(0, (raws[index] + cardLengths[index] - usable) / (cardLengths[index] + gap))
         }
-        return TrayCardPlacement(position: rawPosition, opacity: 1, scale: 1, depth: 0)
+
+        var bands = [TrayCardBand](repeating: .hiddenBand, count: count)
+
+        // Утонувшие у кнопки — префикс ленты (порядок совпадает с порядком
+        // добавления), утонувшие за дальней границей — суффикс.
+        let nearSunkCount = (0..<count).lastIndex(where: { nearDepth($0) > 0 }).map { $0 + 1 } ?? 0
+        let farStart = (0..<count).firstIndex(where: { farDepth($0) > 0 && $0 >= nearSunkCount }) ?? count
+
+        // Развёрнутые карточки: полная геометрия, полное содержимое.
+        for index in nearSunkCount..<farStart {
+            bands[index] = TrayCardBand(position: raws[index],
+                                        length: cardLengths[index],
+                                        insetSteps: 0, contentFraction: 1,
+                                        sliceFromFarSide: true, opacity: 1,
+                                        shadowFraction: 1, zOrder: 0, hidden: false)
+        }
+
+        // Ближняя стопка. Фаза перехода общая: глубина самого мелкого
+        // утонувшего — это же прогресс спуска следующей развёрнутой карточки.
+        // Начала переходов привязаны к длине запаркованного слоя, концы — к
+        // длине спускающейся карточки: при разной высоте снимков слоты кромок
+        // переезжают плавно, а не прыгают при смене ранга.
+        if nearSunkCount > 0 {
+            let phase = smoothstep(min(1, nearDepth(nearSunkCount - 1)))
+            let parked = cardLengths[nearSunkCount - 1]
+            let frontLength = nearSunkCount < count
+                ? cardLengths[nearSunkCount]
+                : cardLengths[count - 1]
+            for index in 0..<nearSunkCount {
+                bands[index] = nearBand(rank: nearSunkCount - 1 - index,
+                                        phase: phase,
+                                        length: cardLengths[index],
+                                        parked: parked,
+                                        frontLength: frontLength)
+            }
+        }
+
+        // Дальняя стопка — зеркало у границы окна просмотра; слоты кромок
+        // привязаны к самой границе, поэтому от высот не зависят. Срез
+        // содержимого — с ближней к кнопке стороны.
+        if farStart < count {
+            let phase = smoothstep(min(1, farDepth(farStart)))
+            for index in farStart..<count {
+                bands[index] = farBand(rank: index - farStart,
+                                       phase: phase,
+                                       length: cardLengths[index],
+                                       base: usable)
+            }
+        }
+
+        return bands
     }
 
-    /// Слои стопки обязаны различаться: три ступени прозрачности вместо
-    /// плавного ухода в ноль, где несколько карточек выглядят одинаково.
-    private static func fadedOpacity(depth: CGFloat) -> CGFloat {
-        let fade = min(1, depth / CGFloat(stackDepth))
-        return max(0.3, 1 - fade * 0.7)
+    /// Слой ближней стопки по рангу и общей фазе перехода.
+    private static func nearBand(rank: Int,
+                                 phase: CGFloat,
+                                 length: CGFloat,
+                                 parked: CGFloat,
+                                 frontLength: CGFloat) -> TrayCardBand {
+        let e = edgeLength
+        let z = -CGFloat(rank + 1) - phase
+        switch rank {
+        case 0:
+            // Паркуется у кнопки и превращается в первую кромку, пока
+            // следующая развёрнутая карточка спускается и накрывает его.
+            let bandLength = length + (e - length) * phase
+            return TrayCardBand(position: frontLength * phase,
+                                length: bandLength,
+                                insetSteps: phase,
+                                contentFraction: bandLength / max(1, length),
+                                sliceFromFarSide: true, opacity: 1,
+                                shadowFraction: 1, zOrder: z, hidden: false)
+        case 1:
+            // Первая кромка уходит на вторую позицию: от слота за
+            // запаркованным слоем к слоту за спускающейся карточкой.
+            return TrayCardBand(position: parked + phase * (frontLength + e - parked),
+                                length: e,
+                                insetSteps: 1 + phase,
+                                contentFraction: e / max(1, length),
+                                sliceFromFarSide: true, opacity: 1,
+                                shadowFraction: 1, zOrder: z, hidden: false)
+        case 2:
+            // Растворение (`TR-26`): геометрия ведёт — кромка задвигается под
+            // соседнюю, прозрачность падает только в последней трети, тень
+            // равна доле оставшейся высоты.
+            let bandLength = e * (1 - phase)
+            let opacity = phase < 0.7 ? 1 : max(0, 1 - (phase - 0.7) / 0.3)
+            return TrayCardBand(position: parked + e + phase * (frontLength + e - parked),
+                                length: bandLength,
+                                insetSteps: 2 + phase,
+                                contentFraction: bandLength / max(1, length),
+                                sliceFromFarSide: true,
+                                opacity: opacity,
+                                shadowFraction: bandLength / e,
+                                zOrder: z,
+                                hidden: bandLength < 0.05)
+        default:
+            return .hiddenBand
+        }
     }
 
-    private static func fadedScale(depth: CGFloat) -> CGFloat {
-        let fade = min(1, depth / CGFloat(stackDepth))
-        return max(0.88, 1 - fade * 0.12)
+    /// Слой дальней стопки: зеркало у границы `base`, кромки растут в резерв.
+    private static func farBand(rank: Int,
+                                phase: CGFloat,
+                                length: CGFloat,
+                                base: CGFloat) -> TrayCardBand {
+        let e = edgeLength
+        let z = -CGFloat(rank + 1) - phase
+        switch rank {
+        case 0:
+            let bandLength = length + (e - length) * phase
+            return TrayCardBand(position: (base - length) + length * phase,
+                                length: bandLength,
+                                insetSteps: phase,
+                                contentFraction: bandLength / max(1, length),
+                                sliceFromFarSide: false, opacity: 1,
+                                shadowFraction: 1, zOrder: z, hidden: false)
+        case 1:
+            return TrayCardBand(position: base + phase * e,
+                                length: e,
+                                insetSteps: 1 + phase,
+                                contentFraction: e / max(1, length),
+                                sliceFromFarSide: false, opacity: 1,
+                                shadowFraction: 1, zOrder: z, hidden: false)
+        case 2:
+            let bandLength = e * (1 - phase)
+            let opacity = phase < 0.7 ? 1 : max(0, 1 - (phase - 0.7) / 0.3)
+            return TrayCardBand(position: base + e + phase * e,
+                                length: bandLength,
+                                insetSteps: 2 + phase,
+                                contentFraction: bandLength / max(1, length),
+                                sliceFromFarSide: false,
+                                opacity: opacity,
+                                shadowFraction: bandLength / e,
+                                zOrder: z,
+                                hidden: bandLength < 0.05)
+        default:
+            return .hiddenBand
+        }
+    }
+
+    private static func smoothstep(_ t: CGFloat) -> CGFloat {
+        let clamped = min(1, max(0, t))
+        return clamped * clamped * (3 - 2 * clamped)
     }
 }

@@ -43,19 +43,30 @@ struct TrayStackSnapshotTool {
         context.setFillColor(NSColor(white: 0.12, alpha: 1).cgColor)
         context.fill(screen)
 
-        // Порядок наложения задаётся слотом, как и в живом трее.
+        // Порядок наложения задаётся слотом, как и в живом трее. Кромка стопки
+        // рисуется полосой с сужением по глубине и тенью-отбивкой снизу
+        // (`TR-23`…`TR-26`).
         for slot in result.visible.sorted(by: { $0.stackOrder < $1.stackOrder }) {
-            let height = heights[slot.index]
-            let frame = CGRect(x: slot.origin.x, y: slot.origin.y, width: cardWidth, height: height)
-            let scaled = frame.insetBy(dx: frame.width * (1 - slot.scale) / 2,
-                                       dy: frame.height * (1 - slot.scale) / 2)
+            let inset = slot.insetSteps * TrayStripLayout.insetStep
+            let height = slot.isFullCard ? heights[slot.index] : slot.length
+            let frame = CGRect(x: slot.origin.x + inset, y: slot.origin.y,
+                               width: cardWidth - 2 * inset, height: height)
+            let radius = min(10, min(frame.width, frame.height) / 2)
             context.saveGState()
             context.setAlpha(slot.opacity)
-            let path = CGPath(roundedRect: scaled, cornerWidth: 10, cornerHeight: 10, transform: nil)
+            if slot.shadowFraction > 0.01 {
+                context.setShadow(offset: CGSize(width: 0, height: -2),
+                                  blur: 6,
+                                  color: NSColor.black
+                                      .withAlphaComponent(0.6 * slot.shadowFraction).cgColor)
+            }
+            let path = CGPath(roundedRect: frame, cornerWidth: radius,
+                              cornerHeight: radius, transform: nil)
             context.addPath(path)
             context.setFillColor(NSColor(calibratedHue: CGFloat(slot.index) / 14,
                                          saturation: 0.55, brightness: 0.85, alpha: 1).cgColor)
             context.fillPath()
+            context.setShadow(offset: .zero, blur: 0, color: nil)
             context.addPath(path)
             context.setStrokeColor(NSColor.white.withAlphaComponent(0.5).cgColor)
             context.setLineWidth(1)

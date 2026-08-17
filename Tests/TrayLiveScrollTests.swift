@@ -24,6 +24,11 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
         hoverStaysOnASingleCard()
         scrollWorksInTheGapBetweenCards()
         momentumKeepsMovingTheStrip()
+        overscrollCollectsAllCards()
+        gestureNeverHidesTheTray()
+        captureWhileCompressedStaysCompressed()
+        captureWhileUnrolledRevealsTheNewest()
+        stackEdgesShowContentAfterADisplayPass()
 
         if failures.isEmpty {
             print("TrayLiveScrollTests: passed")
@@ -197,10 +202,16 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
             failures.append("в ленте меньше двух видимых карточек")
             return
         }
+        // Кадры стопки законно перекрываются с опускающейся карточкой, поэтому
+        // сосед по сортировке — ещё не зазор: кандидат обязан быть не накрыт
+        // ни одной карточкой.
         var gapPoint: NSPoint?
         for (lower, upper) in zip(frames, frames.dropFirst()) where upper.minY - lower.maxY > 4 {
-            gapPoint = NSPoint(x: lower.midX, y: (lower.maxY + upper.minY) / 2)
-            break
+            let candidate = NSPoint(x: lower.midX, y: (lower.maxY + upper.minY) / 2)
+            if !frames.contains(where: { $0.contains(candidate) }) {
+                gapPoint = candidate
+                break
+            }
         }
         guard let point = gapPoint else {
             failures.append("не нашёл зазора между карточками")
@@ -343,8 +354,235 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
         let teardown: () -> Void
     }
 
+    /// `TR-4a`: перетягивание к кнопке собирает ВСЕ карточки в стопку —
+    /// новейшая лежит целиком сверху, остальные видны кромками не выше 7pt.
+    private func overscrollCollectsAllCards() {
+        guard let fixture = makeOverflowingTray(label: "collect") else { return }
+        defer { fixture.teardown() }
+        guard compress(fixture, label: "collect") else { return }
+
+        let newest = fixture.cards[fixture.cards.count - 1]
+        if newest.hostView.isHidden || newest.debugOpacity < 0.999 {
+            failures.append("collect: новейшая карточка не видна на вершине стопки")
+        }
+        if newest.debugCardFrame.height < 100 {
+            failures.append("collect: новейшая карточка сжата: высота \(newest.debugCardFrame.height)")
+        }
+        let edge = TrayStripLayout.edgeLength
+        var visibleEdges = 0
+        for (index, card) in fixture.cards.enumerated() where index != fixture.cards.count - 1 {
+            guard !card.hostView.isHidden else { continue }
+            visibleEdges += 1
+            let height = card.debugCardFrame.height
+            if height > edge + 1 {
+                failures.append("collect: карточка \(index) торчит из стопки: высота \(height)")
+            }
+        }
+        if visibleEdges == 0 {
+            failures.append("collect: у стопки нет ни одной кромки")
+        }
+    }
+
+    /// Жест прокрутки никогда не прячет и не показывает трей: перетягивание за
+    /// край только пружинит, сворачивание — исключительно клик по кнопке.
+    private func gestureNeverHidesTheTray() {
+        guard let fixture = makeOverflowingTray(label: "no-collapse") else { return }
+        defer { fixture.teardown() }
+        let point = NSPoint(x: fixture.cards[0].layoutFrame.midX,
+                            y: fixture.cards[0].layoutFrame.midY)
+        for sign in [CGFloat(1), -1] {
+            post(scroll: 300 * sign, phase: .began, at: point, window: fixture.window)
+            for _ in 0..<10 {
+                post(scroll: 300 * sign, phase: .changed, at: point, window: fixture.window)
+            }
+            post(scroll: 0, phase: .ended, at: point, window: fixture.window)
+            spin(0.4)
+            if fixture.manager.debugIsCollapsed {
+                failures.append("no-collapse: жест свернул трей")
+            }
+            if !fixture.window.isVisible {
+                failures.append("no-collapse: окно трея исчезло после жеста")
+            }
+            if !fixture.cards.contains(where: { !$0.hostView.isHidden }) {
+                failures.append("no-collapse: все карточки скрылись после жеста")
+            }
+        }
+    }
+
+    /// `TR-5`: вставка в собранную стопку молча кладёт новый снимок верхним
+    /// элементом, лента остаётся полностью сжатой.
+    private func captureWhileCompressedStaysCompressed() {
+        guard let fixture = makeOverflowingTray(label: "insert-compressed") else { return }
+        defer { fixture.teardown() }
+        guard compress(fixture, label: "insert-compressed") else { return }
+
+        let previousNewest = fixture.cards[fixture.cards.count - 1]
+        guard let added = addCapture(to: fixture, label: "insert-compressed") else { return }
+
+        let offset = fixture.manager.debugScrollOffset
+        let maximum = fixture.manager.debugMaximumScrollOffset
+        if offset < maximum - 1 {
+            failures.append("insert-compressed: лента раскрылась: \(offset) из \(maximum)")
+        }
+        if added.hostView.isHidden || added.debugCardFrame.height < 100 {
+            failures.append("insert-compressed: новый снимок не лёг целиком поверх стопки")
+        }
+        if !previousNewest.hostView.isHidden,
+           previousNewest.debugCardFrame.height > TrayStripLayout.edgeLength + 1 {
+            failures.append("insert-compressed: прежняя верхняя карточка не стала кромкой: "
+                            + "высота \(previousNewest.debugCardFrame.height)")
+        }
+    }
+
+    /// `TR-5`: вставка в развёрнутую ленту докручивает её ровно до видимости
+    /// нового снимка.
+    private func captureWhileUnrolledRevealsTheNewest() {
+        guard let fixture = makeOverflowingTray(label: "insert-unrolled") else { return }
+        defer { fixture.teardown() }
+
+        // Увести ленту к старым снимкам: новейший гарантированно за границей.
+        let point = NSPoint(x: fixture.window.frame.width / 2,
+                            y: fixture.window.frame.height / 2)
+        let base = fixture.manager.debugScrollOffset
+        postScroll(delta: 40, scrollPhase: 0, momentumPhase: 0, at: point, window: fixture.window)
+        let sign: CGFloat = fixture.manager.debugScrollOffset > base ? -1 : 1
+        for _ in 0..<40 {
+            postScroll(delta: 300 * sign, scrollPhase: 0, momentumPhase: 0,
+                       at: point, window: fixture.window)
+        }
+        spin(0.1)
+        if fixture.manager.debugScrollOffset > 0.5 {
+            failures.append("insert-unrolled: лента не увелась к старым снимкам: "
+                            + "\(fixture.manager.debugScrollOffset)")
+            return
+        }
+
+        guard let added = addCapture(to: fixture, label: "insert-unrolled") else { return }
+        if added.hostView.isHidden {
+            failures.append("insert-unrolled: новый снимок не показан после вставки")
+            return
+        }
+        if added.debugCardFrame.height < 100 {
+            failures.append("insert-unrolled: новый снимок срезан: высота \(added.debugCardFrame.height)")
+        }
+        let screenLimit = (NSScreen.main?.frame.maxY ?? 0)
+        if added.debugCardFrame.maxY > screenLimit {
+            failures.append("insert-unrolled: новый снимок за экраном: \(added.debugCardFrame.maxY)")
+        }
+    }
+
+    /// `TR-24`, `TR-25`: после НАСТОЯЩЕГО прохода отрисовки кромки собранной
+    /// стопки закрашены содержимым снимков, а карточки разной высоты не
+    /// выламывают силуэт — выше второй кромки пусто.
+    private func stackEdgesShowContentAfterADisplayPass() {
+        guard let fixture = makeOverflowingTray(label: "edges",
+                                                imageHeight: { [160, 260, 220, 300][$0 % 4] })
+        else { return }
+        defer { fixture.teardown() }
+        guard compress(fixture, label: "edges") else { return }
+
+        let newest = fixture.cards[fixture.cards.count - 1]
+        newest.hostView.needsDisplay = true
+        fixture.window.displayIfNeeded()
+        spin(0.15)
+        fixture.window.displayIfNeeded()
+
+        guard let host = fixture.window.contentView,
+              let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+            failures.append("edges: нет буфера отображения")
+            return
+        }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let scaleX = CGFloat(rep.pixelsWide) / host.bounds.width
+        let scaleY = CGFloat(rep.pixelsHigh) / host.bounds.height
+        let frame = newest.debugCardFrame
+
+        // Доля закрашенных содержимым точек вдоль строки в центральной части
+        // ширины карточки: срез снимка в фикстуре — синяя заливка.
+        func paintedRatio(atY y: CGFloat) -> Double {
+            var sampled = 0
+            var painted = 0
+            var x = frame.minX + frame.width * 0.25
+            while x < frame.maxX - frame.width * 0.25 {
+                let px = Int(x * scaleX)
+                let py = Int((host.bounds.height - y) * scaleY)
+                if px >= 0, py >= 0, px < rep.pixelsWide, py < rep.pixelsHigh,
+                   let colour = rep.colorAt(x: px, y: py) {
+                    sampled += 1
+                    if colour.alphaComponent > 0.5, colour.blueComponent > 0.4,
+                       colour.blueComponent > colour.redComponent + 0.1 {
+                        painted += 1
+                    }
+                }
+                x += 2
+            }
+            return sampled > 0 ? Double(painted) / Double(sampled) : 0
+        }
+
+        let e = TrayStripLayout.edgeLength
+        let first = paintedRatio(atY: frame.maxY + e * 0.5)
+        if first < 0.5 {
+            failures.append("edges: первая кромка пуста после прохода отрисовки: \(first)")
+        }
+        let second = paintedRatio(atY: frame.maxY + e * 1.5)
+        if second < 0.5 {
+            failures.append("edges: вторая кромка пуста после прохода отрисовки: \(second)")
+        }
+        let above = paintedRatio(atY: frame.maxY + e * 2 + 4)
+        if above > 0.05 {
+            failures.append("edges: выше второй кромки торчит содержимое: \(above)")
+        }
+    }
+
+    /// Дожать ленту до полного сбора: направление определяется по факту роста
+    /// смещения, колёсные события без фаз упираются в край без резинки.
+    private func compress(_ fixture: Fixture, label: String) -> Bool {
+        let point = NSPoint(x: fixture.window.frame.width / 2,
+                            y: fixture.window.frame.height / 2)
+        let base = fixture.manager.debugScrollOffset
+        postScroll(delta: 40, scrollPhase: 0, momentumPhase: 0, at: point, window: fixture.window)
+        let sign: CGFloat = fixture.manager.debugScrollOffset > base ? 1 : -1
+        var attempts = 0
+        while fixture.manager.debugScrollOffset < fixture.manager.debugMaximumScrollOffset - 0.5,
+              attempts < 200 {
+            postScroll(delta: 300 * sign, scrollPhase: 0, momentumPhase: 0,
+                       at: point, window: fixture.window)
+            attempts += 1
+        }
+        spin(0.1)
+        if fixture.manager.debugScrollOffset < fixture.manager.debugMaximumScrollOffset - 0.5 {
+            failures.append("\(label): лента не дожалась до полного сбора: "
+                            + "\(fixture.manager.debugScrollOffset) из \(fixture.manager.debugMaximumScrollOffset)")
+            return false
+        }
+        return true
+    }
+
+    /// Новый снимок через настоящий магазин артефактов: как из захвата.
+    private func addCapture(to fixture: Fixture, label: String) -> ThumbnailWindow? {
+        guard let screen = NSScreen.main else { return nil }
+        let sequence = CaptureSequence(rawValue: UInt64(1000 + fixture.cards.count))
+        fixture.store.registerCapture(sequence)
+        guard let image = makeImage(width: 360, height: 220),
+              let artifact = try? fixture.store.admit(sequence: sequence, image: image) else {
+            failures.append("\(label): новый снимок не создан")
+            return nil
+        }
+        fixture.manager.add(artifact: artifact, on: screen)
+        fixture.manager.debugFinishMotions()
+        spin(0.1)
+        guard let card = fixture.manager.debugThumbnail(for: artifact.id) else {
+            failures.append("\(label): карточка нового снимка не появилась")
+            return nil
+        }
+        return card
+    }
+
     /// Трей, в котором карточек заведомо больше, чем помещается на экран.
-    private func makeOverflowingTray(label: String) -> Fixture? {
+    /// `imageHeight` задаёт высоту снимка по индексу: тесты силуэта собирают
+    /// стопку из карточек разной высоты.
+    private func makeOverflowingTray(label: String,
+                                     imageHeight: (Int) -> Int = { _ in 220 }) -> Fixture? {
         guard let screen = NSScreen.main else {
             failures.append("\(label): нет экрана")
             return nil
@@ -362,7 +600,7 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
         for index in 0..<count {
             let sequence = CaptureSequence(rawValue: UInt64(index + 1))
             store.registerCapture(sequence)
-            guard let image = makeImage(width: 360, height: 220),
+            guard let image = makeImage(width: 360, height: imageHeight(index)),
                   let artifact = try? store.admit(sequence: sequence, image: image) else {
                 failures.append("\(label): снимок \(index) не создан")
                 manager.shutdown()

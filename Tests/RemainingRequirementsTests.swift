@@ -277,15 +277,17 @@ struct RemainingRequirementsTests {
 
     /// `TR-11`, `TR-12`: положение прокрутки переживает сворачивание.
     @MainActor private static func scrollPositionSurvivesCollapse() throws {
-        var model = TrayScrollModel(contentLength: 2000, viewportLength: 600, offset: 0)
+        var model = TrayScrollModel(contentLength: 2000, viewportLength: 600,
+                                    offset: 0, lastCardLength: 150)
         model = model.scrolled(by: 500, rubberBand: false)
         let saved = model.offset
 
-        let restored = TrayScrollModel(contentLength: 2000, viewportLength: 600, offset: saved)
+        let restored = TrayScrollModel(contentLength: 2000, viewportLength: 600,
+                                       offset: saved, lastCardLength: 150)
         guard restored.offset == saved else { throw Failure("положение не восстановилось") }
 
-        // Новый снимок сбрасывает положение к новым (`TR-5`), а сворачивание — нет.
-        let afterCapture = TrayScrollModel.defaultOffset(contentLength: 2000, viewportLength: 600)
+        // Новый снимок докручивает к новым (`TR-5`), а сворачивание — нет.
+        let afterCapture = restored.revealNewestOffset()
         guard afterCapture != saved else {
             throw Failure("новый снимок обязан вернуть ленту к новым снимкам")
         }
@@ -293,14 +295,15 @@ struct RemainingRequirementsTests {
 
     /// `TR-14`: новый снимок во время инерции не даёт рывка.
     @MainActor private static func newCaptureInterruptsScrolling() throws {
-        var model = TrayScrollModel(contentLength: 2000, viewportLength: 600, offset: 0)
+        var model = TrayScrollModel(contentLength: 2000, viewportLength: 600,
+                                    offset: 0, lastCardLength: 150)
         model = model.scrolled(by: -300)              // за край, инерция
         guard model.overshoot < 0 else { throw Failure("перетягивание не зафиксировано") }
 
         model = model.settled()
-        model.offset = TrayScrollModel.defaultOffset(contentLength: 2000, viewportLength: 600)
+        model.offset = model.revealNewestOffset()
         guard model.overshoot == 0 else { throw Failure("после нового снимка перетягивание обязано сняться") }
-        guard model.offset == model.maximumOffset else {
+        guard model.offset == model.revealNewestOffset() else {
             throw Failure("новый снимок не вернул ленту в положение по умолчанию")
         }
     }

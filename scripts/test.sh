@@ -1354,8 +1354,12 @@ if output="$(rg -n 'skew|Skew' Sources | rg -i 'fail\(|throw ')"; then
   echo "Capture regression: display skew must never refuse a capture." >&2
   exit 1
 fi
-rg -F -q "collapseThreshold" Sources/TrayScrollModel.swift
-rg -F -q "func handleHubSwipe" Sources/ThumbnailManager.swift
+# WP9: жест прокрутки никогда не переключает hide/show (снятые TR-7…TR-10).
+if output="$(rg -n 'collapseThreshold|collapseDirection|handleHubSwipe|collapseByGesture' Sources)"; then
+  echo "$output"
+  echo "Tray regression: scroll gestures must never toggle hide/show." >&2
+  exit 1
+fi
 # Прокрутка доходит до координат карточек, а не живёт только в модели.
 rg -F -q "thumbnailScrollLayout(screenFrame:" Sources/ThumbnailManager.swift
 # Кадрирование и поворот существуют и применяются к результату.

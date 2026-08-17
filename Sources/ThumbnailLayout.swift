@@ -8,13 +8,20 @@ enum ThumbnailLayoutEdge: String, CaseIterable {
 
 struct ThumbnailLayoutSlot: Equatable {
     let index: Int
+    /// Начало видимой полосы карточки в глобальных координатах, при полной
+    /// ширине поперёк оси ленты: сужение по глубине карточка применяет сама.
     let origin: NSPoint
-    /// Глубина стопки у края (`TR-3`): тусклость и уменьшение, 1 — обычная карточка.
     var opacity: CGFloat = 1
-    var scale: CGFloat = 1
     /// Порядок наложения: больше — ближе к зрителю. Слои стопки обязаны лежать
     /// ЗА карточками ленты, иначе самый прозрачный слой рисуется поверх всех.
     var stackOrder: CGFloat = 0
+    /// Поля полосы стопки (`TR-23`…`TR-26`); у развёрнутой карточки полоса
+    /// совпадает с самой карточкой.
+    var length: CGFloat = 0
+    var insetSteps: CGFloat = 0
+    var sliceFromFarSide: Bool = true
+    var shadowFraction: CGFloat = 1
+    var isFullCard: Bool = true
 }
 
 struct ThumbnailLayoutResult: Equatable {
@@ -149,9 +156,9 @@ func thumbnailLayoutShowingNewest(screenFrame: NSRect,
 /// Раскладка ленты по непрерывному смещению прокрутки (`TR-1`…`TR-3`).
 ///
 /// Отличие от `thumbnailLayout`: карточки не выпадают из ленты по индексу, а
-/// сдвигаются на `offset` и собираются в стопку у краёв. Видимость определяется
-/// геометрией, а не номером первой карточки, поэтому остановка между карточками
-/// становится возможной.
+/// сдвигаются на `offset` и собираются в стопки-кромки у кнопки и у дальней
+/// границы (`TR-23`…`TR-26`). Видимость определяется геометрией, а не номером
+/// первой карточки, поэтому остановка между карточками становится возможной.
 func thumbnailScrollLayout(screenFrame: NSRect,
                            edge: ThumbnailLayoutEdge,
                            cardWidth: CGFloat,
@@ -166,10 +173,10 @@ func thumbnailScrollLayout(screenFrame: NSRect,
     let viewportLength = edge.isVertical
         ? screenFrame.height - margin * 2 - hubSize.height - gap
         : screenFrame.width - margin * 2 - hubSize.width - gap
-    let placements = TrayStackLayout.placements(cardLengths: lengths,
-                                                gap: gap,
-                                                offset: offset,
-                                                viewportLength: max(1, viewportLength))
+    let bands = TrayStripLayout.bands(cardLengths: lengths,
+                                      gap: gap,
+                                      offset: offset,
+                                      viewportLength: max(1, viewportLength))
 
     var visible: [ThumbnailLayoutSlot] = []
     var hidden: [Int] = []
@@ -179,10 +186,8 @@ func thumbnailScrollLayout(screenFrame: NSRect,
                             margin: margin,
                             gap: gap)
 
-    for (index, placement) in placements.enumerated() {
-        // Карточка глубже стопки не рисуется: три слоя достаточно, чтобы
-        // показать «дальше есть ещё», остальное — лишние окна.
-        guard placement.depth < CGFloat(TrayStackLayout.stackDepth) else {
+    for (index, band) in bands.enumerated() {
+        guard !band.hidden else {
             hidden.append(index)
             continue
         }
@@ -194,23 +199,27 @@ func thumbnailScrollLayout(screenFrame: NSRect,
         switch edge {
         case .right:
             origin = NSPoint(x: screenFrame.maxX - margin - cardWidth,
-                             y: strip.y + placement.position)
+                             y: strip.y + band.position)
         case .left:
             origin = NSPoint(x: screenFrame.minX + margin,
-                             y: strip.y + placement.position)
+                             y: strip.y + band.position)
         case .bottom:
-            origin = NSPoint(x: strip.x - cardWidth - placement.position,
+            origin = NSPoint(x: strip.x - band.position - band.length,
                              y: screenFrame.minY + margin)
         case .top:
-            origin = NSPoint(x: strip.x - cardWidth - placement.position,
+            origin = NSPoint(x: strip.x - band.position - band.length,
                              y: screenFrame.maxY - margin - cardHeights[index])
         }
         // Чем глубже слой, тем он дальше: порядок наложения задаётся явно, а не
-        // порядком добавления сабвью. Иначе дальняя стопка (в ней лежат самые
-        // новые снимки, добавленные последними) рисуется задом наперёд.
+        // порядком добавления сабвью. Иначе стопка рисуется задом наперёд.
         visible.append(.init(index: index, origin: origin,
-                             opacity: placement.opacity, scale: placement.scale,
-                             stackOrder: -placement.depth))
+                             opacity: band.opacity,
+                             stackOrder: band.zOrder,
+                             length: band.length,
+                             insetSteps: band.insetSteps,
+                             sliceFromFarSide: band.sliceFromFarSide,
+                             shadowFraction: band.shadowFraction,
+                             isFullCard: band.isFullCard))
     }
     return .init(visible: visible, hidden: hidden)
 }

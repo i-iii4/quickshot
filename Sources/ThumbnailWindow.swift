@@ -161,6 +161,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     /// Раскладка внутренних элементов по текущему `bounds` (frame вью ставит обёртка).
     func layoutContents() {
         displayView.frame = bounds
+        layer?.cornerRadius = QS.radiusCard
         updateDisplayImage()
         guard let controls else { return }
         let inset = QS.s2
@@ -176,13 +177,39 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         controls.frame = NSRect(x: inset, y: rowY, width: groupWidth, height: rowH)
     }
 
+    /// Срез карточки в стопке (`TR-23`): вью клипует по своим границам, а
+    /// изображение раскладывается в полный масштаб карточки и сдвигается так,
+    /// чтобы в полосе оказался нужный край — реальный контент, не заглушка.
+    func layoutSlice(cardSize: NSSize, vertical: Bool, sliceFromFarSide: Bool) {
+        if vertical {
+            let fullW = bounds.width
+            let fullH = cardSize.height * (fullW / max(1, cardSize.width))
+            displayView.frame = NSRect(x: 0,
+                                       y: sliceFromFarSide ? bounds.height - fullH : 0,
+                                       width: fullW, height: fullH)
+        } else {
+            let fullH = bounds.height
+            let fullW = cardSize.width * (fullH / max(1, cardSize.height))
+            displayView.frame = NSRect(x: sliceFromFarSide ? 0 : bounds.width - fullW,
+                                       y: 0,
+                                       width: fullW, height: fullH)
+        }
+        // Радиус не больше половины полосы: кромка в 7pt со стандартным
+        // радиусом превращается в пилюлю.
+        layer?.cornerRadius = min(QS.radiusCard, min(bounds.width, bounds.height) / 2)
+        updateDisplayImage()
+        controls?.isHidden = true
+    }
+
     /// Картинка вью под текущий размер карточки: выигрыш памяти остаётся —
     /// NSImageView получает уменьшенную копию, а не превью целиком.
     /// Пересобирается только когда нужная ширина заметно изменилась: ресайз
     /// тянут мышью, и пересчёт на каждый кадр был бы дороже самой экономии.
     private func updateDisplayImage() {
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
-        let neededWidth = max(1, Int((bounds.width * scale).rounded()))
+        // Срез стопки может держать изображение шире собственных границ.
+        let logicalWidth = max(bounds.width, displayView.frame.width)
+        let neededWidth = max(1, Int((logicalWidth * scale).rounded()))
         guard neededWidth > 0 else { return }
         let sourceWidth = sourceForDisplay.width
         // Мельче исходника не бывает; запас в четверть, чтобы не пересобирать
@@ -571,6 +598,7 @@ final class ThumbnailWindow {
 
     /// Карточка занимает контейнер минус поля `band`; во время анимации размер клампим.
     private func layoutCardInContainer() {
+        isSliceBand = false
         let iw = max(0, container.bounds.width - 2 * band)
         let ih = max(0, container.bounds.height - 2 * band)
         view.frame = NSRect(x: band, y: band, width: iw, height: ih)
@@ -664,6 +692,9 @@ final class ThumbnailWindow {
     /// вью `zPosition` ломает отрисовку содержимого.
     private(set) var stackDepth: CGFloat = 0
     var stackOrder: CGFloat { stackDepth }
+    /// Карточка сейчас показана кромкой стопки: такой полосе не положены ни
+    /// ховер, ни контролы — ими владеет верхняя развёрнутая карточка.
+    private(set) var isSliceBand = false
 
     func placeInstant(origin: NSPoint) {
         stackDepth = 0
@@ -675,32 +706,51 @@ final class ThumbnailWindow {
         container.isHidden = false
     }
 
-    /// Позиция в прокручиваемой ленте со стопочной глубиной (`TR-3`): карточка
-    /// у края тускнеет и слегка уменьшается вокруг своего центра. Глубокая
-    /// карточка не интерактивна — клик достаётся верхней.
-    func placeScrolled(origin: NSPoint, opacity: CGFloat, scale: CGFloat, stackOrder: CGFloat) {
+    /// Кромка стопки (`TR-23`…`TR-26`): видимая полоса карточки с сужением по
+    /// глубине и срезом реального содержимого. Размер задаётся РАМКОЙ, а не
+    /// трансформацией слоя: у layer-backed вью AppKit сам ведёт геометрию слоя,
+    /// и своя трансформация ломает отрисовку содержимого.
+    func placeBand(origin: NSPoint,
+                   length: CGFloat,
+                   insetSteps: CGFloat,
+                   sliceFromFarSide: Bool,
+                   opacity: CGFloat,
+                   shadowFraction: CGFloat,
+                   stackOrder: CGFloat,
+                   vertical: Bool) {
         stackDepth = stackOrder
-        // Уменьшение задаётся РАМКОЙ, а не трансформацией слоя: у layer-backed
-        // вью AppKit сам ведёт геометрию слоя, и своя трансформация ломает
-        // отрисовку содержимого — на экране остаётся одна тень контейнера.
-        let full = outerRect(cardOrigin: origin)
-        restingFrame = full.insetBy(dx: full.width * (1 - scale) / 2,
-                                    dy: full.height * (1 - scale) / 2)
+        isSliceBand = true
+        let inset = insetSteps * TrayStripLayout.insetStep
+        let bandWidth = vertical ? max(1, cardWidth - 2 * inset) : max(1, length)
+        let bandHeight = vertical ? max(1, length) : max(1, cardHeight - 2 * inset)
+        let bandOrigin = vertical
+            ? NSPoint(x: origin.x + inset, y: origin.y)
+            : NSPoint(x: origin.x, y: origin.y + inset)
+        restingFrame = NSRect(x: bandOrigin.x - band, y: bandOrigin.y - band,
+                              width: bandWidth + 2 * band, height: bandHeight + 2 * band)
         container.frame = restingFrame
-        layoutCardInContainer()
+        view.frame = NSRect(x: band, y: band, width: bandWidth, height: bandHeight)
+        view.layoutSlice(cardSize: NSSize(width: cardWidth, height: cardHeight),
+                         vertical: vertical,
+                         sliceFromFarSide: sliceFromFarSide)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         container.layer?.transform = CATransform3DIdentity
-        container.layer?.shadowOpacity = Float(TrayAnim.restingShadowOpacity * opacity)
+        // Тень привязана к оставшейся высоте кромки (`TR-26`): исчезающая
+        // полоса не оставляет тень висеть в воздухе и не мигает ею.
+        container.layer?.shadowOpacity = Float(TrayAnim.restingShadowOpacity
+                                               * max(0, min(1, shadowFraction))
+                                               * max(0, min(1, opacity)))
+        let radius = min(QS.radiusCard, min(bandWidth, bandHeight) / 2)
         container.layer?.shadowPath = CGPath(roundedRect: view.frame,
-                                             cornerWidth: QS.radiusCard,
-                                             cornerHeight: QS.radiusCard,
+                                             cornerWidth: radius,
+                                             cornerHeight: radius,
                                              transform: nil)
         container.alphaValue = max(0, min(1, opacity))
         CATransaction.commit()
-        // Карточка в стопке остаётся живой: клик достаётся верхней по
-        // z-порядку, а гашение интерактивности убивало и прокрутку, потому что
-        // события колеса доходят до трея только через карточку.
+        // Кромка остаётся живой: клик достаётся верхней карточке по z-порядку,
+        // а гашение интерактивности убивало и прокрутку, потому что события
+        // колеса доходят до трея только через карточку.
         container.interactionsEnabled = true
         container.isHidden = false
     }
