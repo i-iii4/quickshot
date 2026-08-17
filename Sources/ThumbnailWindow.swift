@@ -180,10 +180,11 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     }
 
     /// Срез карточки в стопке (`TR-23`): вью клипует по своим границам, а
-    /// изображение раскладывается в НАТУРАЛЬНЫЙ масштаб карточки и сдвигается
-    /// так, чтобы в полосе оказался нужный край — карточка не деформируется,
-    /// её просто перекрыли.
-    func layoutSlice(cardSize: NSSize, vertical: Bool, sliceFromFarSide: Bool) {
+    /// изображение раскладывается в масштаб глубины карточки и сдвигается так,
+    /// чтобы в полосе оказался нужный край — карточка не деформируется, её
+    /// просто перекрыли.
+    func layoutSlice(cardSize: NSSize, vertical: Bool, sliceFromFarSide: Bool,
+                     roundsStart: Bool, roundsEnd: Bool) {
         if vertical {
             let fullW = bounds.width
             let fullH = cardSize.height * (fullW / max(1, cardSize.width))
@@ -197,14 +198,20 @@ private final class ThumbnailView: NSView, NSDraggingSource {
                                        y: 0,
                                        width: fullW, height: fullH)
         }
-        // Все углы полосы скруглены. Со стороны настоящего края это родные
-        // углы карточки; со стороны среза — «плечи», которые видны в
-        // скруглённых углах накрывающей соседки и читаются как край карточки,
-        // а не как линия обрезки. Верхи узких кромок спрятаны перспективой
-        // под накрывающей, их скругление не видно вовсе.
-        layer?.cornerRadius = min(QS.radiusCard, min(bounds.width, bounds.height) / 2)
-        layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner,
-                                .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        // Скруглены только НАСТОЯЩИЕ края карточки. Линия среза — прямая:
+        // карточка просто уходит под вышележащую, а срез торчащей части
+        // спрятан перспективой за её прямым краем.
+        layer?.cornerRadius = QS.radiusCard
+        var corners: CACornerMask = []
+        if vertical {
+            if roundsStart { corners.insert(.layerMinXMinYCorner); corners.insert(.layerMaxXMinYCorner) }
+            if roundsEnd { corners.insert(.layerMinXMaxYCorner); corners.insert(.layerMaxXMaxYCorner) }
+        } else {
+            // Ось ленты идёт от кнопки (справа) влево: ближний край — maxX.
+            if roundsStart { corners.insert(.layerMaxXMinYCorner); corners.insert(.layerMaxXMaxYCorner) }
+            if roundsEnd { corners.insert(.layerMinXMinYCorner); corners.insert(.layerMinXMaxYCorner) }
+        }
+        layer?.maskedCorners = corners
         updateDisplayImage()
         controls?.isHidden = true
     }
@@ -722,6 +729,8 @@ final class ThumbnailWindow {
                    length: CGFloat,
                    scale: CGFloat,
                    sliceFromFarSide: Bool,
+                   roundsStart: Bool,
+                   roundsEnd: Bool,
                    opacity: CGFloat,
                    shadowFraction: CGFloat,
                    stackOrder: CGFloat,
@@ -745,7 +754,9 @@ final class ThumbnailWindow {
         view.layoutSlice(cardSize: NSSize(width: cardWidth * scale,
                                           height: cardHeight * scale),
                          vertical: vertical,
-                         sliceFromFarSide: sliceFromFarSide)
+                         sliceFromFarSide: sliceFromFarSide,
+                         roundsStart: roundsStart,
+                         roundsEnd: roundsEnd)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         container.layer?.transform = CATransform3DIdentity

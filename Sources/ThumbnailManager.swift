@@ -865,6 +865,8 @@ final class ThumbnailManager {
                            length: slot.length,
                            scale: slot.scale,
                            sliceFromFarSide: slot.sliceFromFarSide,
+                           roundsStart: slot.roundsStart,
+                           roundsEnd: slot.roundsEnd,
                            opacity: slot.opacity,
                            shadowFraction: slot.shadowFraction,
                            stackOrder: slot.stackOrder,

@@ -367,17 +367,24 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
         if newest.hostView.isHidden || newest.debugOpacity < 0.999 {
             failures.append("collect: новейшая карточка не видна на вершине стопки")
         }
-        if newest.debugCardFrame.height < 100 {
-            failures.append("collect: новейшая карточка сжата: высота \(newest.debugCardFrame.height)")
+        let newestFrame = newest.debugCardFrame
+        if newestFrame.height < 100 {
+            failures.append("collect: новейшая карточка сжата: высота \(newestFrame.height)")
         }
+        // Кромки — целые карточки, ушедшие под верхнюю: из-под её низа торчат
+        // ярусы по 7pt, наверху не торчит ничего.
         let edge = TrayStripLayout.edgeLength
         var visibleEdges = 0
         for (index, card) in fixture.cards.enumerated() where index != fixture.cards.count - 1 {
             guard !card.hostView.isHidden else { continue }
             visibleEdges += 1
-            let height = card.debugCardFrame.height
-            if height > edge + 1 {
-                failures.append("collect: карточка \(index) торчит из стопки: высота \(height)")
+            let frame = card.debugCardFrame
+            if frame.maxY > newestFrame.maxY + 0.5 {
+                failures.append("collect: карточка \(index) торчит над стопкой: \(frame.maxY)")
+            }
+            let protrusion = newestFrame.minY - frame.minY
+            if protrusion < edge - 1.5 || protrusion > 2 * edge + 1.5 {
+                failures.append("collect: выступ карточки \(index) не на ярусе: \(protrusion)")
             }
         }
         if visibleEdges == 0 {
@@ -429,10 +436,17 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
         if added.hostView.isHidden || added.debugCardFrame.height < 100 {
             failures.append("insert-compressed: новый снимок не лёг целиком поверх стопки")
         }
-        if !previousNewest.hostView.isHidden,
-           previousNewest.debugCardFrame.height > TrayStripLayout.edgeLength + 1 {
-            failures.append("insert-compressed: прежняя верхняя карточка не стала кромкой: "
-                            + "высота \(previousNewest.debugCardFrame.height)")
+        if !previousNewest.hostView.isHidden {
+            let prev = previousNewest.debugCardFrame
+            let addedFrame = added.debugCardFrame
+            if prev.maxY > addedFrame.maxY + 0.5 {
+                failures.append("insert-compressed: прежняя верхняя торчит над новой: \(prev.maxY)")
+            }
+            let protrusion = addedFrame.minY - prev.minY
+            if abs(protrusion - TrayStripLayout.edgeLength) > 1.5 {
+                failures.append("insert-compressed: прежняя верхняя не ушла на ярус кромки: "
+                                + "выступ \(protrusion)")
+            }
         }
     }
 

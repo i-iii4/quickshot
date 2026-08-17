@@ -22,6 +22,10 @@ struct ThumbnailLayoutSlot: Equatable {
     /// Перспектива глубины: карточка в стопке уменьшена целиком.
     var scale: CGFloat = 1
     var sliceFromFarSide: Bool = true
+    /// Какие края полосы — настоящие края карточки (скруглены); обрезанные
+    /// края — прямые.
+    var roundsStart: Bool = true
+    var roundsEnd: Bool = true
     var shadowFraction: CGFloat = 1
     var isFullCard: Bool = true
 }
@@ -223,6 +227,8 @@ func thumbnailScrollLayout(screenFrame: NSRect,
                              insetSteps: band.insetSteps,
                              scale: band.scale,
                              sliceFromFarSide: band.sliceFromFarSide,
+                             roundsStart: band.roundsStart,
+                             roundsEnd: band.roundsEnd,
                              shadowFraction: band.shadowFraction,
                              isFullCard: band.isFullCard))
     }

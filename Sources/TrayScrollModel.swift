@@ -89,6 +89,13 @@ struct TrayCardBand: Equatable {
     /// (дальняя стопка: торчат верхи), false — с ближней (ближняя стопка:
     /// торчат низы).
     var sliceFromFarSide: Bool
+    /// Ближний к кнопке край полосы — настоящий край карточки (скруглён).
+    /// false — край обрезан границей зоны, линия прямая.
+    var roundsStart: Bool = true
+    /// Дальний от кнопки край полосы — настоящий край карточки (скруглён).
+    /// false — край срезан вышележащим слоем, линия прямая и спрятана за его
+    /// прямым участком.
+    var roundsEnd: Bool = true
     /// Прозрачность: 1 всюду, кроме растворения нижней кромки стопки.
     var opacity: CGFloat
     /// Доля тени: привязана к оставшейся видимой высоте кромки.
@@ -200,64 +207,77 @@ enum TrayStripLayout {
                                         shadowFraction: 1, zOrder: 0, hidden: false)
         }
 
-        // Ближняя стопка: низы на ярусах 14/7/0 минус осадка; видимая полоса —
-        // от собственного низа до низа соседки сверху (или прибывающей).
-        // Глубина непрерывна (ярус + фаза осадки) и задаёт перспективу.
-        for index in 0..<nearCount {
+        // Ближняя стопка: низы на ярусах 14/7/0 минус осадка. Карточка
+        // рисуется ЦЕЛОЙ и уходит под вышележащий слой — перекрытие делает
+        // видимой полоску-кромку само, включая скруглённые углы соседки.
+        // Срез нужен только торчащему НАД верхом вышележащего слоя куску:
+        // линия среза прячется за его прямым верхним краем, потому что
+        // перспектива делает нижнюю карточку уже сильнее радиуса углов.
+        var coverTop: CGFloat = .greatestFiniteMagnitude
+        if nearCount < count {
+            coverTop = top(nearCount)      // верх прибывающей: над ним не торчать
+        }
+        for index in stride(from: nearCount - 1, through: 0, by: -1) {
             let depth = nearCount - 1 - index
             let liveDepth = CGFloat(depth) + nearPhase
             let scale = depthScale(liveDepth)
             let bottom = parkLevel - e * CGFloat(depth) - e * nearPhase
-            let cover: CGFloat
-            if depth == 0 {
-                cover = nearCount < count ? raws[nearCount] : .greatestFiniteMagnitude
-            } else {
-                cover = parkLevel - e * CGFloat(depth - 1) - e * nearPhase
-            }
+            let cardTop = bottom + cardLengths[index] * scale
+            let visibleFrom = max(bottom, 0)
+            let visibleTo = min(cardTop, coverTop)
             bands[index] = parkedBand(cardLength: cardLengths[index],
                                       scale: scale,
-                                      visibleFrom: max(bottom, 0),
-                                      visibleTo: min(cover, bottom + cardLengths[index] * scale),
+                                      visibleFrom: visibleFrom,
+                                      visibleTo: visibleTo,
                                       depth: depth,
                                       fade: depth == 2 ? nearPhase : 0,
-                                      sliceFromFarSide: false)
+                                      sliceFromFarSide: false,
+                                      roundsStart: visibleFrom <= bottom + 0.001,
+                                      roundsEnd: visibleTo >= cardTop - 0.001)
+            coverTop = min(coverTop, visibleTo)
         }
 
-        // Дальняя стопка — зеркало: верхи на ярусах от дальней границы,
-        // прибывающая (более старая) накрывает снизу, торчат верхи.
+        // Дальняя стопка — зеркало: верхи на ярусах, карточка целая, из-под
+        // накрывшей её снизу соседки торчит верхняя кромка; срезается только
+        // свисающий НИЖЕ низа соседки кусок, клип краем окна — сверху.
+        var coverBottom: CGFloat = -.greatestFiniteMagnitude
+        if farStart > 0 {
+            coverBottom = raws[farStart - 1]   // низ прибывающей
+        }
         for index in farStart..<count {
             let depth = index - farStart
             let liveDepth = CGFloat(depth) + farPhase
             let scale = depthScale(liveDepth)
             let topEdge = farPark + e * CGFloat(depth) + e * farPhase
-            let cover: CGFloat
-            if depth == 0 {
-                cover = farStart > 0 ? top(farStart - 1) : -.greatestFiniteMagnitude
-            } else {
-                cover = farPark + e * CGFloat(depth - 1) + e * farPhase
-            }
+            let cardBottom = topEdge - cardLengths[index] * scale
+            let visibleFrom = max(cardBottom, coverBottom)
+            let visibleTo = min(topEdge, viewportLength)
             bands[index] = parkedBand(cardLength: cardLengths[index],
                                       scale: scale,
-                                      visibleFrom: max(topEdge - cardLengths[index] * scale, cover),
-                                      visibleTo: min(topEdge, viewportLength),
+                                      visibleFrom: visibleFrom,
+                                      visibleTo: visibleTo,
                                       depth: depth,
                                       fade: depth == 2 ? farPhase : 0,
-                                      sliceFromFarSide: true)
+                                      sliceFromFarSide: true,
+                                      roundsStart: visibleFrom <= cardBottom + 0.001,
+                                      roundsEnd: visibleTo >= topEdge - 0.001)
+            coverBottom = max(coverBottom, visibleFrom)
         }
 
         return bands
     }
 
-    /// Видимая полоса запаркованной карточки. Карточка цела (в масштабе своей
-    /// глубины); полосу задаёт перекрытие соседками и краями зоны. Глубже
-    /// двух ярусов кромок — скрыто.
+    /// Полоса запаркованной карточки: целая карточка в масштабе глубины минус
+    /// срезы торчащих частей и краёв зоны. Глубже двух ярусов кромок — скрыто.
     private static func parkedBand(cardLength: CGFloat,
                                    scale: CGFloat,
                                    visibleFrom: CGFloat,
                                    visibleTo: CGFloat,
                                    depth: Int,
                                    fade: CGFloat,
-                                   sliceFromFarSide: Bool) -> TrayCardBand {
+                                   sliceFromFarSide: Bool,
+                                   roundsStart: Bool,
+                                   roundsEnd: Bool) -> TrayCardBand {
         guard depth <= 2 else { return .hiddenBand }
         let length = visibleTo - visibleFrom
         guard length > 0.05 else { return .hiddenBand }
@@ -269,8 +289,10 @@ enum TrayStripLayout {
                             scale: scale,
                             contentFraction: length / max(1, cardLength * scale),
                             sliceFromFarSide: sliceFromFarSide,
+                            roundsStart: roundsStart,
+                            roundsEnd: roundsEnd,
                             opacity: opacity,
-                            shadowFraction: min(1, length / edgeLength),
+                            shadowFraction: 1,
                             zOrder: -CGFloat(depth + 1),
                             hidden: false)
     }

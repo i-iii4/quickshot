@@ -135,12 +135,20 @@ struct TrayScrollModelTests {
         let newest = bands[9]
         expect(newest.isFullCard && abs(newest.position - park) < 0.001,
                "новейшая карточка целиком на ярусе: \(newest.position)")
-        expect(abs(bands[8].position - e) < 0.001 && abs(bands[8].length - e) < 0.001,
-               "первая кромка на своём ярусе: \(bands[8].position), \(bands[8].length)")
-        expect(abs(bands[7].position) < 0.001 && abs(bands[7].length - e) < 0.001,
-               "вторая кромка прижата к базе: \(bands[7].position), \(bands[7].length)")
-        expect(!bands[8].sliceFromFarSide && !bands[7].sliceFromFarSide,
-               "кромки у кнопки показывают НИЗЫ карточек")
+        // Кромка — выступ ЦЕЛОЙ карточки из-под соседки: полоса рисуется до
+        // своего настоящего верха и уходит под соседку, наружу торчат 7pt.
+        expect(abs(bands[8].position - e) < 0.001,
+               "первая кромка на своём ярусе: \(bands[8].position)")
+        expect(abs(bands[7].position) < 0.001,
+               "вторая кромка прижата к базе: \(bands[7].position)")
+        for index in [7, 8] {
+            let band = bands[index]
+            expect(band.position + band.length <= newest.position + newest.length + 0.001,
+                   "слой \(index) торчит над стопкой")
+            expect(band.length > e, "полоса \(index) — целая карточка, не срез: \(band.length)")
+            expect(!band.sliceFromFarSide, "кромки у кнопки показывают НИЗЫ карточек")
+            expect(band.roundsStart, "низ кромки \(index) — настоящий край")
+        }
         for index in 0...6 {
             expect(bands[index].hidden, "слой \(index) глубже стопки обязан скрыться")
         }
@@ -156,9 +164,9 @@ struct TrayScrollModelTests {
         let e = TrayStripLayout.edgeLength
         expect(bands[5].isFullCard && abs(bands[5].position - TrayStripLayout.parkLevel) < 0.001,
                "новейшая карточка целиком на ярусе")
-        expect(abs(bands[4].position - e) < 0.001 && abs(bands[4].length - e) < 0.001,
+        expect(abs(bands[4].position - e) < 0.001,
                "первая кромка на ярусе независимо от высот")
-        expect(abs(bands[3].position) < 0.001 && abs(bands[3].length - e) < 0.001,
+        expect(abs(bands[3].position) < 0.001,
                "вторая кромка на ярусе независимо от высот")
         for index in 0...2 {
             expect(bands[index].hidden, "слой \(index) глубже стопки обязан скрыться")
@@ -217,8 +225,9 @@ struct TrayScrollModelTests {
         }
     }
 
-    /// Верх запаркованной срезается ТОЛЬКО низом накрывающей карточки и едет
-    /// вместе с ним один к одному.
+    /// Запаркованная карточка рисуется ЦЕЛОЙ и уходит ПОД прибывающую:
+    /// перекрытие делает кромку само, включая скруглённые углы прибывающей.
+    /// Линия среза по низу накрывающей запрещена.
     private static func parkedCardIsCutOnlyByTheArrivingOne() {
         let lengths = uniform(10)
         let k = 6
@@ -229,9 +238,13 @@ struct TrayScrollModelTests {
             let arriving = bands[k]
             let parked = bands[k - 1]
             expect(arriving.isFullCard, "прибывающая карточка обязана быть целой")
-            expect(abs((parked.position + parked.length) - arriving.position) < 0.001,
-                   "верх запаркованной обязан совпадать с низом прибывающей: "
-                   + "\(parked.position + parked.length) против \(arriving.position)")
+            expect(parked.position + parked.length > arriving.position + 1,
+                   "запаркованная обязана уходить ПОД прибывающую, а не "
+                   + "обрезаться её низом: верх \(parked.position + parked.length), "
+                   + "низ прибывающей \(arriving.position)")
+            expect(parked.roundsEnd,
+                   "верх запаркованной под прибывающей — настоящий край карточки")
+            expect(parked.roundsStart, "низ запаркованной — настоящий край")
             expect(arriving.zOrder > parked.zOrder,
                    "прибывающая обязана лежать поверх запаркованной")
         }
@@ -310,39 +323,49 @@ struct TrayScrollModelTests {
         let parked = bands.enumerated().filter { !$0.element.hidden && $0.element.sliceFromFarSide }
         expect(!parked.isEmpty, "при нулевом смещении дальняя стопка обязана появиться")
         for (index, band) in parked {
-            expect(band.position + band.length <= viewport + 0.001,
-                   "слой \(index) вылез за окно просмотра: \(band.position + band.length)")
-            if band.zOrder <= -2 {
-                expect(band.position >= farPark - 0.001,
-                       "кромка \(index) ниже дальнего яруса: \(band.position)")
-            }
+            let bandTop = band.position + band.length
+            expect(bandTop <= viewport + 0.001,
+                   "слой \(index) вылез за окно просмотра: \(bandTop)")
+            expect(bandTop >= farPark - 0.001,
+                   "верх слоя \(index) ниже дальнего яруса: \(bandTop)")
+        }
+        // Выступы верхних кромок — ровно ярус; слой, срезанный краем окна
+        // (`roundsEnd == false`), из проверки выпадает.
+        let tops = parked.filter { $0.element.roundsEnd }
+            .map { $0.element.position + $0.element.length }.sorted()
+        for (lower, upper) in zip(tops, tops.dropFirst()) {
+            expect(abs(upper - lower - TrayStripLayout.edgeLength) < 0.75,
+                   "выступ верхней кромки не равен ярусу: \(upper - lower)")
         }
         expect(bands[9].hidden, "самая дальняя карточка глубже стопки")
     }
 
     /// Нижняя кромка стопки при наезде новой карточки уезжает за базу и
-    /// растворяется; тень гаснет вместе с высотой.
+    /// растворяется.
     private static func bottomEdgeSinksAndDissolves() {
         let lengths = uniform(10)
         let k = 7
 
-        func bottomEdge(atPhase phase: CGFloat) -> TrayCardBand {
-            let bands = TrayStripLayout.bands(cardLengths: lengths, gap: gap,
-                                              offset: offsetFor(arriving: k, phase: phase, lengths: lengths),
-                                              viewportLength: 600)
-            return bands[k - 3]     // глубина 2 — нижняя видимая кромка
+        func bands(atPhase phase: CGFloat) -> [TrayCardBand] {
+            TrayStripLayout.bands(cardLengths: lengths, gap: gap,
+                                  offset: offsetFor(arriving: k, phase: phase, lengths: lengths),
+                                  viewportLength: 600)
         }
 
-        let early = bottomEdge(atPhase: 0.35)
-        expect(early.length < TrayStripLayout.edgeLength && early.length > 0,
-               "кромка уезжает за базу: \(early.length)")
-        expect(abs(early.opacity - 0.65) < 0.01,
-               "кромка растворяется по фазе наезда: \(early.opacity)")
-        expect(abs(early.shadowFraction - early.length / TrayStripLayout.edgeLength) < 0.001,
-               "тень равна доле оставшейся высоты")
+        let early = bands(atPhase: 0.35)
+        let bottomEarly = early[k - 3]      // глубина 2 — нижняя видимая кромка
+        expect(abs(bottomEarly.position) < 0.001 && !bottomEarly.roundsStart,
+               "кромка уезжает за базу: низ обрезан краем зоны")
+        expect(abs(bottomEarly.opacity - 0.65) < 0.01,
+               "кромка растворяется по фазе наезда: \(bottomEarly.opacity)")
+        // Выступ из-под соседки сокращается вместе с осадкой.
+        let protrusionEarly = early[k - 2].position - bottomEarly.position
+        expect(protrusionEarly < TrayStripLayout.edgeLength,
+               "выступ нижней кромки обязан сокращаться: \(protrusionEarly)")
 
-        let late = bottomEdge(atPhase: 0.9)
-        expect(late.hidden || (late.opacity < 0.2 && late.length < early.length),
+        let late = bands(atPhase: 0.9)
+        let bottomLate = late[k - 3]
+        expect(bottomLate.hidden || bottomLate.opacity < 0.2,
                "к концу наезда нижняя кромка почти исчезла")
     }
 
