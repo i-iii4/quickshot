@@ -49,7 +49,7 @@ struct TrayScrollLayoutTests {
         let result = layout(heights: heights, offset: 600)
         let bands = result.visible.filter { !$0.isFullCard }
         expect(!bands.isEmpty, "при смещении 600 стопка обязана появиться")
-        let stripBase = screen.minY + margin + hub.height + gap
+        let stripBase = screen.minY + margin + hub.height + TrayStripLayout.hubClearance
         for slot in bands {
             expect(slot.origin.y >= stripBase - 0.5,
                    "кромка уезжает под хаб: \(slot.origin.y)")
@@ -122,12 +122,12 @@ struct TrayScrollLayoutTests {
                 case .bottom:
                     expect(abs(slot.origin.y - (screen.minY + margin)) < 0.5,
                            "нижний край: y карточки \(slot.origin.y)")
-                    expect(slot.origin.x + along <= screen.maxX - margin - hub.width - gap + 0.5,
+                    expect(slot.origin.x + along <= screen.maxX - margin - hub.width - TrayStripLayout.hubClearance + 0.5,
                            "нижний край: карточка налезает на хаб: \(slot.origin.x + along)")
                 case .top:
                     expect(abs(slot.origin.y - (screen.maxY - margin - 200)) < 0.5,
                            "верхний край: карточка за экраном: \(slot.origin.y)")
-                    expect(slot.origin.x + along <= screen.maxX - margin - hub.width - gap + 0.5,
+                    expect(slot.origin.x + along <= screen.maxX - margin - hub.width - TrayStripLayout.hubClearance + 0.5,
                            "верхний край: карточка налезает на хаб: \(slot.origin.x + along)")
                 }
             }
@@ -160,6 +160,18 @@ struct TrayScrollLayoutTests {
             let top = slot.origin.y + (slot.isFullCard ? heights[slot.index] : slot.length)
             expect(top <= screen.maxY - margin + 0.5,
                    "карточка \(slot.index) уходит за верхний край: \(top) при пределе \(screen.maxY - margin)")
+        }
+
+        // Со строкой меню граница опускается: лента не заходит под меню.
+        let menuBar: CGFloat = 30
+        let insetResult = thumbnailScrollLayout(screenFrame: screen, edge: .right,
+                                                cardWidth: 240, cardHeights: heights,
+                                                hubSize: hub, margin: margin, gap: gap,
+                                                offset: 0, menuBarInset: menuBar)
+        for slot in insetResult.visible {
+            let top = slot.origin.y + (slot.isFullCard ? heights[slot.index] : slot.length)
+            expect(top <= screen.maxY - menuBar - margin + 0.5,
+                   "карточка \(slot.index) заходит под строку меню: \(top)")
         }
     }
 

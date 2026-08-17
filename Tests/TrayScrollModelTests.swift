@@ -12,6 +12,7 @@ struct TrayScrollModelTests {
         revealOffsetShowsTheNewestCard()
         restingStackHasConstantTiers()
         mixedHeightsKeepTheSilhouetteClean()
+        depthAddsPerspective()
         cardsAreNeverDeformed()
         parkedCardIsCutOnlyByTheArrivingOne()
         stackSinksWhileTheNextCardArrives()
@@ -170,8 +171,33 @@ struct TrayScrollModelTests {
         }
     }
 
+    /// Перспектива: уходя в глубину, карточка уменьшается целиком, и на ярус
+    /// глубже — сильнее радиуса своих углов на сторону, поэтому линия среза
+    /// запаркованной никогда не выглядывает в скруглённых углах накрывающей.
+    private static func depthAddsPerspective() {
+        let lengths = uniform(10)
+        let model = TrayScrollModel(contentLength: content(lengths), viewportLength: 600,
+                                    offset: 0, lastCardLength: 150)
+        let resting = TrayStripLayout.bands(cardLengths: lengths, gap: gap,
+                                            offset: model.maximumOffset, viewportLength: 600)
+        expect(resting[9].scale > 0.999, "верхняя карточка стопки в полном масштабе")
+        expect(abs(resting[8].scale - (1 - TrayStripLayout.depthScaleStep)) < 0.001,
+               "первая кромка отдалена на ярус: \(resting[8].scale)")
+        expect(abs(resting[7].scale - (1 - 2 * TrayStripLayout.depthScaleStep)) < 0.001,
+               "вторая кромка отдалена на два яруса: \(resting[7].scale)")
+
+        // Во время наезда глубина непрерывна: масштаб уходит вместе с фазой.
+        let mid = TrayStripLayout.bands(cardLengths: lengths, gap: gap,
+                                        offset: offsetFor(arriving: 6, phase: 0.5, lengths: lengths),
+                                        viewportLength: 600)
+        let covered = mid[5]
+        expect(covered.scale < 1 && covered.scale > 1 - TrayStripLayout.depthScaleStep,
+               "накрываемая карточка отдаляется по фазе: \(covered.scale)")
+    }
+
     /// Карточка никогда не деформируется: полоса — часть целой карточки в
-    /// натуральном масштабе, без сужений, и не длиннее самой карточки.
+    /// масштабе своей глубины, пропорции сохранены, полоса не длиннее
+    /// карточки.
     private static func cardsAreNeverDeformed() {
         let lengths: [CGFloat] = [200, 90, 260, 120, 180, 90, 210, 150, 100, 170]
         let maximum = content(lengths) - lengths[9]
@@ -184,8 +210,8 @@ struct TrayScrollModelTests {
                        "карточка \(index) сужена: \(band.insetSteps)")
                 expect(band.length <= lengths[index] + 0.001,
                        "полоса \(index) длиннее карточки: \(band.length)")
-                expect(abs(band.contentFraction * lengths[index] - band.length) < 0.01,
-                       "полоса \(index) масштабирует контент: \(band.contentFraction)")
+                expect(abs(band.contentFraction * lengths[index] * band.scale - band.length) < 0.01,
+                       "полоса \(index) искажает контент: \(band.contentFraction)")
             }
             offset += 3
         }
@@ -342,6 +368,8 @@ struct TrayScrollModelTests {
                            "слой \(index) мигнул на смещении \(offset): \(was.opacity) → \(now.opacity)")
                     expect(abs(now.shadowFraction - was.shadowFraction) < 0.25,
                            "тень слоя \(index) мигнула на смещении \(offset)")
+                    expect(abs(now.scale - was.scale) < 0.02,
+                           "масштаб слоя \(index) прыгнул на смещении \(offset): \(was.scale) → \(now.scale)")
                 }
             }
             previous = bands

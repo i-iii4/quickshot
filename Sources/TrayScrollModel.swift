@@ -78,6 +78,10 @@ struct TrayCardBand: Equatable {
     /// Историческое поле сужения. Карточки в стопке не сужаются: жёсткая
     /// карточка не меняет ширину. Всегда 0.
     var insetSteps: CGFloat
+    /// Перспектива: карточка в глубине стопки уменьшается ЦЕЛИКОМ,
+    /// пропорционально, вокруг своего яруса — как объект, удаляющийся от
+    /// зрителя. 1 — передний план.
+    var scale: CGFloat = 1
     /// Доля собственного изображения, видимая в полосе, со стороны
     /// выглядывающего края. 1 — карточка целиком.
     var contentFraction: CGFloat
@@ -94,8 +98,10 @@ struct TrayCardBand: Equatable {
     var zOrder: CGFloat
     var hidden: Bool
 
-    /// Полоса без среза — обычная развёрнутая карточка.
-    var isFullCard: Bool { !hidden && insetSteps < 0.001 && contentFraction > 0.999 }
+    /// Полоса без среза и перспективы — обычная развёрнутая карточка.
+    var isFullCard: Bool {
+        !hidden && insetSteps < 0.001 && contentFraction > 0.999 && scale > 0.999
+    }
 
     static let hiddenBand = TrayCardBand(position: 0, length: 0, insetSteps: 0,
                                          contentFraction: 0, sliceFromFarSide: true,
@@ -131,6 +137,18 @@ enum TrayStripLayout {
     /// Парковочный ярус верхней карточки стопки: под ним ровно два яруса
     /// кромок.
     static var parkLevel: CGFloat { 2 * edgeLength }
+    /// Перспектива: доля уменьшения карточки за один ярус глубины. На ярус
+    /// карточка сужается с каждой стороны сильнее радиуса своих углов, поэтому
+    /// линия среза запаркованной прячется за прямым участком низа накрывающей
+    /// и не выглядывает в её скруглённых углах.
+    static let depthScaleStep: CGFloat = 0.1
+    /// Зазор между кнопкой хаба и базой стопки. Ярусы кромок — и есть резерв
+    /// между кнопкой и лентой, отдельный большой отступ поверх них не нужен.
+    static let hubClearance: CGFloat = 4
+
+    static func depthScale(_ depth: CGFloat) -> CGFloat {
+        max(0.65, 1 - depthScaleStep * depth)
+    }
 
     static func bands(cardLengths: [CGFloat],
                       gap: CGFloat,
@@ -184,8 +202,11 @@ enum TrayStripLayout {
 
         // Ближняя стопка: низы на ярусах 14/7/0 минус осадка; видимая полоса —
         // от собственного низа до низа соседки сверху (или прибывающей).
+        // Глубина непрерывна (ярус + фаза осадки) и задаёт перспективу.
         for index in 0..<nearCount {
             let depth = nearCount - 1 - index
+            let liveDepth = CGFloat(depth) + nearPhase
+            let scale = depthScale(liveDepth)
             let bottom = parkLevel - e * CGFloat(depth) - e * nearPhase
             let cover: CGFloat
             if depth == 0 {
@@ -194,9 +215,9 @@ enum TrayStripLayout {
                 cover = parkLevel - e * CGFloat(depth - 1) - e * nearPhase
             }
             bands[index] = parkedBand(cardLength: cardLengths[index],
-                                      bottom: bottom,
+                                      scale: scale,
                                       visibleFrom: max(bottom, 0),
-                                      visibleTo: min(cover, bottom + cardLengths[index]),
+                                      visibleTo: min(cover, bottom + cardLengths[index] * scale),
                                       depth: depth,
                                       fade: depth == 2 ? nearPhase : 0,
                                       sliceFromFarSide: false)
@@ -206,8 +227,9 @@ enum TrayStripLayout {
         // прибывающая (более старая) накрывает снизу, торчат верхи.
         for index in farStart..<count {
             let depth = index - farStart
+            let liveDepth = CGFloat(depth) + farPhase
+            let scale = depthScale(liveDepth)
             let topEdge = farPark + e * CGFloat(depth) + e * farPhase
-            let bottom = topEdge - cardLengths[index]
             let cover: CGFloat
             if depth == 0 {
                 cover = farStart > 0 ? top(farStart - 1) : -.greatestFiniteMagnitude
@@ -215,8 +237,8 @@ enum TrayStripLayout {
                 cover = farPark + e * CGFloat(depth - 1) + e * farPhase
             }
             bands[index] = parkedBand(cardLength: cardLengths[index],
-                                      bottom: bottom,
-                                      visibleFrom: max(bottom, cover),
+                                      scale: scale,
+                                      visibleFrom: max(topEdge - cardLengths[index] * scale, cover),
                                       visibleTo: min(topEdge, viewportLength),
                                       depth: depth,
                                       fade: depth == 2 ? farPhase : 0,
@@ -226,10 +248,11 @@ enum TrayStripLayout {
         return bands
     }
 
-    /// Видимая полоса запаркованной карточки. Карточка цела; полосу задаёт
-    /// перекрытие соседками и краями зоны. Глубже двух ярусов кромок — скрыто.
+    /// Видимая полоса запаркованной карточки. Карточка цела (в масштабе своей
+    /// глубины); полосу задаёт перекрытие соседками и краями зоны. Глубже
+    /// двух ярусов кромок — скрыто.
     private static func parkedBand(cardLength: CGFloat,
-                                   bottom: CGFloat,
+                                   scale: CGFloat,
                                    visibleFrom: CGFloat,
                                    visibleTo: CGFloat,
                                    depth: Int,
@@ -243,7 +266,8 @@ enum TrayStripLayout {
         return TrayCardBand(position: visibleFrom,
                             length: length,
                             insetSteps: 0,
-                            contentFraction: length / max(1, cardLength),
+                            scale: scale,
+                            contentFraction: length / max(1, cardLength * scale),
                             sliceFromFarSide: sliceFromFarSide,
                             opacity: opacity,
                             shadowFraction: min(1, length / edgeLength),

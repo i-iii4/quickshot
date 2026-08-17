@@ -197,18 +197,14 @@ private final class ThumbnailView: NSView, NSDraggingSource {
                                        y: 0,
                                        width: fullW, height: fullH)
         }
-        // Скругление только со стороны настоящего края карточки: линия среза
-        // перекрытием — прямая. Полное скругление превращало кромку в пилюлю.
-        layer?.cornerRadius = QS.radiusCard
-        if vertical {
-            layer?.maskedCorners = sliceFromFarSide
-                ? [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
-                : [.layerMinXMinYCorner, .layerMaxXMinYCorner]
-        } else {
-            layer?.maskedCorners = sliceFromFarSide
-                ? [.layerMinXMinYCorner, .layerMinXMaxYCorner]
-                : [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
-        }
+        // Все углы полосы скруглены. Со стороны настоящего края это родные
+        // углы карточки; со стороны среза — «плечи», которые видны в
+        // скруглённых углах накрывающей соседки и читаются как край карточки,
+        // а не как линия обрезки. Верхи узких кромок спрятаны перспективой
+        // под накрывающей, их скругление не видно вовсе.
+        layer?.cornerRadius = min(QS.radiusCard, min(bounds.width, bounds.height) / 2)
+        layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner,
+                                .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
         updateDisplayImage()
         controls?.isHidden = true
     }
@@ -718,13 +714,13 @@ final class ThumbnailWindow {
         container.isHidden = false
     }
 
-    /// Кромка стопки (`TR-23`…`TR-26`): видимая полоса карточки с сужением по
-    /// глубине и срезом реального содержимого. Размер задаётся РАМКОЙ, а не
+    /// Полоса карточки в стопке (`TR-23`…`TR-26`): видимая часть ЦЕЛОЙ
+    /// карточки в масштабе её глубины. Размер задаётся РАМКОЙ, а не
     /// трансформацией слоя: у layer-backed вью AppKit сам ведёт геометрию слоя,
     /// и своя трансформация ломает отрисовку содержимого.
     func placeBand(origin: NSPoint,
                    length: CGFloat,
-                   insetSteps: CGFloat,
+                   scale: CGFloat,
                    sliceFromFarSide: Bool,
                    opacity: CGFloat,
                    shadowFraction: CGFloat,
@@ -732,17 +728,22 @@ final class ThumbnailWindow {
                    vertical: Bool) {
         stackDepth = stackOrder
         isSliceBand = true
-        let inset = insetSteps * TrayStripLayout.insetStep
-        let bandWidth = vertical ? max(1, cardWidth - 2 * inset) : max(1, length)
-        let bandHeight = vertical ? max(1, length) : max(1, cardHeight - 2 * inset)
+        // Перспектива: карточка уменьшена целиком, полоса центрирована
+        // поперёк оси ленты.
+        let crossInset = vertical
+            ? cardWidth * (1 - scale) / 2
+            : cardHeight * (1 - scale) / 2
+        let bandWidth = vertical ? max(1, cardWidth * scale) : max(1, length)
+        let bandHeight = vertical ? max(1, length) : max(1, cardHeight * scale)
         let bandOrigin = vertical
-            ? NSPoint(x: origin.x + inset, y: origin.y)
-            : NSPoint(x: origin.x, y: origin.y + inset)
+            ? NSPoint(x: origin.x + crossInset, y: origin.y)
+            : NSPoint(x: origin.x, y: origin.y + crossInset)
         restingFrame = NSRect(x: bandOrigin.x - band, y: bandOrigin.y - band,
                               width: bandWidth + 2 * band, height: bandHeight + 2 * band)
         container.frame = restingFrame
         view.frame = NSRect(x: band, y: band, width: bandWidth, height: bandHeight)
-        view.layoutSlice(cardSize: NSSize(width: cardWidth, height: cardHeight),
+        view.layoutSlice(cardSize: NSSize(width: cardWidth * scale,
+                                          height: cardHeight * scale),
                          vertical: vertical,
                          sliceFromFarSide: sliceFromFarSide)
         CATransaction.begin()

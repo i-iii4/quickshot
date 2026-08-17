@@ -863,13 +863,18 @@ final class ThumbnailManager {
         } else {
             item.placeBand(origin: localOrigin,
                            length: slot.length,
-                           insetSteps: slot.insetSteps,
+                           scale: slot.scale,
                            sliceFromFarSide: slot.sliceFromFarSide,
                            opacity: slot.opacity,
                            shadowFraction: slot.shadowFraction,
                            stackOrder: slot.stackOrder,
                            vertical: TrayPosition.current.isVertical)
         }
+    }
+
+    /// Высота строки меню на экране: лента не заходит под неё.
+    private func menuBarInset(on screen: NSScreen) -> CGFloat {
+        max(0, screen.frame.maxY - screen.visibleFrame.maxY)
     }
 
     /// Порядок наложения исполняется порядком сабвью: глубокие слои стопки
@@ -1369,9 +1374,12 @@ final class ThumbnailManager {
         let gap = ThumbStyle.gap
         let lengths = items.map { vertical ? $0.cardSize.height : $0.cardSize.width }
         let content = lengths.reduce(0, +) + gap * CGFloat(max(0, lengths.count - 1))
-        let viewport = vertical
-            ? screen.frame.height - ThumbStyle.margin * 2 - hub.height - gap
-            : screen.frame.width - ThumbStyle.margin * 2 - hub.width - gap
+        let geometry = viewportGeometry(on: screen)
+        let viewport = thumbnailTrayViewportLength(screenFrame: screen.frame,
+                                                   edge: geometry.edge,
+                                                   hubSize: geometry.hubSize,
+                                                   margin: geometry.margin,
+                                                   menuBarInset: menuBarInset(on: screen))
         scrollModel.contentLength = content
         scrollModel.viewportLength = max(1, viewport)
         scrollModel.lastCardLength = lengths.last ?? 0
@@ -1416,7 +1424,8 @@ final class ThumbnailManager {
                                          hubSize: geometry.hubSize,
                                          margin: geometry.margin,
                                          gap: ThumbStyle.gap,
-                                         offset: scrollModel.offset)
+                                         offset: scrollModel.offset,
+                                         menuBarInset: menuBarInset(on: screen))
         }
 
         let newest = newestViewportLayout(on: screen)

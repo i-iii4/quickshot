@@ -19,6 +19,8 @@ struct ThumbnailLayoutSlot: Equatable {
     /// совпадает с самой карточкой.
     var length: CGFloat = 0
     var insetSteps: CGFloat = 0
+    /// Перспектива глубины: карточка в стопке уменьшена целиком.
+    var scale: CGFloat = 1
     var sliceFromFarSide: Bool = true
     var shadowFraction: CGFloat = 1
     var isFullCard: Bool = true
@@ -166,13 +168,16 @@ func thumbnailScrollLayout(screenFrame: NSRect,
                            hubSize: NSSize,
                            margin: CGFloat,
                            gap: CGFloat,
-                           offset: CGFloat) -> ThumbnailLayoutResult {
+                           offset: CGFloat,
+                           menuBarInset: CGFloat = 0) -> ThumbnailLayoutResult {
     guard !cardHeights.isEmpty else { return .init(visible: [], hidden: []) }
 
     let lengths = edge.isVertical ? cardHeights : Array(repeating: cardWidth, count: cardHeights.count)
-    let viewportLength = edge.isVertical
-        ? screenFrame.height - margin * 2 - hubSize.height - gap
-        : screenFrame.width - margin * 2 - hubSize.width - gap
+    let viewportLength = thumbnailTrayViewportLength(screenFrame: screenFrame,
+                                                     edge: edge,
+                                                     hubSize: hubSize,
+                                                     margin: margin,
+                                                     menuBarInset: menuBarInset)
     let bands = TrayStripLayout.bands(cardLengths: lengths,
                                       gap: gap,
                                       offset: offset,
@@ -183,8 +188,7 @@ func thumbnailScrollLayout(screenFrame: NSRect,
     let strip = stripOrigin(screenFrame: screenFrame,
                             edge: edge,
                             hubSize: hubSize,
-                            margin: margin,
-                            gap: gap)
+                            margin: margin)
 
     for (index, band) in bands.enumerated() {
         guard !band.hidden else {
@@ -208,7 +212,7 @@ func thumbnailScrollLayout(screenFrame: NSRect,
                              y: screenFrame.minY + margin)
         case .top:
             origin = NSPoint(x: strip.x - band.position - band.length,
-                             y: screenFrame.maxY - margin - cardHeights[index])
+                             y: screenFrame.maxY - menuBarInset - margin - cardHeights[index])
         }
         // Чем глубже слой, тем он дальше: порядок наложения задаётся явно, а не
         // порядком добавления сабвью. Иначе стопка рисуется задом наперёд.
@@ -217,6 +221,7 @@ func thumbnailScrollLayout(screenFrame: NSRect,
                              stackOrder: band.zOrder,
                              length: band.length,
                              insetSteps: band.insetSteps,
+                             scale: band.scale,
                              sliceFromFarSide: band.sliceFromFarSide,
                              shadowFraction: band.shadowFraction,
                              isFullCard: band.isFullCard))
@@ -224,23 +229,38 @@ func thumbnailScrollLayout(screenFrame: NSRect,
     return .init(visible: visible, hidden: hidden)
 }
 
+/// Длина окна просмотра ленты. Снизу лента начинается почти от кнопки
+/// (ярусы стопки — и есть резерв, `TrayStripLayout.hubClearance`), сверху
+/// ограничена видимой областью экрана: под строку меню не заходит.
+func thumbnailTrayViewportLength(screenFrame: NSRect,
+                                 edge: ThumbnailLayoutEdge,
+                                 hubSize: NSSize,
+                                 margin: CGFloat,
+                                 menuBarInset: CGFloat) -> CGFloat {
+    if edge.isVertical {
+        return screenFrame.height - menuBarInset - margin * 2
+            - hubSize.height - TrayStripLayout.hubClearance
+    }
+    return screenFrame.width - margin * 2 - hubSize.width - TrayStripLayout.hubClearance
+}
+
 private func stripOrigin(screenFrame: NSRect,
                          edge: ThumbnailLayoutEdge,
                          hubSize: NSSize,
-                         margin: CGFloat,
-                         gap: CGFloat) -> NSPoint {
+                         margin: CGFloat) -> NSPoint {
+    let clearance = TrayStripLayout.hubClearance
     switch edge {
     case .right:
         return NSPoint(x: screenFrame.maxX - margin - hubSize.width,
-                       y: screenFrame.minY + margin + hubSize.height + gap)
+                       y: screenFrame.minY + margin + hubSize.height + clearance)
     case .left:
         return NSPoint(x: screenFrame.minX + margin,
-                       y: screenFrame.minY + margin + hubSize.height + gap)
+                       y: screenFrame.minY + margin + hubSize.height + clearance)
     case .bottom:
-        return NSPoint(x: screenFrame.maxX - margin - hubSize.width - gap,
+        return NSPoint(x: screenFrame.maxX - margin - hubSize.width - clearance,
                        y: screenFrame.minY + margin)
     case .top:
-        return NSPoint(x: screenFrame.maxX - margin - hubSize.width - gap,
+        return NSPoint(x: screenFrame.maxX - margin - hubSize.width - clearance,
                        y: screenFrame.maxY - margin)
     }
 }
