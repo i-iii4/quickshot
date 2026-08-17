@@ -1251,16 +1251,30 @@ final class ThumbnailManager {
             item.setCollapsed(target == 1)
             item.hide()
         }
+        // Слои стопки не гоняются полными рамками: при развороте кромка сразу
+        // встаёт полосой со своей перспективой, при сворачивании — прячется.
+        // Прогон их через transition и оставлял стопку без эффекта глубины в
+        // ховер-показе свёрнутого трея.
+        var animated: [ThumbnailWindow] = []
         for (item, slot) in visible {
+            guard slot.isFullCard else {
+                if target == 0 {
+                    place(item, at: slot)
+                } else {
+                    item.hide()
+                }
+                continue
+            }
             item.prepareTrayTransition(progress: trayProgress,
                                        travelOffset: travelOffset,
                                        restingOrigin: toLocal(slot.origin),
                                        expanding: target == 0,
                                        reduceMotion: reduceMotion)
+            animated.append(item)
         }
         hub.setTrayCollapseProgress(trayProgress)
 
-        let cards = visible.map(\.0)
+        let cards = animated
         trayAnimator.retarget(to: target,
                               response: TrayAnim.response(reduceMotion: reduceMotion),
                               onFrame: { [weak self] progress in
@@ -1279,6 +1293,9 @@ final class ThumbnailManager {
             let isCollapsed = target == 1
             for item in cards { item.finishTrayTransition(collapsed: isCollapsed) }
             self.hub.setTrayCollapseProgress(target)
+            // Итоговый кадр разворота — из раскладки: кромки получают полосы
+            // и перспективу, а не полные рамки.
+            if !isCollapsed { self.applyScrollOffset() }
             self.refreshHostPointerRouting()
         })
     }
@@ -1291,8 +1308,14 @@ final class ThumbnailManager {
         if let screen = anchorScreen ?? NSScreen.main {
             let (visible, hidden) = cardLayout(on: screen)
             for item in hidden { item.hide() }
-            for (item, _) in visible {
-                item.finishTrayTransition(collapsed: target == 1)
+            for (item, slot) in visible {
+                // Слой стопки в развёрнутом состоянии — полоса с перспективой,
+                // а не полная рамка.
+                if target != 1, !slot.isFullCard {
+                    place(item, at: slot)
+                } else {
+                    item.finishTrayTransition(collapsed: target == 1)
+                }
             }
         }
         hub.setTrayCollapseProgress(target)
