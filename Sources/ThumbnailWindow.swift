@@ -164,6 +164,8 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         layer?.cornerRadius = QS.radiusCard
         layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner,
                                 .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        displayView.layer?.cornerRadius = 0
+        displayView.layer?.masksToBounds = false
         updateDisplayImage()
         guard let controls else { return }
         let inset = QS.s2
@@ -179,39 +181,33 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         controls.frame = NSRect(x: inset, y: rowY, width: groupWidth, height: rowH)
     }
 
-    /// Срез карточки в стопке (`TR-23`): вью клипует по своим границам, а
-    /// изображение раскладывается в масштаб глубины карточки и сдвигается так,
-    /// чтобы в полосе оказался нужный край — карточка не деформируется, её
-    /// просто перекрыли.
-    func layoutSlice(cardSize: NSSize, vertical: Bool, sliceFromFarSide: Bool,
-                     roundsStart: Bool, roundsEnd: Bool) {
+    /// Срез карточки в стопке (`TR-23`): вью — прямоугольное ОКНО в карточку,
+    /// а скругление принадлежит самой карточке (слою изображения). Карточка
+    /// раскладывается в масштаб глубины и сдвигается на `cardStartOffset`:
+    /// её скруглённый край, уехавший за границу окна, срезается клипом
+    /// постепенно, а не выключается скачком.
+    func layoutSlice(cardSize: NSSize, vertical: Bool, cardStartOffset: CGFloat,
+                     cornerRadius: CGFloat) {
         if vertical {
             let fullW = bounds.width
             let fullH = cardSize.height * (fullW / max(1, cardSize.width))
-            displayView.frame = NSRect(x: 0,
-                                       y: sliceFromFarSide ? bounds.height - fullH : 0,
+            displayView.frame = NSRect(x: 0, y: cardStartOffset,
                                        width: fullW, height: fullH)
         } else {
             let fullH = bounds.height
             let fullW = cardSize.width * (fullH / max(1, cardSize.height))
-            displayView.frame = NSRect(x: sliceFromFarSide ? 0 : bounds.width - fullW,
+            // Ось ленты идёт от кнопки (справа) влево: начало карточки — её
+            // правый край.
+            displayView.frame = NSRect(x: bounds.width - fullW - cardStartOffset,
                                        y: 0,
                                        width: fullW, height: fullH)
         }
-        // Скруглены только НАСТОЯЩИЕ края карточки. Линия среза — прямая:
-        // карточка просто уходит под вышележащую, а срез торчащей части
-        // спрятан перспективой за её прямым краем.
-        layer?.cornerRadius = QS.radiusCard
-        var corners: CACornerMask = []
-        if vertical {
-            if roundsStart { corners.insert(.layerMinXMinYCorner); corners.insert(.layerMaxXMinYCorner) }
-            if roundsEnd { corners.insert(.layerMinXMaxYCorner); corners.insert(.layerMaxXMaxYCorner) }
-        } else {
-            // Ось ленты идёт от кнопки (справа) влево: ближний край — maxX.
-            if roundsStart { corners.insert(.layerMaxXMinYCorner); corners.insert(.layerMaxXMaxYCorner) }
-            if roundsEnd { corners.insert(.layerMinXMinYCorner); corners.insert(.layerMinXMaxYCorner) }
-        }
-        layer?.maskedCorners = corners
+        // Окно клипует прямыми линиями; родные углы карточки несёт слой
+        // изображения, радиус — в масштабе глубины.
+        layer?.cornerRadius = 0
+        layer?.maskedCorners = []
+        displayView.layer?.cornerRadius = cornerRadius
+        displayView.layer?.masksToBounds = true
         updateDisplayImage()
         controls?.isHidden = true
     }
@@ -728,9 +724,7 @@ final class ThumbnailWindow {
     func placeBand(origin: NSPoint,
                    length: CGFloat,
                    scale: CGFloat,
-                   sliceFromFarSide: Bool,
-                   roundsStart: Bool,
-                   roundsEnd: Bool,
+                   cardStartOffset: CGFloat,
                    opacity: CGFloat,
                    shadowFraction: CGFloat,
                    stackOrder: CGFloat,
@@ -754,9 +748,8 @@ final class ThumbnailWindow {
         view.layoutSlice(cardSize: NSSize(width: cardWidth * scale,
                                           height: cardHeight * scale),
                          vertical: vertical,
-                         sliceFromFarSide: sliceFromFarSide,
-                         roundsStart: roundsStart,
-                         roundsEnd: roundsEnd)
+                         cardStartOffset: cardStartOffset,
+                         cornerRadius: QS.radiusCard * scale)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         container.layer?.transform = CATransform3DIdentity

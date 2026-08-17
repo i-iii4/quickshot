@@ -26,6 +26,8 @@ struct ThumbnailLayoutSlot: Equatable {
     /// края — прямые.
     var roundsStart: Bool = true
     var roundsEnd: Bool = true
+    /// Начало карточки относительно начала полосы вдоль оси (≤ 0).
+    var cardStartOffset: CGFloat = 0
     var shadowFraction: CGFloat = 1
     var isFullCard: Bool = true
 }
@@ -229,6 +231,7 @@ func thumbnailScrollLayout(screenFrame: NSRect,
                              sliceFromFarSide: band.sliceFromFarSide,
                              roundsStart: band.roundsStart,
                              roundsEnd: band.roundsEnd,
+                             cardStartOffset: band.cardStartOffset,
                              shadowFraction: band.shadowFraction,
                              isFullCard: band.isFullCard))
     }

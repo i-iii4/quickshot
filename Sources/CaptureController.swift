@@ -50,7 +50,9 @@ final class CaptureController {
 
     func triggerCapture(startedAt triggerStartedAt: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()) {
         guard selectionSession == nil else {
-            Self.log.info("capture trigger ignored reason=selection-active")
+            // Уровень error: info не попадает в персистентный журнал, а именно
+            // эта строка — главный свидетель «хоткей не сработал».
+            Self.log.error("capture trigger ignored reason=selection-active")
             return
         }
         Self.log.info("capture trigger accepted")
@@ -311,15 +313,36 @@ private final class CaptureSession {
         let provider = snapshotProvider
         let sessionID = id
         let startedAt = self.startedAt
+        guard let primary = displays.first else {
+            fail(CaptureError.noDisplay)
+            return
+        }
+        let rest = Array(displays.dropFirst())
         snapshotTask = Task.detached(priority: .userInitiated) { [weak self] in
             do {
-                let batch = try await provider.capture(sessionID: sessionID, displays: displays)
-                let elapsedMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+                // Экран с курсором замораживается и показывается ПЕРВЫМ:
+                // реакция на хоткей не ждёт съёмки остальных дисплеев, которая
+                // под нагрузкой занимает сотни миллисекунд на каждый. Пока
+                // оверлей не на экране, повторное нажатие хоткея игнорируется —
+                // затянутый батч и превращал захват в «срабатывает через раз».
+                let primaryBatch = try await provider.capture(sessionID: sessionID,
+                                                              displays: [primary])
+                let primaryMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
                 guard !Task.isCancelled else { return }
                 await MainActor.run { [weak self] in
                     guard let self, !Task.isCancelled else { return }
-                    Self.log.info("capture frozen ready displays=\(batch.screens.count, privacy: .public) ms=\(elapsedMs, privacy: .public)")
-                    self.snapshotCompleted(batch)
+                    Self.log.info("capture frozen primary ready ms=\(primaryMs, privacy: .public)")
+                    self.primarySnapshotCompleted(primaryBatch)
+                }
+                guard !rest.isEmpty else { return }
+                let restBatch = try await provider.capture(sessionID: sessionID,
+                                                           displays: rest)
+                let restMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
+                guard !Task.isCancelled else { return }
+                await MainActor.run { [weak self] in
+                    guard let self, !Task.isCancelled else { return }
+                    Self.log.info("capture frozen rest ready displays=\(restBatch.screens.count, privacy: .public) ms=\(restMs, privacy: .public)")
+                    self.restSnapshotCompleted(restBatch)
                 }
             } catch {
                 guard !Task.isCancelled else { return }
@@ -330,34 +353,41 @@ private final class CaptureSession {
         }
     }
 
-    private func snapshotCompleted(_ batch: FrozenSnapshotBatch) {
+    private func primarySnapshotCompleted(_ batch: FrozenSnapshotBatch) {
         guard phase == .snapshotting, !didEnd else { return }
-        guard batch.sessionID == id else {
-            fail(CaptureError.snapshotUnavailable("Snapshot belongs to another session"))
+        guard batch.sessionID == id, let shot = batch.screens.first,
+              batch.screens.count == 1 else {
+            fail(CaptureError.snapshotUnavailable("Primary snapshot mismatch"))
             return
         }
+        frozen[shot.displayID] = shot
+        phase = .selecting
+        if completeBufferedGestureIfNeeded() { return }
+        beginOverlay(backdrops: [shot.displayID: shot.image])
+    }
 
-        let expectedIDs = Set(screens.map(Self.displayID))
-        let receivedIDs = Set(batch.screens.map(\.displayID))
-        guard batch.screens.count == expectedIDs.count,
-              receivedIDs.count == batch.screens.count,
-              expectedIDs == receivedIDs else {
-            fail(CaptureError.snapshotUnavailable(
-                "Display set mismatch expected=\(expectedIDs) received=\(receivedIDs)"))
-            return
-        }
-        // Разброс между дисплеями снимок не отменяет: итог вырезается из одного
-        // экрана. Он оценивается при кадрировании и только для тех дисплеев,
-        // которых коснулось выделение (`captureMomentQuality`).
+    private func restSnapshotCompleted(_ batch: FrozenSnapshotBatch) {
+        guard !didEnd, batch.sessionID == id else { return }
+        // Разброс между дисплеями снимок не отменяет: итог вырезается из
+        // одного экрана. Он оценивается при кадрировании и только для тех
+        // дисплеев, которых коснулось выделение (`captureMomentQuality`).
         if batch.maximumDisplaySkew > Self.displaySkewBudget {
             Self.log.error("capture batch skew above budget skewMs=\(batch.maximumDisplaySkew * 1000, privacy: .public)")
         }
-
-        frozen = Dictionary(uniqueKeysWithValues: batch.screens.map { ($0.displayID, $0) })
-        phase = .selecting
+        for shot in batch.screens {
+            frozen[shot.displayID] = shot
+        }
+        guard phase == .selecting else { return }
+        // Жест мог завершиться на дисплее, чей кадр только что доехал.
         if completeBufferedGestureIfNeeded() { return }
-        beginOverlay(backdrops: Dictionary(uniqueKeysWithValues:
-            batch.screens.map { ($0.displayID, $0.image) }))
+        let frozenIDs = Set(frozen.keys)
+        let lateScreens = screens.filter { screen in
+            frozenIDs.contains(Self.displayID(of: screen))
+                && batch.screens.contains { $0.displayID == Self.displayID(of: screen) }
+        }
+        overlay?.addFrozenScreens(screens: lateScreens,
+                                  backdrops: Dictionary(uniqueKeysWithValues:
+                                      batch.screens.map { ($0.displayID, $0.image) }))
     }
 
     private func completeBufferedGestureIfNeeded() -> Bool {
@@ -368,6 +398,9 @@ private final class CaptureSession {
                 fail(CaptureError.noDisplay)
                 return true
             }
+            // Кадр этого дисплея мог ещё не доехать (замораживаются по
+            // очереди): жест подождёт его прибытия, а не провалит сессию.
+            guard frozen[Self.displayID(of: screen)] != nil else { return false }
             inputTracker?.stopMouseMonitoring()
             let rect = CGRect(x: min(start.point.x, end.point.x),
                               y: min(start.point.y, end.point.y),

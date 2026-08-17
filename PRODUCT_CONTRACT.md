@@ -310,6 +310,14 @@ fullscreen behavior remain explicit runtime release checks.
    normal dismissal: frozen windows disappear first, then the system cursor
    returns. Leaving that to the session owner left the cursor suppressed until
    teardown, and the next capture started with a broken cursor.
+4. The hotkey reaction never waits for the full multi-display batch. The
+   display under the cursor is frozen and presented first; the remaining
+   displays are captured next and joined into the live overlay as their
+   frames arrive. Waiting for every display (hundreds of milliseconds each
+   under load) delayed the overlay long enough that users pressed the hotkey
+   again — and the repeat press was silently ignored because a session was
+   already active. That ignore is logged at error level so it survives in the
+   persistent log.
 
 ## UI Architecture
 

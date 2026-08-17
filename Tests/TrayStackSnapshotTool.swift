@@ -48,23 +48,31 @@ struct TrayStackSnapshotTool {
         // оси; все углы скруглены — со стороны среза это «плечи», видимые в
         // углах накрывающей (`TR-23`…`TR-26`).
         for slot in result.visible.sorted(by: { $0.stackOrder < $1.stackOrder }) {
-            let height = slot.isFullCard ? heights[slot.index] : slot.length
+            // Как в живом рендере: полоса — прямоугольное ОКНО в целую
+            // карточку; скругление принадлежит карточке и срезается клипом
+            // постепенно.
             let width = cardWidth * slot.scale
-            let frame = CGRect(x: slot.origin.x + (cardWidth - width) / 2,
-                               y: slot.origin.y,
-                               width: width, height: height)
+            let cardHeight = slot.isFullCard ? heights[slot.index]
+                                             : heights[slot.index] * slot.scale
+            let x = slot.origin.x + (cardWidth - width) / 2
+            let clip = CGRect(x: x - 20, y: slot.origin.y,
+                              width: width + 40,
+                              height: slot.isFullCard ? cardHeight : slot.length)
+            let cardFrame = CGRect(x: x,
+                                   y: slot.origin.y + slot.cardStartOffset,
+                                   width: width, height: cardHeight)
             context.saveGState()
             context.setAlpha(slot.opacity)
+            context.clip(to: clip)
             if slot.shadowFraction > 0.01 {
                 context.setShadow(offset: CGSize(width: 0, height: -2),
                                   blur: 6,
                                   color: NSColor.black
                                       .withAlphaComponent(0.6 * slot.shadowFraction).cgColor)
             }
-            let radius = min(10, min(frame.width, frame.height) / 2)
-            let path = bandPath(frame: frame, radius: radius,
-                                roundedBottom: slot.isFullCard || slot.roundsStart,
-                                roundedTop: slot.isFullCard || slot.roundsEnd)
+            let radius = min(10 * slot.scale, min(cardFrame.width, cardFrame.height) / 2)
+            let path = CGPath(roundedRect: cardFrame, cornerWidth: radius,
+                              cornerHeight: radius, transform: nil)
             context.addPath(path)
             context.setFillColor(NSColor(calibratedHue: CGFloat(slot.index) / 14,
                                          saturation: 0.55, brightness: 0.85, alpha: 1).cgColor)
@@ -95,35 +103,4 @@ struct TrayStackSnapshotTool {
         print("written \(path); visible \(result.visible.count), hidden \(result.hidden.count), offset \(offset)")
     }
 
-    /// Прямоугольник со скруглением только настоящих краёв карточки: линия
-    /// среза — прямая.
-    private static func bandPath(frame: CGRect, radius: CGFloat,
-                                 roundedBottom: Bool, roundedTop: Bool) -> CGPath {
-        let bottomR: CGFloat = roundedBottom ? radius : 0
-        let topR: CGFloat = roundedTop ? radius : 0
-        let path = CGMutablePath()
-        path.move(to: CGPoint(x: frame.minX + bottomR, y: frame.minY))
-        path.addLine(to: CGPoint(x: frame.maxX - bottomR, y: frame.minY))
-        if roundedBottom {
-            path.addQuadCurve(to: CGPoint(x: frame.maxX, y: frame.minY + bottomR),
-                              control: CGPoint(x: frame.maxX, y: frame.minY))
-        }
-        path.addLine(to: CGPoint(x: frame.maxX, y: frame.maxY - topR))
-        if roundedTop {
-            path.addQuadCurve(to: CGPoint(x: frame.maxX - topR, y: frame.maxY),
-                              control: CGPoint(x: frame.maxX, y: frame.maxY))
-        }
-        path.addLine(to: CGPoint(x: frame.minX + topR, y: frame.maxY))
-        if roundedTop {
-            path.addQuadCurve(to: CGPoint(x: frame.minX, y: frame.maxY - topR),
-                              control: CGPoint(x: frame.minX, y: frame.maxY))
-        }
-        path.addLine(to: CGPoint(x: frame.minX, y: frame.minY + bottomR))
-        if roundedBottom {
-            path.addQuadCurve(to: CGPoint(x: frame.minX + bottomR, y: frame.minY),
-                              control: CGPoint(x: frame.minX, y: frame.minY))
-        }
-        path.closeSubpath()
-        return path
-    }
 }

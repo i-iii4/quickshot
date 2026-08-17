@@ -96,6 +96,10 @@ struct TrayCardBand: Equatable {
     /// false — край срезан вышележащим слоем, линия прямая и спрятана за его
     /// прямым участком.
     var roundsEnd: Bool = true
+    /// Начало карточки относительно начала полосы вдоль оси, ≤ 0: карточка
+    /// может начинаться за краем полосы (уехала за базу) — клип режет её
+    /// скруглённый край постепенно, а не выключает скругление скачком.
+    var cardStartOffset: CGFloat = 0
     /// Прозрачность: 1 всюду, кроме растворения нижней кромки стопки.
     var opacity: CGFloat
     /// Доля тени: привязана к оставшейся видимой высоте кромки.
@@ -229,6 +233,7 @@ enum TrayStripLayout {
                                       scale: scale,
                                       visibleFrom: visibleFrom,
                                       visibleTo: visibleTo,
+                                      cardStart: bottom,
                                       depth: depth,
                                       fade: depth == 2 ? nearPhase : 0,
                                       sliceFromFarSide: false,
@@ -256,6 +261,7 @@ enum TrayStripLayout {
                                       scale: scale,
                                       visibleFrom: visibleFrom,
                                       visibleTo: visibleTo,
+                                      cardStart: cardBottom,
                                       depth: depth,
                                       fade: depth == 2 ? farPhase : 0,
                                       sliceFromFarSide: true,
@@ -273,6 +279,7 @@ enum TrayStripLayout {
                                    scale: CGFloat,
                                    visibleFrom: CGFloat,
                                    visibleTo: CGFloat,
+                                   cardStart: CGFloat,
                                    depth: Int,
                                    fade: CGFloat,
                                    sliceFromFarSide: Bool,
@@ -291,6 +298,7 @@ enum TrayStripLayout {
                             sliceFromFarSide: sliceFromFarSide,
                             roundsStart: roundsStart,
                             roundsEnd: roundsEnd,
+                            cardStartOffset: min(0, cardStart - visibleFrom),
                             opacity: opacity,
                             shadowFraction: 1,
                             zOrder: -CGFloat(depth + 1),
