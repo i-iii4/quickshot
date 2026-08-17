@@ -296,9 +296,13 @@ fullscreen behavior remain explicit runtime release checks.
 ## Capture Robustness
 
 1. A capture is never refused because the multi-display batch is skewed in
-   time. The delivered screenshot comes from one display; skew affects only the
-   frozen backdrop on the other screens. Skew is measured, carried on the batch
-   and logged when it exceeds the budget.
+   time - on ANY code path. The first fix landed in the provider while a second
+   guard in the selection session kept refusing batches, so a static check now
+   forbids failing a capture over skew anywhere. The delivered screenshot comes
+   from one display; skew affects only the frozen backdrop on the other
+   screens. It is measured, carried on the batch, judged at crop time for the
+   displays the selection actually touched (`captureMomentQuality`), and logged
+   when it exceeds the budget.
 2. A refused capture is visible to the user. Notifying once per process turns
    every later refusal into silence indistinguishable from a dead hotkey, so a
    successful capture re-arms the notice.
@@ -319,6 +323,16 @@ fullscreen behavior remain explicit runtime release checks.
 1b. Measuring a Native SDK surface by rendering it into a probe frame must be
    followed by a render at the real size. A restored frame with a stale raster
    is scaled into place and reads as a blob of pixels.
+1c. AppKit owns the presentation of layer-backed views. The tray card never
+   sets zPosition, layer transforms, or hand-planted `layer.contents`: order is
+   executed by subview order, scale by the frame, and the image belongs to the
+   NSImageView that draws it. Planted contents survive only until the next
+   display pass - NSImageView redraws itself and wipes them, which turned cards
+   into bare shadows while every synchronous check stayed green.
+1d. A rendering check must include the mechanism that can erase the result: the
+   card oracle performs a real display pass (needsDisplay, displayIfNeeded, a
+   run-loop turn) and reads pixels afterwards. Synchronous pixel reads sample
+   the state before the pass and are blind to everything it destroys.
 2. A new UI framework or shell model must not weaken the capture contract:
    hotkey-time pixels, fast selection entry, capture exclusion, no tray blink,
    no stale screenshots, and no duplicate cursor remain mandatory.

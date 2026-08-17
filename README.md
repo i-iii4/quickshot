@@ -254,8 +254,15 @@ instead of inferred:
 ./scripts/run-snapshot.sh 1200 /tmp/toolbar.png            # editor toolbar
 ./scripts/run-snapshot.sh 1200 /tmp/toolbar.png selected   # with a selection
 python3 ./scripts/run-snapshot-canvas.py /tmp              # canvas: text, counters
+python3 ./scripts/run-snapshot-tray.py /tmp/tray.png       # tray stacks
 python3 ./scripts/run-one.py EditorDrawingTests.swift      # one suite, fast loop
+python3 ./scripts/run-stress.py 10                         # memory per capture, named retention
 ```
+
+A rendering check is only as good as the moment it samples. The card oracle in
+`TrayLiveScrollTests` performs a real display pass and reads pixels afterwards,
+because AppKit's display pass is exactly what erased hand-planted layer
+contents while synchronous checks stayed green.
 
 ## Run
 
