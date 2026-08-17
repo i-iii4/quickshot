@@ -103,6 +103,13 @@ final class ThumbnailManager {
     private var scrollSettleAnimating = false
     private lazy var scrollSettleAnimator = CollectionProgressAnimator(hostView: hostContent)
 
+    /// Уровень трея в покое: выше обычных окон, но НИЖЕ системных
+    /// поверхностей. На `.statusBar` карточки перекрывали Центр уведомлений.
+    /// Во время захвата уровень поднимается отдельно
+    /// (`CaptureWindowLevels.protectedInterface`) — это часть контракта
+    /// захвата и к покою не относится.
+    static let restingHostLevel: NSWindow.Level = .floating
+
     /// Шаг колеса мыши в точках: дельта приходит в строках.
     private static let wheelLineHeight: CGFloat = 40
 
@@ -119,7 +126,7 @@ final class ThumbnailManager {
         host.isOpaque = false
         host.backgroundColor = .clear                 // прозрачный фон → клики сквозь пустоту проходят
         host.hasShadow = false                        // тень несёт каждая карточка слоем, не окно
-        host.level = .statusBar
+        host.level = Self.restingHostLevel
         host.isFloatingPanel = true
         host.hidesOnDeactivate = false
         host.becomesKeyOnlyIfNeeded = false           // makeKey должен срабатывать для controls трея
@@ -414,7 +421,7 @@ final class ThumbnailManager {
     func endCapturePresentation(sessionID: UUID) {
         guard capturePresentationSessions.remove(sessionID) != nil,
               capturePresentationSessions.isEmpty else { return }
-        host.level = .statusBar
+        host.level = Self.restingHostLevel
         if host.isVisible { host.orderFrontRegardless() }
         refreshHostPointerRouting()
     }

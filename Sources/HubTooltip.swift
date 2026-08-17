@@ -34,7 +34,9 @@ final class HubTooltipWindow {
         // Панель прячется при деактивации приложения по умолчанию, а QuickShot
         // неактивен почти всегда — как и у панели трея, выключаем явно.
         panel.hidesOnDeactivate = false
-        panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
+        // На ступень выше трея: ярлык обязан лежать поверх карточек и хаба, но
+        // вместе с ними оставаться под системными поверхностями.
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.appearance = NSAppearance(named: .darkAqua)
         WindowCaptureProtection.excludeFromScreenCapture(panel)

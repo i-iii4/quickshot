@@ -305,7 +305,7 @@ struct CaptureHotPathStaticTests {
                     && thumbnailManager.contains("trayHostIgnoresMouseEvents(")
                     && thumbnailManager.contains("captureActive: !capturePresentationSessions.isEmpty")
                     && thumbnailManager.contains("host.ignoresMouseEvents = ignores")
-                    && thumbnailManager.contains("host.level = .statusBar"),
+                    && thumbnailManager.contains("host.level = Self.restingHostLevel"),
                     "Tray presentation must be reference-counted, visible, and noninteractive during selection")
         try require(windowLevels.contains("protectedInterface"),
                     "Protected tray level is missing")

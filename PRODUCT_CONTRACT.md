@@ -323,6 +323,11 @@ fullscreen behavior remain explicit runtime release checks.
 1b. Measuring a Native SDK surface by rendering it into a probe frame must be
    followed by a render at the real size. A restored frame with a stale raster
    is scaled into place and reads as a blob of pixels.
+1b2. At rest the tray floats above normal windows but BELOW system surfaces:
+   `.floating`, not `.statusBar`. At status-bar level the cards covered
+   Notification Center. During capture the tray is raised separately
+   (`CaptureWindowLevels.protectedInterface`); that is part of the capture
+   contract and unrelated to rest.
 1c. AppKit owns the presentation of layer-backed views. The tray card never
    sets zPosition, layer transforms, or hand-planted `layer.contents`: order is
    executed by subview order, scale by the frame, and the image belongs to the
