@@ -725,6 +725,8 @@ final class ThumbnailWindow {
                    length: CGFloat,
                    scale: CGFloat,
                    cardStartOffset: CGFloat,
+                   roundsStart: Bool,
+                   roundsEnd: Bool,
                    opacity: CGFloat,
                    shadowFraction: CGFloat,
                    stackOrder: CGFloat,
@@ -758,11 +760,20 @@ final class ThumbnailWindow {
         container.layer?.shadowOpacity = Float(TrayAnim.restingShadowOpacity
                                                * max(0, min(1, shadowFraction))
                                                * max(0, min(1, opacity)))
-        let radius = min(QS.radiusCard, min(bandWidth, bandHeight) / 2)
-        container.layer?.shadowPath = CGPath(roundedRect: view.frame,
-                                             cornerWidth: radius,
-                                             cornerHeight: radius,
-                                             transform: nil)
+        // Тень повторяет форму видимой части КАРТОЧКИ: скругления только на
+        // её настоящих краях, срезы прямые. Прямоугольная тень с клампованным
+        // радиусом обводила кромку тёмной рамкой — глаз читал её как
+        // квадратную обрезку.
+        let shadowRadius = QS.radiusCard * scale
+        let corners: (bl: Bool, br: Bool, tl: Bool, tr: Bool) = vertical
+            ? (roundsStart, roundsStart, roundsEnd, roundsEnd)
+            : (roundsEnd, roundsStart, roundsEnd, roundsStart)
+        container.layer?.shadowPath = Self.bandShadowPath(rect: view.frame,
+                                                          radius: shadowRadius,
+                                                          bottomLeft: corners.bl,
+                                                          bottomRight: corners.br,
+                                                          topLeft: corners.tl,
+                                                          topRight: corners.tr)
         container.alphaValue = max(0, min(1, opacity))
         CATransaction.commit()
         // Кромка остаётся живой: клик достаётся верхней карточке по z-порядку,
@@ -770,6 +781,43 @@ final class ThumbnailWindow {
         // колеса доходят до трея только через карточку.
         container.interactionsEnabled = true
         container.isHidden = false
+    }
+
+    /// Контур видимой части карточки для тени: скругление только на её
+    /// настоящих краях, обрезанные края — прямые. Радиус клампится по
+    /// фактическим размерам полосы, чтобы дуги не пересекались.
+    private static func bandShadowPath(rect: CGRect, radius: CGFloat,
+                                       bottomLeft: Bool, bottomRight: Bool,
+                                       topLeft: Bool, topRight: Bool) -> CGPath {
+        let r = max(0, min(radius, rect.width / 2, rect.height))
+        let blR = bottomLeft ? r : 0
+        let brR = bottomRight ? r : 0
+        let tlR = topLeft ? r : 0
+        let trR = topRight ? r : 0
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: rect.minX + blR, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - brR, y: rect.minY))
+        if brR > 0 {
+            path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + brR),
+                              control: CGPoint(x: rect.maxX, y: rect.minY))
+        }
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - trR))
+        if trR > 0 {
+            path.addQuadCurve(to: CGPoint(x: rect.maxX - trR, y: rect.maxY),
+                              control: CGPoint(x: rect.maxX, y: rect.maxY))
+        }
+        path.addLine(to: CGPoint(x: rect.minX + tlR, y: rect.maxY))
+        if tlR > 0 {
+            path.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - tlR),
+                              control: CGPoint(x: rect.minX, y: rect.maxY))
+        }
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + blR))
+        if blR > 0 {
+            path.addQuadCurve(to: CGPoint(x: rect.minX + blR, y: rect.minY),
+                              control: CGPoint(x: rect.minX, y: rect.minY))
+        }
+        path.closeSubpath()
+        return path
     }
 
     func prepareInsertion(at origin: NSPoint, from offset: NSPoint, reduceMotion: Bool) {

@@ -865,6 +865,8 @@ final class ThumbnailManager {
                            length: slot.length,
                            scale: slot.scale,
                            cardStartOffset: slot.cardStartOffset,
+                           roundsStart: slot.roundsStart,
+                           roundsEnd: slot.roundsEnd,
                            opacity: slot.opacity,
                            shadowFraction: slot.shadowFraction,
                            stackOrder: slot.stackOrder,

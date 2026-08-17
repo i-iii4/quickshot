@@ -15,6 +15,11 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.activate(ignoringOtherApps: true)
+        if ProcessInfo.processInfo.environment["QUICKSHOT_DUMP_TRAY"] == "1" {
+            dumpTrayStates()
+            NSApp.terminate(nil)
+            return
+        }
         cardSurvivesADisplayPass()
         newestCaptureStaysReachable()
         scrollWheelMovesCards()
@@ -29,6 +34,7 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
         captureWhileCompressedStaysCompressed()
         captureWhileUnrolledRevealsTheNewest()
         stackEdgesShowContentAfterADisplayPass()
+        stackEdgeCornersStayRoundedAfterADisplayPass()
 
         if failures.isEmpty {
             print("TrayLiveScrollTests: passed")
@@ -556,6 +562,93 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Углы кромок скруглены ПОСЛЕ настоящего прохода отрисовки: скругление
+    /// живёт на обычном вью-обёртке, а не на слое NSImageView — тот владеет
+    /// своим слоем сам и сбрасывает чужие маски при отрисовке.
+    private func stackEdgeCornersStayRoundedAfterADisplayPass() {
+        guard let fixture = makeOverflowingTray(label: "corners") else { return }
+        defer { fixture.teardown() }
+        guard compress(fixture, label: "corners") else { return }
+
+        let edge = fixture.cards[fixture.cards.count - 2]
+        edge.hostView.needsDisplay = true
+        fixture.window.displayIfNeeded()
+        spin(0.15)
+        fixture.window.displayIfNeeded()
+
+        guard let host = fixture.window.contentView,
+              let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+            failures.append("corners: нет буфера отображения")
+            return
+        }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let scaleX = CGFloat(rep.pixelsWide) / host.bounds.width
+        let scaleY = CGFloat(rep.pixelsHigh) / host.bounds.height
+
+        func isPainted(_ x: CGFloat, _ y: CGFloat) -> Bool {
+            let px = Int(x * scaleX)
+            let py = Int((host.bounds.height - y) * scaleY)
+            guard px >= 0, py >= 0, px < rep.pixelsWide, py < rep.pixelsHigh,
+                  let colour = rep.colorAt(x: px, y: py) else { return false }
+            return colour.alphaComponent > 0.5 && colour.blueComponent > 0.4
+                && colour.blueComponent > colour.redComponent + 0.1
+        }
+
+        let frame = edge.debugCardFrame
+        if !isPainted(frame.midX, frame.minY + 1.5) {
+            failures.append("corners: середина нижнего края кромки пуста — замер не на кромке")
+            return
+        }
+        if isPainted(frame.minX + 1.5, frame.minY + 1.5) {
+            failures.append("corners: левый нижний угол кромки закрашен — скругление потеряно")
+        }
+        if isPainted(frame.maxX - 1.5, frame.minY + 1.5) {
+            failures.append("corners: правый нижний угол кромки закрашен — скругление потеряно")
+        }
+    }
+
+    /// Служебный дамп живого рендера трея в PNG для просмотра глазами:
+    /// состояние покоя, середина наезда и полное сжатие.
+    private func dumpTrayStates() {
+        guard let fixture = makeOverflowingTray(label: "dump") else { return }
+        defer { fixture.teardown() }
+        let point = NSPoint(x: fixture.window.frame.width / 2,
+                            y: fixture.window.frame.height / 2)
+        let base = fixture.manager.debugScrollOffset
+        postScroll(delta: 40, scrollPhase: 0, momentumPhase: 0, at: point, window: fixture.window)
+        let sign: CGFloat = fixture.manager.debugScrollOffset > base ? 1 : -1
+
+        func dump(_ name: String) {
+            fixture.window.displayIfNeeded()
+            spin(0.2)
+            fixture.window.displayIfNeeded()
+            guard let host = fixture.window.contentView,
+                  let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
+            host.cacheDisplay(in: host.bounds, to: rep)
+            if let data = rep.representation(using: .png, properties: [:]) {
+                try? data.write(to: URL(fileURLWithPath: "/tmp/tray-live-\(name).png"))
+                print("dumped /tmp/tray-live-\(name).png offset=\(fixture.manager.debugScrollOffset)")
+            }
+        }
+
+        // Продвинуться до середины ленты и остановиться в произвольной фазе.
+        for _ in 0..<3 {
+            postScroll(delta: 137 * sign, scrollPhase: 0, momentumPhase: 0,
+                       at: point, window: fixture.window)
+        }
+        dump("mid")
+        for _ in 0..<2 {
+            postScroll(delta: 61 * sign, scrollPhase: 0, momentumPhase: 0,
+                       at: point, window: fixture.window)
+        }
+        dump("phase")
+        while fixture.manager.debugScrollOffset < fixture.manager.debugMaximumScrollOffset - 0.5 {
+            postScroll(delta: 300 * sign, scrollPhase: 0, momentumPhase: 0,
+                       at: point, window: fixture.window)
+        }
+        dump("full")
+    }
+
     /// Дожать ленту до полного сбора: направление определяется по факту роста
     /// смещения, колёсные события без фаз упираются в край без резинки.
     private func compress(_ fixture: Fixture, label: String) -> Bool {
@@ -759,7 +852,13 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
             return nil
         }
-        context.setFillColor(CGColor(red: 0.2, green: 0.5, blue: 0.8, alpha: 1))
+        // Дамп со светлыми карточками воспроизводит реальные скриншоты: форму
+        // светлой кромки на светлом фоне рисует только тень.
+        if ProcessInfo.processInfo.environment["QUICKSHOT_DUMP_WHITE"] == "1" {
+            context.setFillColor(CGColor(red: 0.97, green: 0.97, blue: 0.97, alpha: 1))
+        } else {
+            context.setFillColor(CGColor(red: 0.2, green: 0.5, blue: 0.8, alpha: 1))
+        }
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         return context.makeImage()
     }
