@@ -10,17 +10,18 @@ import Foundation
 /// Дальний конец никогда не прилипает к краю экрана (`TR-4b`).
 ///
 /// Модель намеренно не знает ни о вью, ни о таймерах: она отвечает на вопрос
-/// «где сейчас лента», а раскладку кромок считает `TrayStripLayout`.
+/// «где сейчас лента», а раскладку стопок считает `TrayStripLayout`.
 struct TrayScrollModel: Equatable {
     var contentLength: CGFloat
     var viewportLength: CGFloat
     var offset: CGFloat
     /// Длина новейшей карточки: полный сбор оставляет её целиком видимой,
-    /// поэтому максимальный ход — до её начала, а не до конца ленты.
+    /// поэтому максимальный ход — до её парковки, а не до конца ленты.
     var lastCardLength: CGFloat = 0
 
-    /// Максимальный сдвиг: все карточки в стопке, новейшая — верхний элемент,
-    /// целиком видимый.
+    /// Максимальный сдвиг: все карточки в стопке, новейшая запаркована низом
+    /// на ярусе стопки, целиком видимая. Лента размечена от яруса парковки,
+    /// поэтому ход — ровно до начала новейшей карточки.
     var maximumOffset: CGFloat { max(0, contentLength - lastCardLength) }
 
     /// Прокрутка осмысленна, как только есть хотя бы одна карточка: даже две
@@ -55,40 +56,45 @@ struct TrayScrollModel: Equatable {
         return 0
     }
 
-    /// Наименьшее смещение, при котором новейшая карточка целиком видна в
-    /// полезной зоне между резервами обеих стопок (`TR-5`: вставка в дальнюю
-    /// стопку докручивает ленту ровно до этого положения).
+    /// Наименьшее смещение, при котором новейшая карточка целиком видна ниже
+    /// дальнего парковочного уровня (`TR-5`: вставка в дальнюю стопку
+    /// докручивает ленту ровно до этого положения).
     func revealNewestOffset() -> CGFloat {
-        let usable = max(1, viewportLength - TrayStripLayout.nearReserve
-                            - TrayStripLayout.farReserve)
+        let usable = max(1, viewportLength - 2 * TrayStripLayout.parkLevel)
         return min(maximumOffset, max(0, contentLength - usable))
     }
 }
 
-/// Кромка или карточка ленты: результат раскладки для одного снимка.
+/// Видимая полоса одного снимка в ленте.
+///
+/// Карточка НИКОГДА не деформируется: полоса — это часть целой карточки,
+/// оставшаяся видимой после перекрытия соседками и краями зоны. Содержимое в
+/// полосе — настоящие пиксели карточки в её натуральном масштабе.
 struct TrayCardBand: Equatable {
     /// Начало видимой полосы вдоль оси ленты, от основания у кнопки.
     var position: CGFloat
     /// Видимая длина вдоль оси. Для развёрнутой карточки — её полная длина.
     var length: CGFloat
-    /// Сужение по глубине, в ступенях (непрерывно). 0 — полная ширина.
+    /// Историческое поле сужения. Карточки в стопке не сужаются: жёсткая
+    /// карточка не меняет ширину. Всегда 0.
     var insetSteps: CGFloat
     /// Доля собственного изображения, видимая в полосе, со стороны
     /// выглядывающего края. 1 — карточка целиком.
     var contentFraction: CGFloat
     /// Откуда берётся срез: true — с дальней от кнопки стороны снимка
-    /// (ближняя стопка: карточки уходят к кнопке, виден их дальний край),
-    /// false — с ближней (дальняя стопка).
+    /// (дальняя стопка: торчат верхи), false — с ближней (ближняя стопка:
+    /// торчат низы).
     var sliceFromFarSide: Bool
-    /// Прозрачность: 1 всюду, кроме хвоста растворения последней кромки.
+    /// Прозрачность: 1 всюду, кроме растворения нижней кромки стопки.
     var opacity: CGFloat
-    /// Доля тени: привязана к оставшейся высоте кромки (`TR-26`).
+    /// Доля тени: привязана к оставшейся видимой высоте кромки.
     var shadowFraction: CGFloat
-    /// Порядок наложения: больше — ближе к зрителю.
+    /// Порядок наложения: больше — ближе к зрителю. Прибывающая карточка
+    /// накрывает запаркованных.
     var zOrder: CGFloat
     var hidden: Bool
 
-    /// Полоса без сужения и среза — обычная развёрнутая карточка.
+    /// Полоса без среза — обычная развёрнутая карточка.
     var isFullCard: Bool { !hidden && insetSteps < 0.001 && contentFraction > 0.999 }
 
     static let hiddenBand = TrayCardBand(position: 0, length: 0, insetSteps: 0,
@@ -97,35 +103,34 @@ struct TrayCardBand: Equatable {
                                          hidden: true)
 }
 
-/// Раскладка ленты со стопками-кромками (`TR-23`…`TR-26`, ревизия 17.08.2026).
+/// Раскладка ленты с жёсткими карточками (`TR-23`…`TR-26`, ревизия 17.08.2026).
 ///
-/// Главные инварианты, добытые кровью первой ревизии:
+/// Суть стопки — наложение целых карточек, а не полосы-срезы:
 ///
-/// 1. Карточка ВСЕГДА движется со скоростью ленты. У границы стопки она не
-///    «прилипает» и не сплющивается — её просто срезает граница, а последние
-///    7 pt конденсируются в кромку, продолжая ехать один к одному.
-/// 2. Слоты кромок — константы у границы стопки и от высот карточек не
-///    зависят. Первая ревизия привязывала слоты к дальнему краю входящей
-///    карточки: при разной высоте снимков кромки ездили на десятки пунктов
-///    за каждый слот прокрутки — «стопка болталась».
-/// 3. Кромки лежат со стороны, КУДА уходят карточки: у кнопки — между
-///    кнопкой и лентой, у дальнего края — в резерве за лентой. Только такая
-///    сторона совместима с постоянными слотами.
-/// 4. Между прибытиями карточек (пока никто не конденсируется) кромки
-///    неподвижны.
+/// 1. Карточка доезжает до парковочного яруса ЦЕЛИКОМ и останавливается.
+///    Никогда не меняет ни высоту, ни ширину, ни масштаб.
+/// 2. Следующая карточка наезжает на неё сверху (лежит выше по порядку
+///    наложения) и срезает собой её верх: видимым остаётся низ запаркованной
+///    от её низа до низа накрывающей. Снизу торчит — сверху не торчит.
+/// 3. С момента касания запаркованные медленно уезжают в глубину: за время
+///    наезда стопка оседает ровно на один ярус (7 pt), а нижняя видимая
+///    кромка растворяется. Скорость осадки — малая доля скорости ленты:
+///    глубина читается как параллакс.
+/// 4. Ярусы стопки — константы (низы на 14/7/0 pt от базы), от высот карточек
+///    не зависят. В покое видны верхняя карточка и две кромки.
 ///
+/// Дальний край — зеркало: карточка паркуется верхом на ярусе, следующая
+/// (более старая) наезжает снизу и накрывает её, торчат верхние 7 pt.
 /// Состояние — чистая функция смещения: без таймеров и отдельных анимаций,
 /// обратная прокрутка проходит тот же путь задом наперёд.
 enum TrayStripLayout {
-    /// Высота кромки.
+    /// Высота кромки и шаг ярусов стопки.
     static let edgeLength: CGFloat = 7
-    /// Сужение на ступень глубины, в точках на каждую сторону.
+    /// Историческая константа сужения; карточки больше не сужаются.
     static let insetStep: CGFloat = 8
-    /// Резерв ближней стопки: два постоянных слота кромок между кнопкой и
-    /// лентой. Полные карточки живут выше этой границы.
-    static var nearReserve: CGFloat { 2 * edgeLength }
-    /// Резерв дальней стопки за верхней границей полезной зоны.
-    static var farReserve: CGFloat { 2 * edgeLength }
+    /// Парковочный ярус верхней карточки стопки: под ним ровно два яруса
+    /// кромок.
+    static var parkLevel: CGFloat { 2 * edgeLength }
 
     static func bands(cardLengths: [CGFloat],
                       gap: CGFloat,
@@ -134,153 +139,115 @@ enum TrayStripLayout {
         guard !cardLengths.isEmpty else { return [] }
         let count = cardLengths.count
         let e = edgeLength
-        let nearBase = nearReserve
-        let farBase = max(nearBase + 1, viewportLength - farReserve)
+        let farPark = max(parkLevel + 1, viewportLength - parkLevel)
 
-        // Позиция карточки вдоль полосы: лента сдвинута на резерв ближней
-        // стопки, чтобы слоты кромок жили между базой и карточками.
-        var cursor: CGFloat = 0
-        var positions: [CGFloat] = []
+        // Лента размечена от яруса парковки: при нулевом смещении первая
+        // карточка стоит ровно на ярусе, зазоры не съедены упором.
+        var cursor: CGFloat = parkLevel
+        var raws: [CGFloat] = []
         for length in cardLengths {
-            positions.append(cursor - offset + nearBase)
+            raws.append(cursor - offset)
             cursor += length + gap
         }
-        func top(_ index: Int) -> CGFloat { positions[index] + cardLengths[index] }
+        func top(_ index: Int) -> CGFloat { raws[index] + cardLengths[index] }
 
         var bands = [TrayCardBand](repeating: .hiddenBand, count: count)
 
-        // Утонувшие у кнопки — префикс ленты, за дальней границей — суффикс.
-        let nearSunkCount = (0..<count).lastIndex(where: { top($0) <= nearBase }).map { $0 + 1 } ?? 0
+        // Запаркованные у кнопки — префикс (низ доехал до яруса), у дальнего
+        // края — суффикс (верх доехал до дальнего яруса).
+        let nearCount = (0..<count).lastIndex(where: { raws[$0] <= parkLevel }).map { $0 + 1 } ?? 0
         let farStart = (0..<count).firstIndex(where: {
-            positions[$0] >= farBase && $0 >= nearSunkCount
+            top($0) >= farPark && $0 >= nearCount
         }) ?? count
 
-        // Фаза стопки — прогресс конденсации прибывающей карточки: последние
-        // 7 pt её видимой части скользят в первый слот, продолжая движение
-        // один к одному, и на те же 7 pt выталкивают прежние кромки глубже.
-        // Прибывающей может не быть — тогда кромки стоят ровно в слотах.
+        // Фаза наезда: от касания запаркованной до собственной парковки
+        // прибывающей. За эту фазу стопка оседает на один ярус.
         var nearPhase: CGFloat = 0
-        if nearSunkCount < count {
-            let entrantTop = top(nearSunkCount)
-            if entrantTop <= nearBase + e {
-                nearPhase = min(1, max(0, (nearBase + e - entrantTop) / e))
-            }
+        if nearCount > 0, nearCount < count {
+            let travel = max(1, cardLengths[nearCount - 1])
+            nearPhase = min(1, max(0, (parkLevel + travel - raws[nearCount]) / travel))
         }
         var farPhase: CGFloat = 0
-        if farStart > 0 {
-            let entrantPosition = positions[farStart - 1]
-            if entrantPosition >= farBase - e {
-                farPhase = min(1, max(0, (entrantPosition - (farBase - e)) / e))
-            }
+        if farStart < count, farStart > 0 {
+            let travel = max(1, cardLengths[farStart])
+            farPhase = min(1, max(0, (top(farStart - 1) - (farPark - travel)) / travel))
         }
 
-        // Поток: полные карточки и срезы у границ. Срез — естественный клип
-        // движущейся карточки, скорость всегда один к одному с лентой.
-        for index in nearSunkCount..<farStart {
-            let length = cardLengths[index]
-            let cardTop = top(index)
-            let cardBottom = positions[index]
-            if cardTop <= nearBase + e {
-                // Конденсация у кнопки: полоса высотой 7 pt скользит за
-                // границу в первый слот.
-                let phase = min(1, max(0, (nearBase + e - cardTop) / e))
-                bands[index] = TrayCardBand(position: cardTop - e,
-                                            length: e,
-                                            insetSteps: phase,
-                                            contentFraction: e / max(1, length),
-                                            sliceFromFarSide: true, opacity: 1,
-                                            shadowFraction: 1,
-                                            zOrder: -(1 + phase), hidden: false)
-            } else if cardBottom >= farBase - e {
-                // Конденсация у дальней границы.
-                let phase = min(1, max(0, (cardBottom - (farBase - e)) / e))
-                bands[index] = TrayCardBand(position: cardBottom,
-                                            length: e,
-                                            insetSteps: phase,
-                                            contentFraction: e / max(1, length),
-                                            sliceFromFarSide: false, opacity: 1,
-                                            shadowFraction: 1,
-                                            zOrder: -(1 + phase), hidden: false)
+        // Поток: целые карточки, движутся один к одному со смещением.
+        for index in nearCount..<farStart {
+            bands[index] = TrayCardBand(position: raws[index],
+                                        length: cardLengths[index],
+                                        insetSteps: 0, contentFraction: 1,
+                                        sliceFromFarSide: false, opacity: 1,
+                                        shadowFraction: 1, zOrder: 0, hidden: false)
+        }
+
+        // Ближняя стопка: низы на ярусах 14/7/0 минус осадка; видимая полоса —
+        // от собственного низа до низа соседки сверху (или прибывающей).
+        for index in 0..<nearCount {
+            let depth = nearCount - 1 - index
+            let bottom = parkLevel - e * CGFloat(depth) - e * nearPhase
+            let cover: CGFloat
+            if depth == 0 {
+                cover = nearCount < count ? raws[nearCount] : .greatestFiniteMagnitude
             } else {
-                let visibleBottom = max(cardBottom, nearBase)
-                let visibleTop = min(cardTop, farBase)
-                let visibleLength = visibleTop - visibleBottom
-                bands[index] = TrayCardBand(position: visibleBottom,
-                                            length: visibleLength,
-                                            insetSteps: 0,
-                                            contentFraction: visibleLength / max(1, length),
-                                            sliceFromFarSide: cardBottom < nearBase,
-                                            opacity: 1, shadowFraction: 1,
-                                            zOrder: 0, hidden: false)
+                cover = parkLevel - e * CGFloat(depth - 1) - e * nearPhase
             }
+            bands[index] = parkedBand(cardLength: cardLengths[index],
+                                      bottom: bottom,
+                                      visibleFrom: max(bottom, 0),
+                                      visibleTo: min(cover, bottom + cardLengths[index]),
+                                      depth: depth,
+                                      fade: depth == 2 ? nearPhase : 0,
+                                      sliceFromFarSide: false)
         }
 
-        // Ближняя стопка: слоты [база+e, база+2e] и [база, база+e]; ранги от
-        // мелкого к глубокому.
-        for index in 0..<nearSunkCount {
-            let rank = nearSunkCount - index
-            bands[index] = sunkBand(rank: rank, phase: nearPhase,
-                                    length: cardLengths[index],
-                                    slotOneStart: nearBase - e,
-                                    direction: -1,
-                                    sliceFromFarSide: true)
-        }
-
-        // Дальняя стопка: зеркало со слотами [farBase, +e] и [farBase+e, +2e].
+        // Дальняя стопка — зеркало: верхи на ярусах от дальней границы,
+        // прибывающая (более старая) накрывает снизу, торчат верхи.
         for index in farStart..<count {
-            let rank = index - farStart + 1
-            bands[index] = sunkBand(rank: rank, phase: farPhase,
-                                    length: cardLengths[index],
-                                    slotOneStart: farBase,
-                                    direction: 1,
-                                    sliceFromFarSide: false)
+            let depth = index - farStart
+            let topEdge = farPark + e * CGFloat(depth) + e * farPhase
+            let bottom = topEdge - cardLengths[index]
+            let cover: CGFloat
+            if depth == 0 {
+                cover = farStart > 0 ? top(farStart - 1) : -.greatestFiniteMagnitude
+            } else {
+                cover = farPark + e * CGFloat(depth - 1) + e * farPhase
+            }
+            bands[index] = parkedBand(cardLength: cardLengths[index],
+                                      bottom: bottom,
+                                      visibleFrom: max(bottom, cover),
+                                      visibleTo: min(topEdge, viewportLength),
+                                      depth: depth,
+                                      fade: depth == 2 ? farPhase : 0,
+                                      sliceFromFarSide: true)
         }
 
         return bands
     }
 
-    /// Утонувший слой стопки: ранг 1 — первый слот, уходящий во второй с
-    /// фазой конденсации прибывающей; ранг 2 — растворение из второго слота
-    /// (`TR-26`): высота уходит один к одному с ходом, кромка задвигается под
-    /// соседнюю, прозрачность гаснет в последней трети, тень равна доле
-    /// оставшейся высоты. Глубже — скрыто. `direction` — куда стопка растёт
-    /// от границы: -1 к кнопке, +1 в дальний резерв.
-    private static func sunkBand(rank: Int,
-                                 phase: CGFloat,
-                                 length: CGFloat,
-                                 slotOneStart: CGFloat,
-                                 direction: CGFloat,
-                                 sliceFromFarSide: Bool) -> TrayCardBand {
-        let e = edgeLength
-        switch rank {
-        case 1:
-            return TrayCardBand(position: slotOneStart + direction * e * phase,
-                                length: e,
-                                insetSteps: 1 + phase,
-                                contentFraction: e / max(1, length),
-                                sliceFromFarSide: sliceFromFarSide, opacity: 1,
-                                shadowFraction: 1,
-                                zOrder: -(2 + phase), hidden: false)
-        case 2:
-            let bandLength = e * (1 - phase)
-            // Растворяющаяся полоса примыкает к соседней: её дальний от
-            // границы край (начало второго слота) неподвижен, ближний уходит
-            // вместе с соседкой. Для ближней стопки начало полосы — низ
-            // второго слота, для дальней низ едет за соседкой вверх.
-            let slotTwoStart = slotOneStart + direction * e
-            let position = direction < 0 ? slotTwoStart : slotTwoStart + e * phase
-            let opacity = phase < 0.7 ? 1 : max(0, 1 - (phase - 0.7) / 0.3)
-            return TrayCardBand(position: position,
-                                length: bandLength,
-                                insetSteps: 2 + phase,
-                                contentFraction: bandLength / max(1, length),
-                                sliceFromFarSide: sliceFromFarSide,
-                                opacity: opacity,
-                                shadowFraction: bandLength / e,
-                                zOrder: -(3 + phase),
-                                hidden: bandLength < 0.05)
-        default:
-            return .hiddenBand
-        }
+    /// Видимая полоса запаркованной карточки. Карточка цела; полосу задаёт
+    /// перекрытие соседками и краями зоны. Глубже двух ярусов кромок — скрыто.
+    private static func parkedBand(cardLength: CGFloat,
+                                   bottom: CGFloat,
+                                   visibleFrom: CGFloat,
+                                   visibleTo: CGFloat,
+                                   depth: Int,
+                                   fade: CGFloat,
+                                   sliceFromFarSide: Bool) -> TrayCardBand {
+        guard depth <= 2 else { return .hiddenBand }
+        let length = visibleTo - visibleFrom
+        guard length > 0.05 else { return .hiddenBand }
+        let opacity = max(0, 1 - fade)
+        guard opacity > 0.01 else { return .hiddenBand }
+        return TrayCardBand(position: visibleFrom,
+                            length: length,
+                            insetSteps: 0,
+                            contentFraction: length / max(1, cardLength),
+                            sliceFromFarSide: sliceFromFarSide,
+                            opacity: opacity,
+                            shadowFraction: min(1, length / edgeLength),
+                            zOrder: -CGFloat(depth + 1),
+                            hidden: false)
     }
 }

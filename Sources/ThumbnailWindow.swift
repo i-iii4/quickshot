@@ -162,6 +162,8 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     func layoutContents() {
         displayView.frame = bounds
         layer?.cornerRadius = QS.radiusCard
+        layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner,
+                                .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
         updateDisplayImage()
         guard let controls else { return }
         let inset = QS.s2
@@ -178,8 +180,9 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     }
 
     /// Срез карточки в стопке (`TR-23`): вью клипует по своим границам, а
-    /// изображение раскладывается в полный масштаб карточки и сдвигается так,
-    /// чтобы в полосе оказался нужный край — реальный контент, не заглушка.
+    /// изображение раскладывается в НАТУРАЛЬНЫЙ масштаб карточки и сдвигается
+    /// так, чтобы в полосе оказался нужный край — карточка не деформируется,
+    /// её просто перекрыли.
     func layoutSlice(cardSize: NSSize, vertical: Bool, sliceFromFarSide: Bool) {
         if vertical {
             let fullW = bounds.width
@@ -194,9 +197,18 @@ private final class ThumbnailView: NSView, NSDraggingSource {
                                        y: 0,
                                        width: fullW, height: fullH)
         }
-        // Радиус не больше половины полосы: кромка в 7pt со стандартным
-        // радиусом превращается в пилюлю.
-        layer?.cornerRadius = min(QS.radiusCard, min(bounds.width, bounds.height) / 2)
+        // Скругление только со стороны настоящего края карточки: линия среза
+        // перекрытием — прямая. Полное скругление превращало кромку в пилюлю.
+        layer?.cornerRadius = QS.radiusCard
+        if vertical {
+            layer?.maskedCorners = sliceFromFarSide
+                ? [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+                : [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        } else {
+            layer?.maskedCorners = sliceFromFarSide
+                ? [.layerMinXMinYCorner, .layerMinXMaxYCorner]
+                : [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+        }
         updateDisplayImage()
         controls?.isHidden = true
     }

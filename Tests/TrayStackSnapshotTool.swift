@@ -43,15 +43,13 @@ struct TrayStackSnapshotTool {
         context.setFillColor(NSColor(white: 0.12, alpha: 1).cgColor)
         context.fill(screen)
 
-        // Порядок наложения задаётся слотом, как и в живом трее. Кромка стопки
-        // рисуется полосой с сужением по глубине и тенью-отбивкой снизу
-        // (`TR-23`…`TR-26`).
+        // Порядок наложения задаётся слотом, как и в живом трее. Полоса —
+        // часть целой карточки: скругляются только углы её настоящего края,
+        // линия среза перекрытием — прямая (`TR-23`…`TR-26`).
         for slot in result.visible.sorted(by: { $0.stackOrder < $1.stackOrder }) {
-            let inset = slot.insetSteps * TrayStripLayout.insetStep
             let height = slot.isFullCard ? heights[slot.index] : slot.length
-            let frame = CGRect(x: slot.origin.x + inset, y: slot.origin.y,
-                               width: cardWidth - 2 * inset, height: height)
-            let radius = min(10, min(frame.width, frame.height) / 2)
+            let frame = CGRect(x: slot.origin.x, y: slot.origin.y,
+                               width: cardWidth, height: height)
             context.saveGState()
             context.setAlpha(slot.opacity)
             if slot.shadowFraction > 0.01 {
@@ -60,8 +58,9 @@ struct TrayStackSnapshotTool {
                                   color: NSColor.black
                                       .withAlphaComponent(0.6 * slot.shadowFraction).cgColor)
             }
-            let path = CGPath(roundedRect: frame, cornerWidth: radius,
-                              cornerHeight: radius, transform: nil)
+            let path = bandPath(frame: frame, radius: 10,
+                                roundedBottom: slot.isFullCard || !slot.sliceFromFarSide,
+                                roundedTop: slot.isFullCard || slot.sliceFromFarSide)
             context.addPath(path)
             context.setFillColor(NSColor(calibratedHue: CGFloat(slot.index) / 14,
                                          saturation: 0.55, brightness: 0.85, alpha: 1).cgColor)
@@ -90,5 +89,37 @@ struct TrayStackSnapshotTool {
         CGImageDestinationAddImage(destination, image, nil)
         CGImageDestinationFinalize(destination)
         print("written \(path); visible \(result.visible.count), hidden \(result.hidden.count), offset \(offset)")
+    }
+
+    /// Прямоугольник со скруглением только выбранных горизонтальных краёв.
+    private static func bandPath(frame: CGRect, radius: CGFloat,
+                                 roundedBottom: Bool, roundedTop: Bool) -> CGPath {
+        let r = min(radius, min(frame.width / 2, frame.height))
+        let path = CGMutablePath()
+        let bottomR: CGFloat = roundedBottom ? r : 0
+        let topR: CGFloat = roundedTop ? r : 0
+        path.move(to: CGPoint(x: frame.minX + bottomR, y: frame.minY))
+        path.addLine(to: CGPoint(x: frame.maxX - bottomR, y: frame.minY))
+        if roundedBottom {
+            path.addQuadCurve(to: CGPoint(x: frame.maxX, y: frame.minY + bottomR),
+                              control: CGPoint(x: frame.maxX, y: frame.minY))
+        }
+        path.addLine(to: CGPoint(x: frame.maxX, y: frame.maxY - topR))
+        if roundedTop {
+            path.addQuadCurve(to: CGPoint(x: frame.maxX - topR, y: frame.maxY),
+                              control: CGPoint(x: frame.maxX, y: frame.maxY))
+        }
+        path.addLine(to: CGPoint(x: frame.minX + topR, y: frame.maxY))
+        if roundedTop {
+            path.addQuadCurve(to: CGPoint(x: frame.minX, y: frame.maxY - topR),
+                              control: CGPoint(x: frame.minX, y: frame.maxY))
+        }
+        path.addLine(to: CGPoint(x: frame.minX, y: frame.minY + bottomR))
+        if roundedBottom {
+            path.addQuadCurve(to: CGPoint(x: frame.minX + bottomR, y: frame.minY),
+                              control: CGPoint(x: frame.minX, y: frame.minY))
+        }
+        path.closeSubpath()
+        return path
     }
 }

@@ -135,19 +135,20 @@ struct TrayScrollLayoutTests {
     }
 
     /// Поля полосы обязаны доходить до слотов раскладки, а не оставаться в
-    /// модели: кромка сужается, режет содержимое и несёт свою тень.
+    /// модели: кромка режет содержимое перекрытием и несёт свою тень.
+    /// Карточки жёсткие: никаких сужений ни у кого.
     private static func bandFieldsReachSlots() {
         let heights = Array(repeating: CGFloat(200), count: 12)
         let result = layout(heights: heights, offset: 600)
         let bands = result.visible.filter { !$0.isFullCard }
         expect(!bands.isEmpty, "у кнопки нет ни одной кромки стопки")
-        expect(bands.contains { $0.insetSteps > 0.01 },
-               "кромки обязаны сужаться по глубине")
+        expect(result.visible.allSatisfy { $0.insetSteps == 0 },
+               "жёсткие карточки не сужаются")
         expect(bands.allSatisfy { $0.length > 0 && $0.length < 200 },
                "кромка — полоса, а не карточка целиком")
         let full = result.visible.filter(\.isFullCard)
-        expect(full.allSatisfy { $0.insetSteps < 0.001 && $0.opacity > 0.999 },
-               "развёрнутые карточки не сужаются и не тускнеют")
+        expect(full.allSatisfy { $0.opacity > 0.999 },
+               "развёрнутые карточки не тускнеют")
     }
 
     /// Дальняя стопка живёт в резерве окна просмотра и не касается края
@@ -163,18 +164,19 @@ struct TrayScrollLayoutTests {
     }
 
     /// Слой стопки лежит ЗА карточками ленты: иначе кромка рисуется поверх
-    /// развёрнутых карточек и стопка превращается в мешанину. Срез карточки у
-    /// границы — не слой стопки: он часть потока и живёт на нулевом уровне.
+    /// развёрнутых карточек и стопка превращается в мешанину.
     private static func deeperLayersGoBehind() {
         let heights = Array(repeating: CGFloat(200), count: 14)
         let result = layout(heights: heights, offset: 0)
-        let stacked = result.visible.filter { $0.insetSteps > 0.001 }
+        let stacked = result.visible.filter { $0.stackOrder < -0.5 && !$0.isFullCard }
         expect(!stacked.isEmpty, "в ленте нет ни одного слоя стопки")
         for slot in stacked {
             expect(slot.stackOrder < 0,
                    "слой стопки \(slot.index) не уведён за ленту: \(slot.stackOrder)")
         }
-        for front in result.visible where front.isFullCard {
+        // Сравнение с потоком: запаркованная, но ещё не накрытая карточка
+        // сама несёт отрицательный уровень своей стопки и в потоке не живёт.
+        for front in result.visible where front.isFullCard && front.stackOrder >= 0 {
             for behind in stacked {
                 expect(behind.stackOrder < front.stackOrder,
                        "слой \(behind.index) не за карточкой \(front.index)")
