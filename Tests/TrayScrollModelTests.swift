@@ -20,6 +20,7 @@ struct TrayScrollModelTests {
         tiersStandStillBeforeTheTouch()
         farStackMirrorsAtTheTop()
         bottomEdgeSinksAndDissolves()
+        cardsAreNeverClippedByTheZoneEdges()
         scrubbingIsContinuous()
         deeperLayersGoBehind()
         print("TrayScrollModelTests: passed")
@@ -329,19 +330,19 @@ struct TrayScrollModelTests {
             expect(bandTop >= farPark - 0.001,
                    "верх слоя \(index) ниже дальнего яруса: \(bandTop)")
         }
-        // Выступы верхних кромок — ровно ярус; слой, срезанный краем окна
-        // (`roundsEnd == false`), из проверки выпадает.
-        let tops = parked.filter { $0.element.roundsEnd }
-            .map { $0.element.position + $0.element.length }.sorted()
+        // Выступы верхних кромок — не больше яруса; слой, упершийся в край
+        // окна, тает на месте, и его выступ легитимно сжимается.
+        let tops = parked.map { $0.element.position + $0.element.length }.sorted()
         for (lower, upper) in zip(tops, tops.dropFirst()) {
-            expect(abs(upper - lower - TrayStripLayout.edgeLength) < 0.75,
-                   "выступ верхней кромки не равен ярусу: \(upper - lower)")
+            let step = upper - lower
+            expect(step > -0.001 && step <= TrayStripLayout.edgeLength + 0.75,
+                   "выступ верхней кромки больше яруса: \(step)")
         }
         expect(bands[9].hidden, "самая дальняя карточка глубже стопки")
     }
 
-    /// Нижняя кромка стопки при наезде новой карточки уезжает за базу и
-    /// растворяется.
+    /// Нижняя кромка стопки при наезде новой карточки растворяется НА СВОЁМ
+    /// ярусе: никуда не уезжает, её низ — всегда настоящий скруглённый край.
     private static func bottomEdgeSinksAndDissolves() {
         let lengths = uniform(10)
         let k = 7
@@ -354,11 +355,13 @@ struct TrayScrollModelTests {
 
         let early = bands(atPhase: 0.35)
         let bottomEarly = early[k - 3]      // глубина 2 — нижняя видимая кромка
-        expect(abs(bottomEarly.position) < 0.001 && !bottomEarly.roundsStart,
-               "кромка уезжает за базу: низ обрезан краем зоны")
+        expect(abs(bottomEarly.position) < 0.001,
+               "нижняя кромка стоит на базе: \(bottomEarly.position)")
+        expect(bottomEarly.roundsStart && bottomEarly.cardStartOffset >= -0.001,
+               "низ нижней кромки — настоящий край, не обрезка")
         expect(abs(bottomEarly.opacity - 0.65) < 0.01,
                "кромка растворяется по фазе наезда: \(bottomEarly.opacity)")
-        // Выступ из-под соседки сокращается вместе с осадкой.
+        // Выступ из-под соседки сокращается: соседка опускается на её ярус.
         let protrusionEarly = early[k - 2].position - bottomEarly.position
         expect(protrusionEarly < TrayStripLayout.edgeLength,
                "выступ нижней кромки обязан сокращаться: \(protrusionEarly)")
@@ -367,6 +370,36 @@ struct TrayScrollModelTests {
         let bottomLate = late[k - 3]
         expect(bottomLate.hidden || bottomLate.opacity < 0.2,
                "к концу наезда нижняя кромка почти исчезла")
+    }
+
+    /// Ни одна карточка НИКОГДА не обрезается краями зоны: нижняя кромка
+    /// растворяется на своём ярусе, а не уезжает за виртуальную линию базы с
+    /// прямым срезом; дальняя — упирается в край окна и тает, не выезжая.
+    /// Низ полосы ближней стопки — всегда настоящий скруглённый край.
+    private static func cardsAreNeverClippedByTheZoneEdges() {
+        let lengths: [CGFloat] = [200, 90, 260, 120, 180, 90, 210, 150, 100, 170]
+        let maximum = content(lengths) - lengths[9]
+        let viewport: CGFloat = 600
+        var offset: CGFloat = 0
+        while offset <= maximum {
+            let bands = TrayStripLayout.bands(cardLengths: lengths, gap: gap,
+                                              offset: offset, viewportLength: viewport)
+            for (index, band) in bands.enumerated() where !band.hidden {
+                if !band.sliceFromFarSide {
+                    expect(band.roundsStart && band.cardStartOffset >= -0.001,
+                           "полоса \(index) обрезана базой на смещении \(offset): "
+                           + "offset \(band.cardStartOffset)")
+                    expect(band.position >= -0.001,
+                           "полоса \(index) ниже базы на смещении \(offset)")
+                } else {
+                    expect(band.roundsEnd,
+                           "полоса \(index) обрезана краем окна на смещении \(offset)")
+                    expect(band.position + band.length <= viewport + 0.001,
+                           "полоса \(index) выше окна на смещении \(offset)")
+                }
+            }
+            offset += 2
+        }
     }
 
     /// Все переходы — чистая функция смещения: на шаге в 1pt ни один слой не

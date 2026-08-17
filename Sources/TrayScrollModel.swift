@@ -225,9 +225,12 @@ enum TrayStripLayout {
             let depth = nearCount - 1 - index
             let liveDepth = CGFloat(depth) + nearPhase
             let scale = depthScale(liveDepth)
-            let bottom = parkLevel - e * CGFloat(depth) - e * nearPhase
+            // Нижний ярус упирается в базу и НЕ уезжает за неё: карточка
+            // растворяется на месте. Уход за виртуальную линию срезал её низ
+            // прямой кромкой — та самая «квадратная обрезка нижней карточки».
+            let bottom = max(0, parkLevel - e * CGFloat(depth) - e * nearPhase)
             let cardTop = bottom + cardLengths[index] * scale
-            let visibleFrom = max(bottom, 0)
+            let visibleFrom = bottom
             let visibleTo = min(cardTop, coverTop)
             bands[index] = parkedBand(cardLength: cardLengths[index],
                                       scale: scale,
@@ -253,10 +256,12 @@ enum TrayStripLayout {
             let depth = index - farStart
             let liveDepth = CGFloat(depth) + farPhase
             let scale = depthScale(liveDepth)
-            let topEdge = farPark + e * CGFloat(depth) + e * farPhase
+            // Верхний ярус упирается в край окна и НЕ выезжает за него:
+            // кромка тает на месте, её верх — всегда настоящий край.
+            let topEdge = min(viewportLength, farPark + e * CGFloat(depth) + e * farPhase)
             let cardBottom = topEdge - cardLengths[index] * scale
             let visibleFrom = max(cardBottom, coverBottom)
-            let visibleTo = min(topEdge, viewportLength)
+            let visibleTo = topEdge
             bands[index] = parkedBand(cardLength: cardLengths[index],
                                       scale: scale,
                                       visibleFrom: visibleFrom,
