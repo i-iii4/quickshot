@@ -101,9 +101,6 @@ final class ThumbnailManager {
     private var scrollIntent: ScrollIntent = .revealNewest
     private var stackOrderApplied: [ObjectIdentifier] = []
     private var scrollSettleAnimating = false
-    /// Стопка была собрана до ховера и вернётся туда по уходу курсора
-    /// (`TR-27`); прокрутка во время ховера снимает возврат.
-    private var stackGatheredBeforeHover = false
     private lazy var scrollSettleAnimator = CollectionProgressAnimator(hostView: hostContent)
 
     /// Уровень трея в покое: выше обычных окон, но НИЖЕ системных
@@ -294,16 +291,16 @@ final class ThumbnailManager {
         }
     }
 
-    /// Наведение на карточку разворачивает свёрнутый трей так же, как
-    /// наведение на кнопку (`TR-27`): собранная стопка видна на экране, и
-    /// подводить курсор к кнопке ради разворота не нужно. Прежнее условие
-    /// `trayProgress < 0.999` разрешало разворот только у карточки, ещё не
-    /// доехавшей в кнопку.
+    /// Наведение на ЛЮБУЮ карточку разворачивает нижнюю панель кнопок хаба —
+    /// так же, как наведение на саму кнопку (`TR-27`). Состояние ленты роли
+    /// не играет: панель кнопок и положение ленты — разные вещи, и ховер
+    /// ленту не двигает. Прежнее условие пускало сессию ховера только у
+    /// свёрнутого трея, поэтому у развёрнутой ленты панель не разворачивалась.
     private func thumbnailHoverChanged(_ thumbnail: ThumbnailWindow, entered: Bool) {
         if entered {
             cancelHoverExit()
             if collapsedPeekItem === thumbnail { cancelCollapsedPeekDismiss() }
-            if collapsed, !trayHoverActive, collapsedPeekItem == nil {
+            if !trayHoverActive, collapsedPeekItem == nil {
                 beginTrayHoverSession()
             }
         } else if trayHoverActive || collapsedPeekItem === thumbnail {
@@ -322,12 +319,6 @@ final class ThumbnailManager {
         hub.setTrayHoverActive(true)
         if collapsed, let screen = anchorScreen ?? NSScreen.main {
             runTrayTransition(to: 0, on: screen)
-        }
-        // Собранная стопка разворачивается на время ховера (`TR-27`):
-        // наведение показывает ленту, уход возвращает стопку.
-        if stackIsGatheredAtHub {
-            stackGatheredBeforeHover = true
-            animateScroll(to: 0)
         }
     }
 
@@ -356,13 +347,6 @@ final class ThumbnailManager {
         guard trayHoverActive else { return }
         trayHoverActive = false
         hub.setTrayHoverActive(false)
-        // Стопка, развёрнутая ради ховера, собирается обратно (`TR-27`).
-        // Прокрутка во время ховера — намерение пользователя: она снимает
-        // возврат, лента остаётся там, куда он её увёл.
-        if stackGatheredBeforeHover {
-            stackGatheredBeforeHover = false
-            animateScroll(to: scrollModel.maximumOffset)
-        }
         guard collapsed, let screen = anchorScreen ?? NSScreen.main else { return }
         finishCollectionMotion()
         runTrayTransition(to: 1, on: screen)
@@ -793,9 +777,6 @@ final class ThumbnailManager {
 
         guard scrollModel.isScrollable || abs(delta) > 0.01 else { return }
         scrollIntent = .none
-        // Пользователь сам увёл ленту: возвращать стопку по уходу курсора
-        // больше нельзя (`TR-27`).
-        stackGatheredBeforeHover = false
         // Резинка только у жестов с фазами: колесо упирается в край жёстко.
         // Содержимое идёт за пальцами: положительная дельта двигает карточки к
         // хабу. Обратный знак разворачивал ленту против жеста. Жест никогда не
