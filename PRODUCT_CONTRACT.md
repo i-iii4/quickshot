@@ -324,6 +324,14 @@ fullscreen behavior remain explicit runtime release checks.
    deliberately: the first moments of selection run over the live screen, so
    WYSIWYG is exact only once the frozen frame lands — the same tolerance
    the cold path already imposed, minus the wait.
+5. The session-scoped Carbon Escape registration is an auxiliary cancel
+   channel and must never fail the session: the overlay carries its own
+   local and global Escape monitors. It is released the moment the selection
+   completes — a session whose crop is still waiting for a late frame must
+   not hold the key against the next session of a fast burst. Known accepted
+   limitation: in a very fast burst the cursor may occasionally stay a
+   system arrow for one capture; the user classified this as a corner case
+   not worth further hardening.
 
 ## UI Architecture
 
