@@ -101,6 +101,9 @@ final class ThumbnailManager {
     private var scrollIntent: ScrollIntent = .revealNewest
     private var stackOrderApplied: [ObjectIdentifier] = []
     private var scrollSettleAnimating = false
+    /// Стопка была собрана до ховера и вернётся туда по уходу курсора
+    /// (`TR-27`); прокрутка во время ховера снимает возврат.
+    private var stackGatheredBeforeHover = false
     private lazy var scrollSettleAnimator = CollectionProgressAnimator(hostView: hostContent)
 
     /// Уровень трея в покое: выше обычных окон, но НИЖЕ системных
@@ -291,11 +294,16 @@ final class ThumbnailManager {
         }
     }
 
+    /// Наведение на карточку разворачивает свёрнутый трей так же, как
+    /// наведение на кнопку (`TR-27`): собранная стопка видна на экране, и
+    /// подводить курсор к кнопке ради разворота не нужно. Прежнее условие
+    /// `trayProgress < 0.999` разрешало разворот только у карточки, ещё не
+    /// доехавшей в кнопку.
     private func thumbnailHoverChanged(_ thumbnail: ThumbnailWindow, entered: Bool) {
         if entered {
             cancelHoverExit()
             if collapsedPeekItem === thumbnail { cancelCollapsedPeekDismiss() }
-            if collapsed, !trayHoverActive, collapsedPeekItem == nil, trayProgress < 0.999 {
+            if collapsed, !trayHoverActive, collapsedPeekItem == nil {
                 beginTrayHoverSession()
             }
         } else if trayHoverActive || collapsedPeekItem === thumbnail {
@@ -314,6 +322,12 @@ final class ThumbnailManager {
         hub.setTrayHoverActive(true)
         if collapsed, let screen = anchorScreen ?? NSScreen.main {
             runTrayTransition(to: 0, on: screen)
+        }
+        // Собранная стопка разворачивается на время ховера (`TR-27`):
+        // наведение показывает ленту, уход возвращает стопку.
+        if stackIsGatheredAtHub {
+            stackGatheredBeforeHover = true
+            animateScroll(to: 0)
         }
     }
 
@@ -342,6 +356,13 @@ final class ThumbnailManager {
         guard trayHoverActive else { return }
         trayHoverActive = false
         hub.setTrayHoverActive(false)
+        // Стопка, развёрнутая ради ховера, собирается обратно (`TR-27`).
+        // Прокрутка во время ховера — намерение пользователя: она снимает
+        // возврат, лента остаётся там, куда он её увёл.
+        if stackGatheredBeforeHover {
+            stackGatheredBeforeHover = false
+            animateScroll(to: scrollModel.maximumOffset)
+        }
         guard collapsed, let screen = anchorScreen ?? NSScreen.main else { return }
         finishCollectionMotion()
         runTrayTransition(to: 1, on: screen)
@@ -513,12 +534,11 @@ final class ThumbnailManager {
 #endif
         let (visible, hidden) = cardLayout(on: screen)
         let visibleIDs = Set(visible.map { ObjectIdentifier($0.0) })
-        let outgoing = hidden.filter {
-            previousVisible.contains(ObjectIdentifier($0)) && $0 !== inserted
-        }
-        for item in hidden where !outgoing.contains(where: { $0 === item }) {
-            item.hide()
-        }
+        // При вставке карточки НЕ удаляются: всё, что ушло в hidden, — слои
+        // стопки, сдвинутые на ярус глубже. Прогон их через анимацию «улёта»
+        // вбок давал глич: призраки карточек с тенями на мгновение справа от
+        // трея. Слои стопки просто скрываются.
+        for item in hidden { item.hide() }
 
         var reflowing: [(ThumbnailWindow, NSRect)] = []
         for (item, slot) in visible where item !== inserted {
@@ -535,9 +555,6 @@ final class ThumbnailManager {
                                                              vertical: TrayPosition.current.isVertical),
                                reduceMotion: reduceMotion)
             reflowing.append((item, oldFrame))
-        }
-        for item in outgoing {
-            item.prepareRemoval(toward: collectionDirectionalOffset(), reduceMotion: reduceMotion)
         }
 
         guard let origin = visible.first(where: { $0.0 === inserted })?.1.origin else {
@@ -559,14 +576,10 @@ final class ThumbnailManager {
             for (item, oldFrame) in reflowing {
                 item.applyReflow(progress: progress, from: oldFrame, reduceMotion: reduceMotion)
             }
-            for item in outgoing {
-                item.applyRemoval(progress: progress, reduceMotion: reduceMotion)
-            }
             self?.hub.setCountTransitionProgress(progress)
         }, completion: { [weak self, weak inserted] in
             inserted?.finishCollectionMotion()
             for (item, _) in reflowing { item.finishCollectionMotion() }
-            for item in outgoing { item.finishCollectionMotion(hidden: true) }
             for item in self?.items ?? [] where !visibleIDs.contains(ObjectIdentifier(item)) {
                 item.hide()
             }
@@ -780,6 +793,9 @@ final class ThumbnailManager {
 
         guard scrollModel.isScrollable || abs(delta) > 0.01 else { return }
         scrollIntent = .none
+        // Пользователь сам увёл ленту: возвращать стопку по уходу курсора
+        // больше нельзя (`TR-27`).
+        stackGatheredBeforeHover = false
         // Резинка только у жестов с фазами: колесо упирается в край жёстко.
         // Содержимое идёт за пальцами: положительная дельта двигает карточки к
         // хабу. Обратный знак разворачивал ленту против жеста. Жест никогда не
@@ -1247,7 +1263,54 @@ final class ThumbnailManager {
 
     // MARK: сворачивание/разворачивание (растворение в хаб)
 
-    func toggleCollapse() { collapsed ? expand() : collapse() }
+    /// Клик по кнопке хаба ведёт по ступеням (`TR-27`): развёрнутая лента
+    /// сначала собирается в стопку у кнопки, и только повторный клик по уже
+    /// собранной стопке прячет трей. Скрытый трей клик разворачивает.
+    func toggleCollapse() {
+        if collapsed {
+            expand()
+        } else if stackIsGatheredAtHub || !scrollModel.isScrollable {
+            collapse()
+        } else {
+            gatherStackAtHub()
+        }
+    }
+
+    /// Собрать ленту в стопку у кнопки.
+    private func gatherStackAtHub() { animateScroll(to: scrollModel.maximumOffset) }
+
+    /// Программная прокрутка тем же пружинным возвратом, что и жест:
+    /// отдельной кривой у программного сбора нет (`TR-26`).
+    private func animateScroll(to target: CGFloat) {
+        scrollSettleAnimator.cancel()
+        scrollSettleAnimating = false
+        scrollGestureActive = false
+        let from = scrollModel.offset
+        guard abs(target - from) > 0.5 else {
+            scrollModel.offset = target
+            applyScrollOffset()
+            return
+        }
+        scrollSettleAnimating = true
+        scrollSettleAnimator.run(duration: 0.32, onFrame: { [weak self] progress in
+            guard let self else { return }
+            let eased = 1 - pow(1 - progress, 3)
+            self.scrollModel.offset = from + (target - from) * eased
+            self.applyScrollOffset()
+        }, onDone: { [weak self] in
+            guard let self else { return }
+            self.scrollSettleAnimating = false
+            self.scrollModel.offset = target
+            self.applyScrollOffset()
+        })
+    }
+
+    /// Лента полностью собрана в стопку у кнопки: смещение на максимуме и
+    /// ход реальный (`TR-27`).
+    var stackIsGatheredAtHub: Bool {
+        scrollModel.maximumOffset > 0.5
+            && scrollModel.offset >= scrollModel.maximumOffset - 1
+    }
 
     func collapse() {
         // Сворачиваем при любом count >= 1 (хаб теперь виден и при одном снимке — клик должен работать).
