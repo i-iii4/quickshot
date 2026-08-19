@@ -612,7 +612,6 @@ xcrun swiftc \
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
   Sources/ThumbnailManager.swift \
-  Sources/TrayScrollDriver.swift \
   Sources/TrayHaptics.swift \
   Tests/EditorScanTests.swift \
   "$NATIVE_UI_LIB" \
@@ -797,7 +796,6 @@ xcrun swiftc \
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
   Sources/ThumbnailManager.swift \
-  Sources/TrayScrollDriver.swift \
   Sources/TrayHaptics.swift \
   Tests/ThumbnailCollectionBehaviorTests.swift \
   "$NATIVE_UI_LIB" \
@@ -885,7 +883,6 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
   Sources/ThumbnailManager.swift \
-  Sources/TrayScrollDriver.swift \
   Sources/TrayHaptics.swift \
   Tests/ThumbnailWindowLiveClickTests.swift \
   "$NATIVE_UI_LIB" \
@@ -972,7 +969,6 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
   Sources/ThumbnailManager.swift \
-  Sources/TrayScrollDriver.swift \
   Sources/TrayHaptics.swift \
   Tests/TrayLiveScrollTests.swift \
   "$NATIVE_UI_LIB" \

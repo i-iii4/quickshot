@@ -93,19 +93,28 @@ final class ThumbnailManager {
     private var activeDragPayloads: Set<ObjectIdentifier> = []
     private var viewportScrollAccumulator: CGFloat = 0
     private var scrollModel = TrayScrollModel(contentLength: 0, viewportLength: 0, offset: 0)
+    private var scrollGestureActive = false
     /// `TR-5`: как разместить ленту после вставки нового снимка. Сжатая стопка
     /// остаётся сжатой и молча получает новый верхний элемент; развёрнутая
     /// лента докручивается ровно настолько, чтобы показать новый снимок.
     private enum ScrollIntent { case none, revealNewest, stayCompressed }
     private var scrollIntent: ScrollIntent = .revealNewest
     private var stackOrderApplied: [ObjectIdentifier] = []
-    /// Физику прокрутки ведёт система (`TR-13`): резинка, инерция и возврат
-    /// родные, лента лишь читает смещение и раскладывается по нему.
-    private let scrollDriver = TrayScrollDriver()
-    /// Защёлкнута ли лента сейчас — по нему видно переход и момент щелчка.
-    private var detentSnapped = false
+    private var scrollSettleAnimating = false
+    private lazy var scrollSettleAnimator = CollectionProgressAnimator(hostView: hostContent)
+    /// Защёлка полного сбора (`TR-29`): вход и выход из стопки через точку
+    /// напряжения со щелчком.
+    private var detent = TrayDetentModel()
+    /// Кадровая добавка осадки защёлки поверх смещения: раскладка читает её на
+    /// каждом кадре, поэтому события жеста осадку не смазывают.
     /// Трекпад, ведущий текущий жест (`TR-29`): щелчок уходит именно в него.
     private var gestureDevice: UInt64?
+    /// Поколение отложенного возврата из-за края: новое событие жеста
+    /// обесценивает ранее запланированный возврат.
+    private var settleGeneration = 0
+    private var detentDip: CGFloat = 0
+    private var detentDipAnimating = false
+    private lazy var detentDipAnimator = CollectionProgressAnimator(hostView: hostContent)
 
     /// Уровень трея в покое: выше обычных окон, но НИЖЕ системных
     /// поверхностей. На `.statusBar` карточки перекрывали Центр уведомлений.
@@ -142,8 +151,6 @@ final class ThumbnailManager {
         host.onScrollWheel = { [weak self] event in
             self?.handleHostScroll(event) ?? false
         }
-        scrollDriver.attach(to: hostContent)
-        scrollDriver.onChange = { [weak self] in self?.nativeScrollChanged() }
         hostContent.addSubview(hub.view)              // хаб — верхний сабвью; карточки кладём под него
 
         let saved = defaults.double(forKey: widthKey)
@@ -766,50 +773,233 @@ final class ThumbnailManager {
     /// Непрерывная прокрутка ленты (`TR-1`, `TR-2`). Пошаговое переключение
     /// заменено на смещение, потому что ступенчатая лента не даёт понять, где
     /// ты находишься, и не позволяет остановиться между карточками.
-    /// Событие прокрутки уходит в системный скролл — он и есть физика ленты
-    /// (`TR-13`). Собственных формул сопротивления, возврата и инерции у трея
-    /// больше нет: они спорили с системой и требовали подбора чисел руками.
     func scrollTray(with event: NSEvent) {
         guard !cardsAreCollapsed else { return }
-        scrollIntent = .none
-        // Актуатор трекпада просыпается заранее: его открытие стоит десятки
-        // миллисекунд (`TR-29`).
-        TrayHaptics.logSink = { [weak self] line in self?.debugTrayLog("haptics: \(line)") }
-        TrayHaptics.shared.arm()
-        if let device = TrayHaptics.shared.device(of: event) { gestureDevice = device }
-        scrollDriver.handle(event)
-    }
+        let vertical = TrayPosition.current.isVertical
+        let raw = vertical
+            ? event.scrollingDeltaY
+            : (abs(event.scrollingDeltaX) > 0.01 ? event.scrollingDeltaX : event.scrollingDeltaY)
+        // Колесо мыши шлёт дельту в строках, а не в точках: один щелчок — это
+        // единица, и лента ползла на пиксель за щелчок.
+        let delta = event.hasPreciseScrollingDeltas ? raw : raw * Self.wheelLineHeight
+        // Трекпад шлёт фазы жеста и инерции; классическое колесо — нет.
+        let hasPhases = event.phase != [] || event.momentumPhase != []
+        // Пальцы на трекпаде: фаза самого жеста. Инерция приходит уже без них
+        // (`momentumPhase`) — и это разные режимы для анимации щелчка.
+        let fingersDown = event.phase != []
 
-    /// Системный скролл сдвинулся — раскладываем ленту по его положению.
-    /// Здесь же живёт защёлка: она не двигает ленту сама, а лишь читает, где
-    /// та оказалась, и отмечает переход щелчком.
-    private func nativeScrollChanged() {
-        let native = scrollDriver.offset
-        let presented = TrayDetentModel.presented(nativeOffset: native, model: scrollModel)
-        scrollModel.offset = presented
+        if hasPhases {
+            // Новое событие отменяет отложенный возврат: жест продолжается.
+            settleGeneration &+= 1
+            scrollSettleAnimator.cancel()
+            scrollSettleAnimating = false
+            // Открытие актуатора внешнего трекпада стоит сотни миллисекунд
+            // (Bluetooth): готовим дескриптор в фоне заранее, чтобы сам
+            // щелчок стоил доли миллисекунды.
+            TrayHaptics.logSink = { [weak self] line in self?.debugTrayLog("haptics: \(line)") }
+            TrayHaptics.shared.arm()
+            // Устройство берётся из самого события (`TR-29`). В инерции
+            // HID-нагрузки может не быть, поэтому источник запоминается на
+            // всё время жеста: защёлка часто срабатывает уже на инерции.
+            if let device = TrayHaptics.shared.device(of: event) {
+                if gestureDevice != device {
+                    debugTrayLog("источник жеста: устройство=\(device)")
+                }
+                gestureDevice = device
+            }
+            if fingersDown, detentDipAnimating {
+                // `TR-29`: под пальцем позиция принадлежит пальцу. Пружина
+                // щелчка, продолжающая играть во время медленного свайпа,
+                // спорит с прямым управлением — это и есть грязь. Догоняющее
+                // движение снимается мгновенно.
+                detentDipAnimator.cancel()
+                detentDipAnimating = false
+                detentDip = 0
+            }
+            if !scrollGestureActive {
+                debugTrayLog("gesture offset=\(Int(scrollModel.offset)) max=\(Int(scrollModel.maximumOffset)) fits=\(TrayDetentModel.fits(scrollModel)) engaged=\(detent.engaged)")
+            }
+            scrollGestureActive = true
+        }
+
+        guard scrollModel.isScrollable || abs(delta) > 0.01 else { return }
+        scrollIntent = .none
+        // Резинка только у жестов с фазами: колесо упирается в край жёстко.
+        // Содержимое идёт за пальцами: положительная дельта двигает карточки к
+        // хабу. Обратный знак разворачивал ленту против жеста. Жест никогда не
+        // прячет и не показывает трей — это делает только клик по кнопке;
+        // перетягивание за край лишь пружинит и возвращается.
+        if hasPhases {
+            // `TR-29`: дельты жеста идут через защёлку — у полного сбора лента
+            // проходит точку напряжения и защёлкивается со щелчком.
+            let presented = scrollModel.offset + detentDip
+            if TrayDetentModel.isNearDetent(scrollModel) { TrayHaptics.shared.arm() }
+            // Растягивает резинку только палец: инерция упирается в край,
+            // иначе после отпускания лента продолжает уезжать, а возврат
+            // приходит с задержкой (приёмка 19.08.2026).
+            let result = detent.apply(delta: delta, to: scrollModel, stretch: fingersDown)
+            scrollModel = result.model
+            if let click = result.click {
+                if fingersDown {
+                    // Под пальцем защёлка ведёт себя как настоящая: короткий
+                    // сухой скачок вперёд, без догоняющей анимации. Палец
+                    // продолжает вести ленту в тот же кадр.
+                    detentDip = 0
+                    performDetentClick(click, spring: false)
+                } else {
+                    // На инерции пальца нет: прыжок модели поглощает подача, а
+                    // пружина доводит презентацию с одним перелётом.
+                    detentDip = presented - scrollModel.offset
+                    performDetentClick(click, spring: true)
+                }
+            }
+        } else {
+            // Колесо шагает дискретно: защёлка следует за фактом без щелчка.
+            scrollModel = scrollModel.scrolled(by: delta, rubberBand: false)
+            detent.sync(with: scrollModel)
+        }
+
         applyScrollOffset()
 
-        guard TrayDetentModel.fits(scrollModel) else { return }
-        if TrayDetentModel.isNearDetent(scrollModel, presented: presented) {
-            TrayHaptics.shared.arm()
+        if !hasPhases {
+            scrollModel = scrollModel.settled()
+            applyScrollOffset()
+            return
         }
-        let snapped = TrayDetentModel.isSnapped(presented: presented, model: scrollModel)
-        guard snapped != detentSnapped else { return }
-        detentSnapped = snapped
-        performDetentHaptic(snapped ? .firm : .light)
-        debugTrayLog("защёлка \(snapped ? "закрылась" : "открылась") видимое=\(Int(presented)) нативное=\(Int(native))")
+        if event.momentumPhase == .ended {
+            // Инерция кончилась — жест завершён окончательно.
+            scrollGestureActive = false
+            settleScrollAnimated()
+        } else if (event.phase == .ended || event.phase == .cancelled),
+                  abs(scrollModel.overshoot) > 0.5 {
+            // Отпустили за краем — возвращаем немедленно, ждать инерцию
+            // незачем: растягивать её больше нечем.
+            scrollGestureActive = false
+            settleScrollAnimated()
+        } else if event.phase == .ended || event.phase == .cancelled {
+            // Пальцы сняты, но следом может пойти инерция. Возврат из-за края
+            // откладывается: запущенный сразу, он тут же отменялся первым же
+            // событием инерции, которое снова тянуло ленту наружу — старт,
+            // отмена, старт, и это читалось как дёрганье (приёмка 19.08.2026).
+            scrollGestureActive = false
+            scheduleSettleAfterGesture()
+        }
     }
 
-    /// Щелчок защёлки: тактильный отклик в тот трекпад, которым сделан жест
-    /// (`TR-29`).
-    private func performDetentHaptic(_ pulse: TrayHaptics.Pulse) {
+    /// Отложенный возврат: любое следующее событие жеста или инерции его
+    /// отменяет, потому что поднимает поколение.
+    private func scheduleSettleAfterGesture() {
+        settleGeneration &+= 1
+        let generation = settleGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+            guard let self, self.settleGeneration == generation else { return }
+            self.settleScrollAnimated()
+        }
+    }
+
+    /// Возврат из-за края после отпускания: не мгновенный clamp, а короткий
+    /// ease-out — лента отвечает движением, как системный rubber-band.
+    private func settleScrollAnimated() {
+        let from = scrollModel.offset
+        // `TR-29`: жест, замерший в зоне напряжения, не остаётся на скате —
+        // защёлка дожимает ленту домой (со щелчком) либо выпускает к началу
+        // зоны. Движение — та же пружинная подача, что у щелчка в жесте: одно
+        // непрерывное движение, никаких ease с осадкой вдогонку.
+        if let detentTarget = detent.settleTarget(for: scrollModel) {
+            let presented = scrollModel.offset + detentDip
+            let home = detentTarget >= scrollModel.maximumOffset - 0.5
+            scrollModel.offset = detentTarget
+            detent.sync(with: scrollModel)
+            detentDip = presented - detentTarget
+            if home {
+                performDetentClick(.snapIn, spring: true)
+            } else {
+                runDetentSpring()
+            }
+            applyScrollOffset()
+            return
+        }
+        let target = scrollModel.settled().offset
+        guard abs(target - from) > 0.5 else {
+            scrollModel.offset = target
+            detent.sync(with: scrollModel)
+            applyScrollOffset()
+            return
+        }
+        scrollSettleAnimating = true
+        scrollSettleAnimator.run(duration: 0.3, onFrame: { [weak self] progress in
+            guard let self else { return }
+            let eased = 1 - pow(1 - progress, 3)
+            self.scrollModel.offset = from + (target - from) * eased
+            self.applyScrollOffset()
+        }, onDone: { [weak self] in
+            guard let self else { return }
+            self.scrollSettleAnimating = false
+            self.scrollModel.offset = target
+            self.detent.sync(with: self.scrollModel)
+            self.applyScrollOffset()
+        })
+    }
+
+    /// Щелчок защёлки (`TR-29`): тактильный отклик и пружинная подача в один
+    /// кадр. Перед вызовом прыжок модели уже переложен в `detentDip` —
+    /// пружина доводит презентацию до нового места с одним перелётом, который
+    /// и есть осадка. Тактильно отвечает трекпад с Force Touch.
+    private func performDetentClick(_ click: TrayDetentModel.Click, spring: Bool) {
+        debugTrayLog("click \(click == .snapIn ? "snapIn" : "release") offset=\(Int(scrollModel.offset)) dip=\(Int(detentDip)) spring=\(spring)")
+        performDetentHaptic(click)
+        guard spring, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            detentDip = 0
+            applyScrollOffset()
+            return
+        }
+        runDetentSpring()
+    }
+
+    /// Щелчок в трекпад напрямую: публичный `NSHapticFeedbackManager` из
+    /// фонового `.accessory`-приложения молчит (см. `TrayHaptics`).
+    private func performDetentHaptic(_ click: TrayDetentModel.Click) {
         TrayHaptics.logSink = { [weak self] line in self?.debugTrayLog("haptics: \(line)") }
-        TrayHaptics.shared.click(pulse, device: gestureDevice)
+        TrayHaptics.shared.click(click == .snapIn ? .firm : .light, device: gestureDevice)
+    }
+
+    /// Пружинная подача `detentDip` к нулю: недодемпфированная пружина, один
+    /// видимый перелёт (~16% пути) — у входа он уходит глубже упора (осадка),
+    /// у выхода — наружу (отдача). Живёт своим аниматором: события жеста её
+    /// не отменяют, повторный щелчок перезапускает от текущей подачи.
+    private func runDetentSpring() {
+        let d0 = detentDip
+        guard abs(d0) > 0.5 else {
+            detentDip = 0
+            applyScrollOffset()
+            return
+        }
+        detentDipAnimator.cancel()
+        detentDipAnimating = true
+        let duration: CGFloat = 0.34
+        let zeta: CGFloat = 0.5
+        let omega = 6 / (zeta * duration)
+        let omegaD = omega * (1 - zeta * zeta).squareRoot()
+        detentDipAnimator.run(duration: duration, onFrame: { [weak self] progress in
+            guard let self else { return }
+            let t = progress * duration
+            let decay = exp(-zeta * omega * t)
+            let phase = cos(omegaD * t) + (zeta * omega / omegaD) * sin(omegaD * t)
+            self.detentDip = d0 * decay * phase
+            self.applyScrollOffset()
+        }, onDone: { [weak self] in
+            guard let self else { return }
+            self.detentDipAnimating = false
+            self.detentDip = 0
+            self.applyScrollOffset()
+        })
     }
 
     /// Файловый журнал трея по требованию: `QUICKSHOT_LOG_TRAY=1`. Уровень
     /// info в os_log не долетает до `log show`, а живые прогоны запрещены —
-    /// диагностика идёт в файл `~/Library/Logs/QuickShot-tray.log`.
+    /// диагностика идёт в файл `~/Library/Logs/QuickShot-tray.log`. Именно он
+    /// и распутал историю с актуатором (`TR-29`), поэтому остаётся в коде,
+    /// но выключенным: в обычном запуске диск не трогается.
     nonisolated private static let trayLogEnabled =
         ProcessInfo.processInfo.environment["QUICKSHOT_LOG_TRAY"] == "1"
 
@@ -1246,17 +1436,37 @@ final class ThumbnailManager {
     }
 
     /// Собрать ленту в стопку у кнопки.
-    private func gatherStackAtHub() { animateScroll(to: scrollModel.maximumOffset, detentClick: .firm) }
+    private func gatherStackAtHub() { animateScroll(to: scrollModel.maximumOffset, detentClick: .snapIn) }
 
-    /// Программная прокрутка: доводит системный скролл до нужного места его
-    /// же средствами, поэтому движение то же самое, что у жеста (`TR-26`).
-    private func animateScroll(to target: CGFloat, detentClick: TrayHaptics.Pulse? = nil) {
-        let native = TrayDetentModel.nativeOffset(forPresented: target, model: scrollModel)
-        scrollDriver.animateOffset(to: native)
-        if let detentClick {
-            detentSnapped = TrayDetentModel.isSnapped(presented: target, model: scrollModel)
-            performDetentHaptic(detentClick)
+    /// Программная прокрутка тем же пружинным возвратом, что и жест:
+    /// отдельной кривой у программного сбора нет (`TR-26`).
+    private func animateScroll(to target: CGFloat, detentClick: TrayDetentModel.Click? = nil) {
+        scrollSettleAnimator.cancel()
+        scrollSettleAnimating = false
+        scrollGestureActive = false
+        let from = scrollModel.offset
+        guard abs(target - from) > 0.5 else {
+            scrollModel.offset = target
+            detent.sync(with: scrollModel)
+            applyScrollOffset()
+            return
         }
+        scrollSettleAnimating = true
+        scrollSettleAnimator.run(duration: 0.32, onFrame: { [weak self] progress in
+            guard let self else { return }
+            let eased = 1 - pow(1 - progress, 3)
+            self.scrollModel.offset = from + (target - from) * eased
+            self.applyScrollOffset()
+        }, onDone: { [weak self] in
+            guard let self else { return }
+            self.scrollSettleAnimating = false
+            self.scrollModel.offset = target
+            self.detent.sync(with: self.scrollModel)
+            self.applyScrollOffset()
+            // Кнопочный сбор садится своим ease: осадка вдогонку читалась бы
+            // вторым движением, остаётся только тактильная посадка.
+            if let detentClick { self.performDetentHaptic(detentClick) }
+        })
     }
 
     /// Лента полностью собрана в стопку у кнопки: смещение на максимуме и
@@ -1456,37 +1666,27 @@ final class ThumbnailManager {
         scrollModel.contentLength = content
         scrollModel.viewportLength = max(1, viewport)
         scrollModel.lastCardLength = lengths.last ?? 0
-        // Ход системного скролла = видимый ход плюс растянутая зона защёлки.
-        scrollDriver.update(contentLength: TrayDetentModel.nativeTravel(for: scrollModel),
-                            viewportLength: scrollModel.viewportLength,
-                            vertical: vertical)
+        // Пока идёт жест или пружинный возврат, смещение может законно жить за
+        // границей — мгновенный clamp здесь и делал резинку невидимой.
+        if scrollGestureActive || scrollSettleAnimating {
+            if !scrollModel.isScrollable { scrollModel.offset = 0 }
+            return
+        }
         switch scrollIntent {
         case .stayCompressed:
             // `TR-5`: стопка была собрана — новый снимок молча ложится сверху,
             // лента остаётся полностью сжатой.
-            setPresentedOffset(scrollModel.maximumOffset)
+            scrollModel.offset = scrollModel.maximumOffset
         case .revealNewest:
             // `TR-5`: развёрнутая лента докручивается ровно до видимости
             // нового снимка; если он и так виден — не трогаем положение.
-            setPresentedOffset(max(min(scrollModel.offset, scrollModel.maximumOffset),
-                                   scrollModel.revealNewestOffset()))
+            scrollModel.offset = max(min(scrollModel.offset, scrollModel.maximumOffset),
+                                     scrollModel.revealNewestOffset())
         case .none:
-            // Движение ведёт системный скролл; здесь только сверяемся с ним.
-            let presented = TrayDetentModel.presented(nativeOffset: scrollDriver.offset,
-                                                      model: scrollModel)
-            scrollModel.offset = min(max(0, presented), scrollModel.maximumOffset)
+            scrollModel = scrollModel.settled()
         }
         scrollIntent = .none
-    }
-
-    /// Поставить ленту на заданное видимое смещение, синхронизировав системный
-    /// скролл: он остаётся единственным источником движения.
-    private func setPresentedOffset(_ presented: CGFloat) {
-        let clamped = min(max(0, presented), scrollModel.maximumOffset)
-        scrollModel.offset = clamped
-        scrollDriver.setOffset(TrayDetentModel.nativeOffset(forPresented: clamped,
-                                                            model: scrollModel))
-        detentSnapped = TrayDetentModel.isSnapped(presented: clamped, model: scrollModel)
+        detent.sync(with: scrollModel)
     }
 
     private func resolvedViewportLayout(on screen: NSScreen) -> ThumbnailLayoutResult {
@@ -1508,7 +1708,7 @@ final class ThumbnailManager {
                                          hubSize: geometry.hubSize,
                                          margin: geometry.margin,
                                          gap: ThumbStyle.gap,
-                                         offset: scrollModel.offset,
+                                         offset: scrollModel.offset + detentDip,
                                          menuBarInset: menuBarInset(on: screen))
         }
 
