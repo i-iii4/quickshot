@@ -108,6 +108,11 @@ struct NativeSurfaceBehaviorTests {
         host.release(press)
         try require(copyCount == 1, "Copy click dispatched the wrong thumbnail action")
 
+        // Кнопки карточки непрозрачны в ЛЮБОМ состоянии (`TR-28`): гашение
+        // фона под курсором читалось как прозрачность.
+        try require(alpha(copyView.debugPixel(at: center(of: copyFrame))) == 255,
+                    "Copy button must stay opaque while hovered")
+
         let dismissView = NativeThumbnailButtonView(kind: .dismiss)
         var dismissCount = 0
         dismissView.onPress = { dismissCount += 1 }
@@ -115,6 +120,9 @@ struct NativeSurfaceBehaviorTests {
         let dismissButtons = dismissView.debugButtons()
         try require(dismissButtons.map(\.identifier) == ["Dismiss screenshot"],
                     "Dismiss identifier is not stable: \(dismissButtons.map(\.identifier))")
+        dismissView.debugHoverButton(title: "Dismiss screenshot")
+        try require(alpha(dismissView.debugPixel(at: center(of: dismissButtons[0].frame))) == 255,
+                    "Dismiss button must stay opaque while hovered")
         try dismissHost.click(dismissButtons[0].frame, in: dismissView)
         try require(dismissCount == 1 && copyCount == 1,
                     "Dismiss click dispatched the wrong thumbnail action")

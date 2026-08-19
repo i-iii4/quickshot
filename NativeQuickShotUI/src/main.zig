@@ -470,6 +470,23 @@ fn designTokens(model: *const Model) canvas.DesignTokens {
     if (model.surface == .hub or model.surface == .hub_bubble or model.surface == .hub_core_background or model.surface == .hub_core_foreground or model.surface == .thumbnail or model.surface == .thumbnail_copy or model.surface == .thumbnail_dismiss or model.surface == .pinned) {
         tokens.colors.background = canvas.Color.rgba8(0, 0, 0, 0);
     }
+    // Кнопки карточки лежат прямо на скриншоте (`TR-28`): их фон обязан быть
+    // непрозрачным во ВСЕХ состояниях. Штатная подсветка наведения гасит фон
+    // до 80% — на светлом снимке это читается как прозрачная кнопка. Здесь
+    // состояния заданы цветом, а не альфой: непрозрачность сохранена, отклик
+    // на курсор — тоже.
+    if (model.surface == .thumbnail_copy) {
+        tokens.controls.button_secondary.background = canvas.Color.rgb8(38, 38, 38);
+        tokens.controls.button_secondary.hover_background = canvas.Color.rgb8(64, 64, 64);
+        tokens.controls.button_secondary.active_background = canvas.Color.rgb8(82, 82, 82);
+        tokens.controls.button_secondary.pressed_background = canvas.Color.rgb8(82, 82, 82);
+    }
+    if (model.surface == .thumbnail_dismiss) {
+        tokens.controls.button_destructive.background = canvas.Color.rgb8(255, 100, 103);
+        tokens.controls.button_destructive.hover_background = canvas.Color.rgb8(228, 78, 81);
+        tokens.controls.button_destructive.active_background = canvas.Color.rgb8(201, 60, 63);
+        tokens.controls.button_destructive.pressed_background = canvas.Color.rgb8(201, 60, 63);
+    }
     return tokens;
 }
 
