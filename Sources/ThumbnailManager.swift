@@ -1,5 +1,4 @@
 import AppKit
-import OSLog
 import UniformTypeIdentifiers
 
 enum ThumbStyle {
@@ -106,8 +105,6 @@ final class ThumbnailManager {
     /// Защёлка полного сбора (`TR-29`): вход и выход из стопки через точку
     /// напряжения со щелчком.
     private var detent = TrayDetentModel()
-    nonisolated private static let trayLog = Logger(subsystem: "com.iiii.quickshot",
-                                                    category: "tray")
     /// Кадровая добавка осадки защёлки поверх смещения: раскладка читает её на
     /// каждом кадре, поэтому события жеста осадку не смазывают.
     private var detentDip: CGFloat = 0
@@ -783,7 +780,7 @@ final class ThumbnailManager {
             scrollSettleAnimator.cancel()
             scrollSettleAnimating = false
             if !scrollGestureActive {
-                Self.trayLog.info("detent gesture: offset=\(self.scrollModel.offset, format: .fixed(precision: 1)) max=\(self.scrollModel.maximumOffset, format: .fixed(precision: 1)) fits=\(TrayDetentModel.fits(self.scrollModel)) engaged=\(self.detent.engaged)")
+                debugTrayLog("gesture offset=\(Int(scrollModel.offset)) max=\(Int(scrollModel.maximumOffset)) fits=\(TrayDetentModel.fits(scrollModel)) engaged=\(detent.engaged)")
             }
             scrollGestureActive = true
         }
@@ -798,9 +795,16 @@ final class ThumbnailManager {
         if hasPhases {
             // `TR-29`: дельты жеста идут через защёлку — у полного сбора лента
             // проходит точку напряжения и защёлкивается со щелчком.
+            let presented = scrollModel.offset + detentDip
             let result = detent.apply(delta: delta, to: scrollModel)
             scrollModel = result.model
-            if let click = result.click { performDetentClick(click) }
+            if let click = result.click {
+                // Прыжок модели поглощает подача: презентация остаётся на
+                // месте, к новой позиции её доводит пружина — непрерывно,
+                // с одним перелётом-осадкой. Телепорт кадра запрещён.
+                detentDip = presented - scrollModel.offset
+                performDetentClick(click)
+            }
         } else {
             // Колесо шагает дискретно: защёлка следует за фактом без щелчка.
             scrollModel = scrollModel.scrolled(by: delta, rubberBand: false)
@@ -824,13 +828,25 @@ final class ThumbnailManager {
     /// ease-out — лента отвечает движением, как системный rubber-band.
     private func settleScrollAnimated() {
         let from = scrollModel.offset
-        // `TR-29`: жест, замерший в зоне напряжения, не оставляет ленту на
-        // скате — защёлка дожимает её домой (со щелчком при посадке) либо
-        // выпускает к началу зоны.
-        let detentTarget = detent.settleTarget(for: scrollModel)
-        let target = detentTarget ?? scrollModel.settled().offset
-        let clickOnLanding: TrayDetentModel.Click? =
-            detentTarget != nil && target >= scrollModel.maximumOffset - 0.5 ? .snapIn : nil
+        // `TR-29`: жест, замерший в зоне напряжения, не остаётся на скате —
+        // защёлка дожимает ленту домой (со щелчком) либо выпускает к началу
+        // зоны. Движение — та же пружинная подача, что у щелчка в жесте: одно
+        // непрерывное движение, никаких ease с осадкой вдогонку.
+        if let detentTarget = detent.settleTarget(for: scrollModel) {
+            let presented = scrollModel.offset + detentDip
+            let home = detentTarget >= scrollModel.maximumOffset - 0.5
+            scrollModel.offset = detentTarget
+            detent.sync(with: scrollModel)
+            detentDip = presented - detentTarget
+            if home {
+                performDetentClick(.snapIn)
+            } else {
+                runDetentSpring()
+            }
+            applyScrollOffset()
+            return
+        }
+        let target = scrollModel.settled().offset
         guard abs(target - from) > 0.5 else {
             scrollModel.offset = target
             detent.sync(with: scrollModel)
@@ -849,35 +865,73 @@ final class ThumbnailManager {
             self.scrollModel.offset = target
             self.detent.sync(with: self.scrollModel)
             self.applyScrollOffset()
-            if let clickOnLanding { self.performDetentClick(clickOnLanding) }
         })
     }
 
-    /// Щелчок защёлки (`TR-29`): тактильный отклик и визуальная осадка в один
-    /// кадр — причина и ощущение обязаны совпасть. Тактильно отвечает трекпад
-    /// с Force Touch; без него остаётся визуальное тело щелчка.
+    /// Щелчок защёлки (`TR-29`): тактильный отклик и пружинная подача в один
+    /// кадр. Перед вызовом прыжок модели уже переложен в `detentDip` —
+    /// пружина доводит презентацию до нового места с одним перелётом, который
+    /// и есть осадка. Тактильно отвечает трекпад с Force Touch.
     private func performDetentClick(_ click: TrayDetentModel.Click) {
-        Self.trayLog.info("detent click: \(click == .snapIn ? "snapIn" : "release") offset=\(self.scrollModel.offset, format: .fixed(precision: 1))")
-        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
-        guard click == .snapIn,
-              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
-        runDetentDip()
+        debugTrayLog("click \(click == .snapIn ? "snapIn" : "release") offset=\(Int(scrollModel.offset)) dip=\(Int(detentDip))")
+        performDetentHaptic()
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            detentDip = 0
+            applyScrollOffset()
+        } else {
+            runDetentSpring()
+        }
     }
 
-    /// Микро-осадка: стопка на миг уходит на пару точек глубже упора и
-    /// отпружинивает — визуальное тело щелчка. У выхода из защёлки своё тело —
-    /// прыжок к началу зоны, ему осадка не нужна.
-    private func runDetentDip() {
+    /// Паттерн alignment — системный отклик защёлкивания при перетаскивании;
+    /// он и семантически точен, и не гейтится нажатием Force Touch.
+    private func performDetentHaptic() {
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+    }
+
+    /// Пружинная подача `detentDip` к нулю: недодемпфированная пружина, один
+    /// видимый перелёт (~16% пути) — у входа он уходит глубже упора (осадка),
+    /// у выхода — наружу (отдача). Живёт своим аниматором: события жеста её
+    /// не отменяют, повторный щелчок перезапускает от текущей подачи.
+    private func runDetentSpring() {
+        let d0 = detentDip
+        guard abs(d0) > 0.5 else {
+            detentDip = 0
+            applyScrollOffset()
+            return
+        }
         detentDipAnimator.cancel()
-        detentDipAnimator.run(duration: 0.22, onFrame: { [weak self] progress in
+        let duration: CGFloat = 0.34
+        let zeta: CGFloat = 0.5
+        let omega = 6 / (zeta * duration)
+        let omegaD = omega * (1 - zeta * zeta).squareRoot()
+        detentDipAnimator.run(duration: duration, onFrame: { [weak self] progress in
             guard let self else { return }
-            self.detentDip = 6 * sin(progress * .pi)
+            let t = progress * duration
+            let decay = exp(-zeta * omega * t)
+            let phase = cos(omegaD * t) + (zeta * omega / omegaD) * sin(omegaD * t)
+            self.detentDip = d0 * decay * phase
             self.applyScrollOffset()
         }, onDone: { [weak self] in
             guard let self else { return }
             self.detentDip = 0
             self.applyScrollOffset()
         })
+    }
+
+    /// Временный файловый журнал защёлки: уровень info в os_log не долетает
+    /// до `log show`, а живые прогоны запрещены — диагностика по файлу.
+    private func debugTrayLog(_ line: String) {
+        let path = NSHomeDirectory() + "/Library/Logs/QuickShot-tray.log"
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let entry = "\(stamp) \(line)\n"
+        if let handle = FileHandle(forWritingAtPath: path) {
+            handle.seekToEndOfFile()
+            handle.write(Data(entry.utf8))
+            try? handle.close()
+        } else {
+            try? entry.write(toFile: path, atomically: true, encoding: .utf8)
+        }
     }
 
     /// Событие прокрутки, пришедшее в окно трея. Лентой управляет любой скролл
@@ -1326,7 +1380,9 @@ final class ThumbnailManager {
             self.scrollModel.offset = target
             self.detent.sync(with: self.scrollModel)
             self.applyScrollOffset()
-            if let detentClick { self.performDetentClick(detentClick) }
+            // Кнопочный сбор садится своим ease: осадка вдогонку читалась бы
+            // вторым движением, остаётся только тактильная посадка.
+            if detentClick != nil { self.performDetentHaptic() }
         })
     }
 
