@@ -72,7 +72,11 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     private let displayView = PassthroughImageView()
     /// Создаётся при первом наведении: собственный рантайм Native SDK стоит
     /// несколько мегабайт, а большинству карточек он никогда не понадобится.
-    private var controls: NativeThumbnailControlsView?
+    /// Кнопки карточки разнесены по верхним углам (`TR-28`): крестик слева,
+    /// копирование справа. Обе непрозрачные и живут только там, где виден
+    /// верх карточки.
+    private var dismissButton: NativeThumbnailButtonView?
+    private var copyButton: NativeThumbnailButtonView?
     private var trackingArea: NSTrackingArea?
 
     /// Кадр, из которого делается картинка слоя. Превью остаётся нетронутым:
@@ -80,9 +84,9 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     private var sourceForDisplay: CGImage
     private var displayedContentsWidth = 0
 
-    /// Вью показывает полосу стопки: контролы позиционируются в её видимой
-    /// нижней части, а не у срезанного верха.
-    private var sliceLayout = false
+    /// Верх карточки перекрыт соседкой (нижняя стопка): кнопкам негде стоять,
+    /// ховер такой карточке не положен (`TR-28`).
+    private(set) var topIsCovered = false
 
     private var startMouse: NSPoint = .zero
     private var movedFar = false
@@ -112,26 +116,37 @@ private final class ThumbnailView: NSView, NSDraggingSource {
 
     }
 
-    /// Контролы карточки по требованию. Раскладываются отдельным методом:
+    /// Кнопки карточки по требованию. Раскладываются отдельным методом:
     /// полный `layoutContents` здесь ломал бы срез полосы стопки, сбрасывая
     /// геометрию изображения при первом ховере.
-    @discardableResult
-    private func makeControlsIfNeeded() -> NativeThumbnailControlsView {
-        if let controls { return controls }
-        let view = NativeThumbnailControlsView(frame: .zero)
-        view.onCopy = { [weak self] in self?.doCopy() }
-        view.toolTip = "Copy"
-        view.onDismiss = { [weak self] in
-            guard let s = self, let o = s.owner else { return }
-            let mgr = s.manager
-            DispatchQueue.main.async { mgr?.remove(o) }
+    private func makeControlsIfNeeded() {
+        if dismissButton == nil {
+            let view = NativeThumbnailButtonView(kind: .dismiss)
+            view.toolTip = "Close"
+            view.onPress = { [weak self] in
+                guard let s = self, let o = s.owner else { return }
+                let mgr = s.manager
+                DispatchQueue.main.async { mgr?.remove(o) }
+            }
+            view.alphaValue = 0
+            view.isHidden = true
+            addSubview(view)
+            dismissButton = view
         }
-        view.alphaValue = 0
-        view.isHidden = true
-        addSubview(view)
-        controls = view
+        if copyButton == nil {
+            let view = NativeThumbnailButtonView(kind: .copy)
+            view.toolTip = "Copy"
+            view.onPress = { [weak self] in self?.doCopy() }
+            view.alphaValue = 0
+            view.isHidden = true
+            addSubview(view)
+            copyButton = view
+        }
         layoutControls()
-        return view
+    }
+
+    private var controlViews: [NativeThumbnailButtonView] {
+        [dismissButton, copyButton].compactMap { $0 }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -141,8 +156,8 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = superview.map { convert(point, from: $0) } ?? point
         guard !isHidden, alphaValue > 0.01, bounds.contains(local) else { return nil }
-        if let controls, !controls.isHidden, controls.alphaValue > 0.01 {
-            if let hit = controls.hitTest(local) { return hit }
+        for control in controlViews where !control.isHidden && control.alphaValue > 0.01 {
+            if let hit = control.hitTest(local) { return hit }
         }
         return self
     }
@@ -166,7 +181,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
 
     /// Раскладка внутренних элементов по текущему `bounds` (frame вью ставит обёртка).
     func layoutContents() {
-        sliceLayout = false
+        topIsCovered = false
         displayView.frame = bounds
         layer?.cornerRadius = QS.radiusCard
         layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner,
@@ -177,22 +192,25 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         layoutControls()
     }
 
-    /// Позиция контролов: у полной карточки — верхний край; у полосы стопки
-    /// верх срезан соседкой, и контролы живут у нижнего, гарантированно
-    /// видимого края её выступа.
+    /// Кнопки стоят в ВЕРХНИХ углах карточки: крестик слева, копирование
+    /// справа (`TR-28`). У полосы стопки верх срезан соседкой — там кнопок
+    /// нет вовсе, поэтому раскладка для среза просто прячет их.
     private func layoutControls() {
-        guard let controls else { return }
+        guard let dismissButton, let copyButton else { return }
+        guard !topIsCovered else {
+            dismissButton.isHidden = true
+            copyButton.isHidden = true
+            return
+        }
         let inset = QS.s2
-        let rowH = ceil(controls.fittingSize.height)
-        let availableWidth = max(rowH, bounds.width - inset * 2)
-
-        controls.setCompact(false)
-        let fullGroupWidth = ceil(controls.fittingSize.width)
-        controls.setCompact(fullGroupWidth > availableWidth)
-
-        let groupWidth = min(availableWidth, ceil(controls.fittingSize.width))
-        let rowY = sliceLayout ? inset : bounds.height - inset - rowH
-        controls.frame = NSRect(x: inset, y: rowY, width: groupWidth, height: rowH)
+        let dismissSize = dismissButton.fittingSize
+        let copySize = copyButton.fittingSize
+        let rowH = max(dismissSize.height, copySize.height)
+        let rowY = bounds.height - inset - rowH
+        dismissButton.frame = NSRect(x: inset, y: rowY,
+                                     width: dismissSize.width, height: rowH)
+        copyButton.frame = NSRect(x: bounds.width - inset - copySize.width, y: rowY,
+                                  width: copySize.width, height: rowH)
     }
 
     /// Срез карточки в стопке (`TR-23`): вью — прямоугольное ОКНО в карточку,
@@ -201,7 +219,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     /// её скруглённый край, уехавший за границу окна, срезается клипом
     /// постепенно, а не выключается скачком.
     func layoutSlice(cardSize: NSSize, vertical: Bool, cardStartOffset: CGFloat,
-                     cornerRadius: CGFloat) {
+                     cornerRadius: CGFloat, topCovered: Bool) {
         if vertical {
             let fullW = bounds.width
             let fullH = cardSize.height * (fullW / max(1, cardSize.width))
@@ -223,7 +241,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         displayView.layer?.cornerRadius = cornerRadius
         displayView.layer?.masksToBounds = true
         updateDisplayImage()
-        sliceLayout = true
+        topIsCovered = topCovered
         layoutControls()
     }
 
@@ -294,33 +312,45 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     }
 
     var controlsVisible: Bool {
-        guard let controls else { return false }
-        return !controls.isHidden && controls.alphaValue > 0.01
+        guard let dismissButton else { return false }
+        return !dismissButton.isHidden && dismissButton.alphaValue > 0.01
     }
 
     private func setControlsVisible(_ visible: Bool, animated: Bool = true) {
+        // Верх карточки перекрыт — кнопкам негде стоять, показывать нечего
+        // (`TR-28`).
+        if visible && topIsCovered { return }
         if visible {
-            let controls = makeControlsIfNeeded()
-            controls.isHidden = false
-            guard animated else { controls.alphaValue = 1; return }
+            makeControlsIfNeeded()
+            let views = controlViews
+            for control in views { control.isHidden = false }
+            guard animated else {
+                for control in views { control.alphaValue = 1 }
+                return
+            }
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = Self.fade
-                controls.animator().alphaValue = 1
+                for control in views { control.animator().alphaValue = 1 }
             }
         } else {
-            guard let controls else { return }
+            let views = controlViews
+            guard !views.isEmpty else { return }
             guard animated else {
-                controls.alphaValue = 0
-                controls.isHidden = true
+                for control in views {
+                    control.alphaValue = 0
+                    control.isHidden = true
+                }
                 return
             }
             NSAnimationContext.runAnimationGroup({ ctx in
                 ctx.duration = Self.fade
-                controls.animator().alphaValue = 0
+                for control in views { control.animator().alphaValue = 0 }
             }, completionHandler: { [weak self] in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    if let controls = self.controls, controls.alphaValue == 0 { controls.isHidden = true }
+                    for control in self.controlViews where control.alphaValue == 0 {
+                        control.isHidden = true
+                    }
                 }
             })
         }
@@ -361,15 +391,18 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     }
 
     func flashCopied() {
-        let controls = makeControlsIfNeeded()
-        controls.isHidden = false
-        controls.alphaValue = 1
-        controls.showCheck(true)
+        makeControlsIfNeeded()
+        guard !topIsCovered, let copyButton else { return }
+        for control in controlViews {
+            control.isHidden = false
+            control.alphaValue = 1
+        }
+        copyButton.showCheck(true)
         layoutContents()
         titleResetWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            self.controls?.showCheck(false)
+            self.copyButton?.showCheck(false)
             self.layoutContents()
             if !self.isMouseInside() { self.setControlsVisible(false) }
         }
@@ -389,23 +422,29 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     }
 
     func debugCloseButtonCenterInSelf() -> NSPoint {
-        convert(makeControlsIfNeeded().buttonCenterInSelf { $0 == "Dismiss screenshot" },
-                from: makeControlsIfNeeded())
+        makeControlsIfNeeded()
+        guard let dismissButton else { return .zero }
+        return convert(dismissButton.buttonCenterInSelf(), from: dismissButton)
     }
 
     func debugCopyButtonCenterInSelf() -> NSPoint {
-        convert(makeControlsIfNeeded().buttonCenterInSelf { $0 == "Copy screenshot" || $0 == "Copied screenshot" },
-                from: makeControlsIfNeeded())
+        makeControlsIfNeeded()
+        guard let copyButton else { return .zero }
+        return convert(copyButton.buttonCenterInSelf(), from: copyButton)
     }
 
     func debugCloseButtonState() -> String {
+        makeControlsIfNeeded()
         let superHit = hitTest(debugCloseButtonCenterInSelf()).map { String(describing: type(of: $0)) } ?? "nil"
-        return "\(makeControlsIfNeeded().debugState(label: "Dismiss screenshot")) thumbHit=\(superHit)"
+        let state = dismissButton?.debugState(label: "Dismiss screenshot") ?? "no-button"
+        return "\(state) thumbHit=\(superHit)"
     }
 
     func debugCopyButtonState() -> String {
+        makeControlsIfNeeded()
         let superHit = hitTest(debugCopyButtonCenterInSelf()).map { String(describing: type(of: $0)) } ?? "nil"
-        return "\(makeControlsIfNeeded().debugState(label: "Copy")) thumbHit=\(superHit)"
+        let state = copyButton?.debugState(label: "Copy") ?? "no-button"
+        return "\(state) thumbHit=\(superHit)"
     }
 #endif
 
@@ -722,9 +761,10 @@ final class ThumbnailWindow {
     /// вью `zPosition` ломает отрисовку содержимого.
     private(set) var stackDepth: CGFloat = 0
     var stackOrder: CGFloat { stackDepth }
-    /// Карточка сейчас показана кромкой стопки: такой полосе не положены ни
-    /// ховер, ни контролы — ими владеет верхняя развёрнутая карточка.
+    /// Карточка сейчас показана полосой стопки.
     private(set) var isSliceBand = false
+    /// Верх карточки перекрыт соседкой: ховер и кнопки не положены (`TR-28`).
+    var topIsCovered: Bool { view.topIsCovered }
 
     func placeInstant(origin: NSPoint) {
         stackDepth = 0
@@ -766,11 +806,17 @@ final class ThumbnailWindow {
                               width: bandWidth + 2 * band, height: bandHeight + 2 * band)
         container.frame = restingFrame
         view.frame = NSRect(x: band, y: band, width: bandWidth, height: bandHeight)
+        // Верх карточки перекрыт, если полоса короче самой карточки и при
+        // этом начинается с её настоящего края (нижняя стопка). У дальней
+        // стопки срезан низ, а верх виден — там кнопки на месте (`TR-28`).
+        let cardLength = vertical ? cardHeight * scale : cardWidth * scale
+        let topCovered = length < cardLength - 0.5 && cardStartOffset >= -0.001
         view.layoutSlice(cardSize: NSSize(width: cardWidth * scale,
                                           height: cardHeight * scale),
                          vertical: vertical,
                          cardStartOffset: cardStartOffset,
-                         cornerRadius: QS.radiusCard * scale)
+                         cornerRadius: QS.radiusCard * scale,
+                         topCovered: topCovered)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         container.layer?.transform = CATransform3DIdentity

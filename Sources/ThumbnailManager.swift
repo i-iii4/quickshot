@@ -914,31 +914,13 @@ final class ThumbnailManager {
                 hovered = item
             }
         }
-        // Крошечный видимый выступ (тоньше ряда кнопок) ховер не получает:
-        // кнопкам физически негде встать.
-        if let candidate = hovered, candidate.isSliceBand,
-           visibleProtrusion(of: candidate) < Self.hoverableProtrusion {
+        // Карточка с перекрытым верхом ховер не получает: кнопки живут в
+        // верхних углах, и показывать их снизу — сюрприз для пользователя
+        // (`TR-28`).
+        if let candidate = hovered, candidate.topIsCovered {
             hovered = nil
         }
         for item in items { item.applyHover(item === hovered) }
-    }
-
-    /// Минимальная видимая часть карточки, на которой ховер осмыслен: ряд
-    /// кнопок с отступами.
-    private static let hoverableProtrusion: CGFloat = 44
-
-    /// Видимый выступ полосы: до ближайшего края вышележащей пересекающейся
-    /// карточки со стороны кнопки хаба.
-    private func visibleProtrusion(of candidate: ThumbnailWindow) -> CGFloat {
-        let frame = candidate.layoutFrame
-        let vertical = TrayPosition.current.isVertical
-        var limit = vertical ? frame.maxY : frame.maxX
-        for item in items where !item.hostView.isHidden && item !== candidate {
-            guard item.stackOrder > candidate.stackOrder,
-                  item.layoutFrame.intersects(frame) else { continue }
-            limit = min(limit, vertical ? item.layoutFrame.minY : item.layoutFrame.minX)
-        }
-        return limit - (vertical ? frame.minY : frame.minX)
     }
 
     private func shiftViewport(by delta: Int) {

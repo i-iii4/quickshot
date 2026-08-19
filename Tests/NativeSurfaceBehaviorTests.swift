@@ -10,7 +10,6 @@ struct NativeSurfaceBehaviorTests {
         run("House metrics come from Native SDK", testHouseMetrics)
         run("floating surfaces have transparent canvas gaps", testFloatingSurfaceTransparency)
         run("thumbnail controls fit, hover, and click", testThumbnailControls)
-        run("compact thumbnail controls fit and click", testCompactThumbnailControls)
         run("pinned copy control fits, hovers, and clicks", testPinnedControl)
         run("settings controls fit, hover, and dispatch", testSettingsControls)
 
@@ -48,17 +47,21 @@ struct NativeSurfaceBehaviorTests {
     }
 
     private static func testFloatingSurfaceTransparency() throws {
-        let thumbnail = NativeThumbnailControlsView(frame: .zero)
-        _ = Host(view: thumbnail, size: thumbnail.fittingSize)
-        let thumbnailButtons = thumbnail.debugButtons().sorted { $0.frame.minX < $1.frame.minX }
-        let gap = NSPoint(x: (thumbnailButtons[0].frame.maxX + thumbnailButtons[1].frame.minX) / 2,
-                          y: thumbnail.bounds.midY)
-        try require(alpha(thumbnail.debugPixel(at: NSPoint(x: 1, y: 1))) == 0,
+        let copyView = NativeThumbnailButtonView(kind: .copy)
+        _ = Host(view: copyView, size: copyView.fittingSize)
+        let copyButtons = copyView.debugButtons()
+        try require(alpha(copyView.debugPixel(at: NSPoint(x: 1, y: 1))) == 0,
                     "Thumbnail canvas corner must be transparent")
-        try require(alpha(thumbnail.debugPixel(at: gap)) == 0,
-                    "Thumbnail canvas gap between buttons must be transparent")
-        try require(alpha(thumbnail.debugPixel(at: center(of: thumbnailButtons[0].frame))) > 0,
+        try require(alpha(copyView.debugPixel(at: center(of: copyButtons[0].frame))) > 0,
                     "Thumbnail button pixels must remain visible")
+
+        let dismissView = NativeThumbnailButtonView(kind: .dismiss)
+        _ = Host(view: dismissView, size: dismissView.fittingSize)
+        let dismissButtons = dismissView.debugButtons()
+        try require(alpha(dismissView.debugPixel(at: NSPoint(x: 1, y: 1))) == 0,
+                    "Dismiss canvas corner must be transparent")
+        try require(alpha(dismissView.debugPixel(at: center(of: dismissButtons[0].frame))) > 0,
+                    "Dismiss button pixels must remain visible")
 
         let pinned = NativePinnedCopyButtonView(frame: .zero)
         _ = Host(view: pinned, size: pinned.fittingSize)
@@ -74,58 +77,47 @@ struct NativeSurfaceBehaviorTests {
     }
 
     private static func testThumbnailControls() throws {
-        let view = NativeThumbnailControlsView(frame: .zero)
+        let copyView = NativeThumbnailButtonView(kind: .copy)
         var copyCount = 0
-        var dismissCount = 0
-        view.onCopy = { copyCount += 1 }
-        view.onDismiss = { dismissCount += 1 }
-        let host = Host(view: view, size: view.fittingSize)
+        copyView.onPress = { copyCount += 1 }
+        let host = Host(view: copyView, size: copyView.fittingSize)
 
-        let buttons = view.debugButtons()
-        try require(buttons.map(\.title) == ["Copy screenshot", "Dismiss screenshot"],
-                    "Unexpected thumbnail controls: \(buttons.map(\.title))")
-        try require(buttons.map(\.identifier) == ["Copy screenshot", "Dismiss screenshot"],
-                    "Thumbnail identifiers are not stable: \(buttons.map(\.identifier))")
-        try requireContainedAndSeparated(buttons, in: view.bounds, context: "thumbnail")
+        let buttons = copyView.debugButtons()
+        try require(buttons.map(\.title) == ["Copy screenshot"],
+                    "Unexpected copy control: \(buttons.map(\.title))")
+        try require(buttons.map(\.identifier) == ["Copy screenshot"],
+                    "Copy identifier is not stable: \(buttons.map(\.identifier))")
+        try requireContainedAndSeparated(buttons, in: copyView.bounds, context: "thumbnail copy")
 
-        let copyFrame = buttons.first { $0.title == "Copy screenshot" }!.frame
-        let pixelProbes = stride(from: view.bounds.minX, through: view.bounds.maxX - 1, by: 2).flatMap { x in
-            stride(from: view.bounds.minY, through: view.bounds.maxY - 1, by: 2).map { y in NSPoint(x: x, y: y) }
+        let copyFrame = buttons[0].frame
+        let pixelProbes = stride(from: copyView.bounds.minX, through: copyView.bounds.maxX - 1, by: 2).flatMap { x in
+            stride(from: copyView.bounds.minY, through: copyView.bounds.maxY - 1, by: 2).map { y in NSPoint(x: x, y: y) }
         }
-        let restPixels = pixelProbes.map(view.debugPixel)
-        view.debugHoverButton(title: "Copy screenshot")
-        try require(view.debugButtons().filter(\.isHovered).map(\.title) == ["Copy screenshot"],
+        let restPixels = pixelProbes.map(copyView.debugPixel)
+        copyView.debugHoverButton(title: "Copy screenshot")
+        try require(copyView.debugButtons().filter(\.isHovered).map(\.title) == ["Copy screenshot"],
                     "Native SDK did not own thumbnail hover")
-        let hoverPixels = pixelProbes.map(view.debugPixel)
+        let hoverPixels = pixelProbes.map(copyView.debugPixel)
         try require(hoverPixels != restPixels, "Thumbnail hover state did not repaint control pixels")
 
-        let press = try host.press(copyFrame, in: view)
-        try require(view.debugButtons().filter(\.isPressed).map(\.title) == ["Copy screenshot"],
+        let press = try host.press(copyFrame, in: copyView)
+        try require(copyView.debugButtons().filter(\.isPressed).map(\.title) == ["Copy screenshot"],
                     "Native SDK did not own thumbnail pressed state")
-        let pressedPixels = pixelProbes.map(view.debugPixel)
+        let pressedPixels = pixelProbes.map(copyView.debugPixel)
         try require(pressedPixels != hoverPixels, "Thumbnail pressed state did not repaint control pixels")
         host.release(press)
-        try require(copyCount == 1 && dismissCount == 0, "Copy click dispatched the wrong thumbnail action")
-        try host.click(view.debugButtons().first { $0.title == "Dismiss screenshot" }!.frame, in: view)
-        try require(copyCount == 1 && dismissCount == 1, "Dismiss click dispatched the wrong thumbnail action")
-    }
+        try require(copyCount == 1, "Copy click dispatched the wrong thumbnail action")
 
-    private static func testCompactThumbnailControls() throws {
-        let view = NativeThumbnailControlsView(frame: .zero)
-        view.setCompact(true)
-        var copyCount = 0
+        let dismissView = NativeThumbnailButtonView(kind: .dismiss)
         var dismissCount = 0
-        view.onCopy = { copyCount += 1 }
-        view.onDismiss = { dismissCount += 1 }
-        let host = Host(view: view, size: view.fittingSize)
-        let buttons = view.debugButtons()
-
-        try require(buttons.map(\.identifier) == ["Copy screenshot", "Dismiss screenshot"],
-                    "Compact controls lost their semantic names")
-        try requireContainedAndSeparated(buttons, in: view.bounds, context: "compact thumbnail")
-        try host.click(buttons[0].frame, in: view)
-        try host.click(view.debugButtons()[1].frame, in: view)
-        try require(copyCount == 1 && dismissCount == 1, "Compact thumbnail actions are not both clickable")
+        dismissView.onPress = { dismissCount += 1 }
+        let dismissHost = Host(view: dismissView, size: dismissView.fittingSize)
+        let dismissButtons = dismissView.debugButtons()
+        try require(dismissButtons.map(\.identifier) == ["Dismiss screenshot"],
+                    "Dismiss identifier is not stable: \(dismissButtons.map(\.identifier))")
+        try dismissHost.click(dismissButtons[0].frame, in: dismissView)
+        try require(dismissCount == 1 && copyCount == 1,
+                    "Dismiss click dispatched the wrong thumbnail action")
     }
 
     private static func testPinnedControl() throws {

@@ -117,18 +117,22 @@ struct EditorToolbarLiveTests {
     /// Кнопки на карточке трея — тот же класс дефекта: подпись есть, действия нет.
     /// `A-2`, `Q-4`, `G-10`
     @MainActor private static func cardControlsDispatch() throws {
-        let controls = NativeThumbnailControlsView(frame: .zero)
+        let copyView = NativeThumbnailButtonView(kind: .copy)
+        let dismissView = NativeThumbnailButtonView(kind: .dismiss)
         var copied = 0
         var dismissed = 0
-        controls.onCopy = { copied += 1 }
-        controls.onDismiss = { dismissed += 1 }
-        let host = Host(view: controls, size: controls.fittingSize)
+        copyView.onPress = { copied += 1 }
+        dismissView.onPress = { dismissed += 1 }
+        let copyHost = Host(view: copyView, size: copyView.fittingSize)
+        let dismissHost = Host(view: dismissView, size: dismissView.fittingSize)
 
-        let buttons = controls.debugButtons()
-        guard buttons.count == 2 else { throw Failure("на карточке ожидались две команды") }
-        for button in buttons {
-            try host.click(button.frame, in: controls)
+        let copyButtons = copyView.debugButtons()
+        let dismissButtons = dismissView.debugButtons()
+        guard copyButtons.count == 1, dismissButtons.count == 1 else {
+            throw Failure("на карточке ожидались две одиночные команды")
         }
+        try copyHost.click(copyButtons[0].frame, in: copyView)
+        try dismissHost.click(dismissButtons[0].frame, in: dismissView)
         guard copied == 1, dismissed == 1 else {
             throw Failure("команды карточки мертвы: copy=\(copied) dismiss=\(dismissed)")
         }

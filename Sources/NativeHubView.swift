@@ -200,6 +200,8 @@ private enum NativeControlSurface: String {
     case hubCoreBackground = "hub_core_background"
     case hubCoreForeground = "hub_core_foreground"
     case thumbnail
+    case thumbnailCopy = "thumbnail_copy"
+    case thumbnailDismiss = "thumbnail_dismiss"
     case pinned
     case settings
     case annotationToolbar = "annotation_toolbar"
@@ -2489,44 +2491,46 @@ final class NativeHubShellView: NSView {
 #endif
 }
 
-final class NativeThumbnailControlsView: NSView {
-    var onCopy: (() -> Void)?
-    var onDismiss: (() -> Void)?
+/// Одиночная кнопка карточки (`TR-28`): крестик и копирование разнесены по
+/// верхним углам, поэтому каждая живёт своим вью со своей поверхностью.
+final class NativeThumbnailButtonView: NSView {
+    enum Kind {
+        case copy
+        case dismiss
+
+    }
+
+    var onPress: (() -> Void)?
 
     private let nativeView = NativeHubRenderView(frame: .zero)
-    private var compact = false
-    private var fullFittingSize = NSSize(width: NativeHubMetrics.height * 3,
-                                         height: NativeHubMetrics.height)
-    private var compactFittingSize = NSSize(width: NativeHubMetrics.height * 2 + NativeHubMetrics.groupGap,
-                                            height: NativeHubMetrics.height)
+    private let kind: Kind
+    private var measured = NSSize(width: NativeHubMetrics.height,
+                                  height: NativeHubMetrics.height)
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
+    init(kind: Kind) {
+        self.kind = kind
+        super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
-        nativeView.setSurface(.thumbnail)
+        applySurface()
+        nativeView.setCompact(true)
         nativeView.onButtonPressed = { [weak self] pressed in
-            switch pressed {
-            case .copy:
-                self?.onCopy?()
-            case .dismiss:
-                self?.onDismiss?()
+            guard let self else { return }
+            switch (self.kind, pressed) {
+            case (.copy, .copy), (.dismiss, .dismiss):
+                self.onPress?()
             default:
                 break
             }
         }
         addSubview(nativeView)
-        refreshFittingSizes()
+        measured = nativeView.measureButtonContentSize()
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    override var fittingSize: NSSize {
-        compact ? compactFittingSize : fullFittingSize
-    }
-
-    override var intrinsicContentSize: NSSize { fittingSize }
-
+    override var fittingSize: NSSize { measured }
+    override var intrinsicContentSize: NSSize { measured }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -2539,40 +2543,36 @@ final class NativeThumbnailControlsView: NSView {
     override func layout() {
         super.layout()
         nativeView.frame = bounds
-        nativeView.setSurface(.thumbnail)
-        nativeView.setCompact(compact)
+        applySurface()
         nativeView.renderNow()
     }
 
-    func setCompact(_ compact: Bool) {
-        guard self.compact != compact else { return }
-        self.compact = compact
-        nativeView.setCompact(compact)
-        invalidateIntrinsicContentSize()
-        needsLayout = true
-    }
-
     func showCheck(_ on: Bool) {
+        guard kind == .copy else { return }
         nativeView.setCopied(on)
         nativeView.renderNow()
         needsLayout = true
     }
 
-    func buttonCenterInSelf(matching predicate: (String) -> Bool) -> NSPoint {
+    func buttonCenterInSelf() -> NSPoint {
         nativeView.renderNow()
-        guard let node = nativeView.buttonNodes().first(where: { predicate($0.title) }) else {
+        guard let node = nativeView.buttonNodes().first else {
             return NSPoint(x: bounds.midX, y: bounds.midY)
         }
         return convert(NSPoint(x: node.frame.midX, y: node.frame.midY), from: nativeView)
+    }
+
+    private func applySurface() {
+        nativeView.setSurface(kind == .copy ? .thumbnailCopy : .thumbnailDismiss)
+        nativeView.setCompact(true)
     }
 
 #if TESTING
     func debugState(label: String) -> String {
         nativeView.renderNow()
         let nodes = nativeView.buttonNodes()
-        let node = nodes.first { $0.title == label || (label == "Copy" && ($0.title == "Copy screenshot" || $0.title == "Copied screenshot")) }
-        let frame = node?.frame ?? .zero
-        return "nativeFrame=\(nativeView.frame) buttonFrame=\(frame) hidden=\(isHidden) alpha=\(alphaValue) compact=\(compact) nodes=\(nodes.map(\.title))"
+        let frame = nodes.first?.frame ?? .zero
+        return "nativeFrame=\(nativeView.frame) buttonFrame=\(frame) hidden=\(isHidden) alpha=\(alphaValue) nodes=\(nodes.map(\.title))"
     }
 
     func debugButtons() -> [NativeControlDebugButtonSnapshot] {
@@ -2587,21 +2587,6 @@ final class NativeThumbnailControlsView: NSView {
         nativeView.debugPixel(at: point)
     }
 #endif
-
-    private func refreshFittingSizes() {
-        nativeView.setCompact(false)
-        nativeView.setCopied(false)
-        let copySize = nativeView.measureButtonContentSize()
-        nativeView.setCopied(true)
-        let copiedSize = nativeView.measureButtonContentSize()
-        fullFittingSize = NSSize(width: max(copySize.width, copiedSize.width),
-                                 height: max(copySize.height, copiedSize.height))
-
-        nativeView.setCompact(true)
-        compactFittingSize = nativeView.measureButtonContentSize()
-        nativeView.setCopied(false)
-        nativeView.setCompact(compact)
-    }
 }
 
 final class NativePinnedCopyButtonView: NSView {

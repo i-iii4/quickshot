@@ -134,6 +134,14 @@ pub const Model = struct {
         return model.surface == .thumbnail;
     }
 
+    pub fn thumbnailCopySurface(model: *const Model) bool {
+        return model.surface == .thumbnail_copy;
+    }
+
+    pub fn thumbnailDismissSurface(model: *const Model) bool {
+        return model.surface == .thumbnail_dismiss;
+    }
+
     pub fn hubBubbleSurface(model: *const Model) bool {
         return model.surface == .hub_bubble;
     }
@@ -222,6 +230,10 @@ pub const Surface = enum {
     hub_core_background,
     hub_core_foreground,
     thumbnail,
+    // Кнопки карточки разнесены по углам (`TR-28`): каждая живёт в своей
+    // поверхности, иначе их не поставить в противоположные углы одним рядом.
+    thumbnail_copy,
+    thumbnail_dismiss,
     pinned,
     settings,
     annotation_toolbar,
@@ -455,7 +467,7 @@ fn designTokens(model: *const Model) canvas.DesignTokens {
         .contrast = if (model.high_contrast) .high else .standard,
         .reduce_motion = model.reduce_motion,
     });
-    if (model.surface == .hub or model.surface == .hub_bubble or model.surface == .hub_core_background or model.surface == .hub_core_foreground or model.surface == .thumbnail or model.surface == .pinned) {
+    if (model.surface == .hub or model.surface == .hub_bubble or model.surface == .hub_core_background or model.surface == .hub_core_foreground or model.surface == .thumbnail or model.surface == .thumbnail_copy or model.surface == .thumbnail_dismiss or model.surface == .pinned) {
         tokens.colors.background = canvas.Color.rgba8(0, 0, 0, 0);
     }
     return tokens;
@@ -613,6 +625,8 @@ fn onCommand(name: []const u8) ?Msg {
         if (std.mem.eql(u8, raw, "hub_core_background")) return .{ .set_surface = .hub_core_background };
         if (std.mem.eql(u8, raw, "hub_core_foreground")) return .{ .set_surface = .hub_core_foreground };
         if (std.mem.eql(u8, raw, "thumbnail")) return .{ .set_surface = .thumbnail };
+        if (std.mem.eql(u8, raw, "thumbnail_copy")) return .{ .set_surface = .thumbnail_copy };
+        if (std.mem.eql(u8, raw, "thumbnail_dismiss")) return .{ .set_surface = .thumbnail_dismiss };
         if (std.mem.eql(u8, raw, "pinned")) return .{ .set_surface = .pinned };
         if (std.mem.eql(u8, raw, "settings")) return .{ .set_surface = .settings };
         if (std.mem.eql(u8, raw, "annotation_toolbar")) return .{ .set_surface = .annotation_toolbar };

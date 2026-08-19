@@ -36,14 +36,19 @@
         <panel width="{bubbleWidth}" height="40" background="surface" radius="xl" label="QuickShot hub bubble"></panel>
       </if>
       <else>
-        <if test="{thumbnailSurface}">
-          <row gap="8" cross="center" label="Screenshot card actions">
+        <if test="{thumbnailCopySurface}">
+          <row label="Copy screenshot action">
             <if test="{compact}">
               <button size="sm" variant="secondary" icon="{copyIcon}" label="{copyLabel}" on-press="copy"></button>
             </if>
             <else>
               <button size="sm" variant="secondary" icon="{copyIcon}" label="{copyLabel}" on-press="copy">{copyText}</button>
             </else>
+          </row>
+        </if>
+        <else>
+        <if test="{thumbnailDismissSurface}">
+          <row label="Dismiss screenshot action">
             <button size="sm" variant="destructive" icon="x" label="Dismiss screenshot" on-press="dismiss"></button>
           </row>
         </if>
@@ -217,5 +222,6 @@
       </else>
     </else>
   </else>
+        </else>
           </else>
 </row>
