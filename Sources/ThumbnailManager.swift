@@ -306,6 +306,9 @@ final class ThumbnailManager {
     /// свёрнутого трея, поэтому у развёрнутой ленты панель не разворачивалась.
     private func thumbnailHoverChanged(_ thumbnail: ThumbnailWindow, entered: Bool) {
         if entered {
+            // Рука подошла к трею — самое время разбудить актуатор внешнего
+            // трекпада: его открытие занимает сотни миллисекунд (`TR-29`).
+            TrayHaptics.shared.prepare()
             cancelHoverExit()
             if collapsedPeekItem === thumbnail { cancelCollapsedPeekDismiss() }
             if !trayHoverActive, collapsedPeekItem == nil {
@@ -783,6 +786,10 @@ final class ThumbnailManager {
         if hasPhases {
             scrollSettleAnimator.cancel()
             scrollSettleAnimating = false
+            // Открытие актуатора внешнего трекпада стоит сотни миллисекунд
+            // (Bluetooth): готовим дескриптор в фоне заранее, чтобы сам
+            // щелчок стоил доли миллисекунды.
+            TrayHaptics.shared.prepare()
             if fingersDown, detentDipAnimating {
                 // `TR-29`: под пальцем позиция принадлежит пальцу. Пружина
                 // щелчка, продолжающая играть во время медленного свайпа,
