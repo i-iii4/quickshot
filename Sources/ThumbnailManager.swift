@@ -897,6 +897,19 @@ final class ThumbnailManager {
         }
     }
 
+    /// Отклик пружины возврата (Apple: перемещение объектов — демпфирование
+    /// 1.0, отклик 0.4 с). Длительность кадров с запасом на дохождение.
+    private static let settleResponse: CGFloat = 0.4
+    private static let settleDuration: CGFloat = 0.55
+
+    /// Доля непройденного пути у критически задемпфированной пружины:
+    /// `(1 + ωt)·e^(−ωt)`, где `ω = 2π / отклик`. Ноль перелёта по построению.
+    private static func criticallyDampedRemainder(_ time: CGFloat) -> CGFloat {
+        let omega = 2 * CGFloat.pi / settleResponse
+        let x = omega * time
+        return (1 + x) * exp(-x)
+    }
+
     /// Возврат из-за края после отпускания: не мгновенный clamp, а короткий
     /// ease-out — лента отвечает движением, как системный rubber-band.
     private func settleScrollAnimated() {
@@ -926,11 +939,15 @@ final class ThumbnailManager {
             applyScrollOffset()
             return
         }
+        // Возврат — пружина с параметрами Apple для перемещения объектов:
+        // демпфирование 1.0 (без перелёта), отклик 0.4 с (`TR-13`).
+        // Фиксированная кривая читалась резким переходом «без резины».
         scrollSettleAnimating = true
-        scrollSettleAnimator.run(duration: 0.3, onFrame: { [weak self] progress in
+        let duration = Self.settleDuration
+        scrollSettleAnimator.run(duration: duration, onFrame: { [weak self] progress in
             guard let self else { return }
-            let eased = 1 - pow(1 - progress, 3)
-            self.scrollModel.offset = from + (target - from) * eased
+            let remaining = Self.criticallyDampedRemainder(progress * duration)
+            self.scrollModel.offset = target + (from - target) * remaining
             self.applyScrollOffset()
         }, onDone: { [weak self] in
             guard let self else { return }

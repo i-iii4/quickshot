@@ -59,31 +59,31 @@ struct TrayScrollModel: Equatable {
         let clamped = min(max(0, raw), maximumOffset)
         // Присваивание offset синхронизирует rawOffset через наблюдатель,
         // поэтому сырое значение выставляется ПОСЛЕ него.
-        next.offset = rubberBand ? clamped + Self.resisted(raw - clamped) : clamped
+        next.offset = rubberBand
+            ? clamped + Self.resisted(raw - clamped, dimension: stretchDimension)
+            : clamped
         next.rawOffset = rubberBand ? raw : clamped
         return next
     }
 
-    /// Предел ухода за край. Лента карточек — не страница: уводить её на
-    /// сотни точек нельзя, иначе резинки не чувствуется вовсе и карточки
-    /// «свободно катаются» (приёмка 19.08.2026). Предел фиксированный и
-    /// небольшой, от размера окна не зависит.
-    static let stretchLimit: CGFloat = 64
-    /// Доля хода пальца, которую лента отрабатывает в самом начале выхода за
-    /// край. Дальше сопротивление растёт до полного упора.
-    static let stretchStart: CGFloat = 0.35
+    /// Константа сопротивления Apple из доклада «Designing Fluid Interfaces»
+    /// (WWDC 2018). Не подбирается.
+    static let resistanceConstant: CGFloat = 0.55
 
-    /// Сопротивление за краем: чем дальше уведён палец, тем меньше идёт
-    /// лента, но идёт всегда — и всегда в ту же сторону, что и палец.
-    /// Сколько ни тяни, смещение не превысит `dimension` (асимптота формулы),
-    /// поэтому упор ощущается пределом, а не остановкой.
-    static func resisted(_ overshoot: CGFloat) -> CGFloat {
-        guard overshoot != 0 else { return 0 }
+    /// Характерный размер для формулы сопротивления. У Apple это размер
+    /// прокручиваемой области; для ленты карточек взята длина карточки — за
+    /// край уводится не больше одной карточки. Полное окно давало уход в
+    /// сотни точек, и резинка переставала читаться (приёмка 19.08.2026).
+    var stretchDimension: CGFloat { max(60, lastCardLength) }
+
+    /// Сопротивление за краем по формуле Apple: `(x·d·c)/(d + c·x)`.
+    /// Монотонно по ходу пальца, асимптотически ограничено размером `d`.
+    static func resisted(_ overshoot: CGFloat, dimension: CGFloat) -> CGFloat {
+        guard overshoot != 0, dimension > 0 else { return 0 }
         let magnitude = abs(overshoot)
-        let limit = stretchLimit
-        let start = stretchStart
-        let resistedMagnitude = (magnitude * limit * start) / (limit + start * magnitude)
-        return overshoot < 0 ? -resistedMagnitude : resistedMagnitude
+        let value = (magnitude * dimension * resistanceConstant)
+            / (dimension + resistanceConstant * magnitude)
+        return overshoot < 0 ? -value : value
     }
 
     /// Возврат в границы после отпускания.

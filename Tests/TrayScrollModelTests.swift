@@ -127,8 +127,8 @@ struct TrayScrollModelTests {
         var model = TrayScrollModel(contentLength: 1000, viewportLength: 600,
                                     offset: 0, lastCardLength: 150)
         for _ in 0..<200 { model = model.scrolled(by: -50) }
-        // Асимптота формулы равна пределу ухода за край.
-        let limit = TrayScrollModel.stretchLimit
+        // Асимптота формулы равна характерному размеру — длине карточки.
+        let limit = model.stretchDimension
         expect(abs(model.offset) <= limit + 0.001,
                "растяжение не ограничено: \(model.offset) при пределе \(limit)")
         expect(abs(model.offset) > limit * 0.8,
@@ -138,7 +138,7 @@ struct TrayScrollModelTests {
         var short = TrayScrollModel(contentLength: 1000, viewportLength: 600,
                                     offset: 0, lastCardLength: 150)
         for _ in 0..<10 { short = short.scrolled(by: -20) }
-        expect(abs(short.offset) > 10 && abs(short.offset) < TrayScrollModel.stretchLimit,
+        expect(abs(short.offset) > 10 && abs(short.offset) < short.stretchDimension,
                "уход за край на обычном жесте вне ожидания: \(short.offset)")
     }
 
