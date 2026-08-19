@@ -29,17 +29,38 @@ import IOKit
 /// отвечают `kIOReturnSuccess` и молчат. Код возврата успеха вообще НЕ
 /// означает, что актуатор сработал — проверять только ощущением.
 final class TrayHaptics: @unchecked Sendable {
-    /// Волны актуатора: 1 — слабый щелчок, 2 — сильный (ощущение Force
-    /// Touch), 3 — зуммер, 4/5/6 — тап от лёгкого к сильному. Остальные
-    /// номера устройство отвергает.
-    enum Pulse: Int32 {
-        /// Посадка в защёлку: сильный щелчок.
-        case firm = 2
-        /// Выход из защёлки: средний тап — другой характер, чем у посадки, но
-        /// ощутимый на обоих трекпадах. Слабый щелчок (волна 1) на встроенном
-        /// актуаторе ниже порога ощущения: журнал показывал успешную доставку
-        /// свежей сессией, а рука ничего не чувствовала (приёмка 19.08.2026).
-        case light = 5
+    /// Смысл события. Физику подбирает нижний слой — по устройству, потому
+    /// что одинаковая команда на разных трекпадах звучит по-разному.
+    enum Pulse {
+        /// Посадка в защёлку.
+        case firm
+        /// Выход из защёлки.
+        case light
+    }
+
+    /// Номер волны. ВЫБОР ВОЛНЫ НИ НА ЧТО НЕ ВЛИЯЕТ: замер 19.08.2026
+    /// (акустический прогон всех восьми волн на обоих трекпадах плюс проверка
+    /// рукой) показал одинаковую энергию у всех номеров. Три дополнительных
+    /// параметра вызова тоже мертвы — чередование нулей с любыми значениями
+    /// дало неразличимый результат. Поэтому номер здесь один, а сила и
+    /// характер задаются ЧИСЛОМ И ЧАСТОТОЙ импульсов — единственным рабочим
+    /// рычагом.
+    private static let waveform: Int32 = 2
+    /// Интервал слияния: удары ближе этого рука читает как один, более
+    /// плотный, а не как очередь.
+    private static let fuseInterval: TimeInterval = 0.018
+
+    /// Сколько импульсов даёт событие на конкретном устройстве. Встроенный
+    /// трекпад жёстко связан с корпусом и отзывается резко (пользователь:
+    /// «почти дребезжит»), внешний — тяжёлая пластина на столе, гасящая
+    /// энергию («еле различимый»). Уравнивается это только количеством.
+    private static func pulseCount(_ pulse: Pulse, builtIn: Bool) -> Int {
+        switch (pulse, builtIn) {
+        case (.firm, true): return 2
+        case (.light, true): return 1
+        case (.firm, false): return 3
+        case (.light, false): return 1
+        }
     }
 
     static let shared = TrayHaptics()
@@ -59,6 +80,7 @@ final class TrayHaptics: @unchecked Sendable {
         let holder: AnyObject
         let ref: UnsafeMutableRawPointer
         let multitouchID: UInt64
+        let builtIn: Bool
         let openedAt: Date
         /// Сколько стоило открытие. Дешёвое устройство переоткрывается на
         /// каждый удар, дорогое живёт с удержанной сессией.
@@ -76,6 +98,8 @@ final class TrayHaptics: @unchecked Sendable {
     /// Соответствие «узел реестра → устройство multitouch». Строится публичным
     /// IOKit, обновляется при неизвестном отправителе (подключили трекпад).
     private var deviceByRegistryID: [UInt64: UInt64] = [:]
+    /// Встроенные трекпады: у них своя механика, отсюда своё число импульсов.
+    private var builtInDevices: Set<UInt64> = []
 
     private var create: ActuatorCreateFn?
     private var open: ActuatorOpenFn?
@@ -128,6 +152,7 @@ final class TrayHaptics: @unchecked Sendable {
         defer { IOObjectRelease(iterator) }
         var map: [UInt64: UInt64] = [:]
         var actuating: [UInt64] = []
+        var builtIn: Set<UInt64> = []
         var report: [String] = []
         while case let service = IOIteratorNext(iterator), service != 0 {
             defer { IOObjectRelease(service) }
@@ -137,11 +162,16 @@ final class TrayHaptics: @unchecked Sendable {
             map[registryID] = multitouchID
             let actuation = numberProperty(service, "ActuationSupported").map { $0 != 0 } ?? true
             if actuation { actuating.append(multitouchID) }
+            // `MT Built-In` в реестре — булево свойство; отсутствие считаем
+            // внешним устройством.
+            let isBuiltIn = boolProperty(service, "MT Built-In") ?? false
+            if isBuiltIn { builtIn.insert(multitouchID) }
             let name = stringProperty(service, "Product") ?? "?"
-            report.append("\(name)=\(multitouchID)\(actuation ? "" : " (без актуатора)")")
+            report.append("\(name)=\(multitouchID)\(isBuiltIn ? " (встроенный)" : "")\(actuation ? "" : " (без актуатора)")")
         }
         lock.lock()
         deviceByRegistryID = map
+        builtInDevices = builtIn
         lock.unlock()
         Self.logSink?("трекпады: [\(report.joined(separator: " | "))]")
         knownActuating = actuating
@@ -154,6 +184,15 @@ final class TrayHaptics: @unchecked Sendable {
                                                           kCFAllocatorDefault, 0)?
             .takeRetainedValue() as? NSNumber else { return nil }
         return value.uint64Value
+    }
+
+    private func boolProperty(_ service: io_service_t, _ key: String) -> Bool? {
+        guard let value = IORegistryEntryCreateCFProperty(service, key as CFString,
+                                                          kCFAllocatorDefault, 0)?
+            .takeRetainedValue() else { return nil }
+        if let number = value as? NSNumber { return number.boolValue }
+        return CFBooleanGetTypeID() == CFGetTypeID(value)
+            ? CFBooleanGetValue((value as! CFBoolean)) : nil
     }
 
     private func stringProperty(_ service: io_service_t, _ key: String) -> String? {
@@ -214,12 +253,17 @@ final class TrayHaptics: @unchecked Sendable {
             // Дешёвое устройство бьётся по свежей сессии — ровно так, как это
             // делает эталонная утилита, у которой встроенный трекпад щёлкает.
             let target = handle.openCost <= Self.cheapOpen ? reopen(handle) ?? handle : handle
-            let status = actuate(target.ref, pulse.rawValue, 0, 0, 0)
+            let count = Self.pulseCount(pulse, builtIn: handle.builtIn)
+            var status: Int32 = 0
+            for index in 0..<count {
+                status = actuate(target.ref, Self.waveform, 0, 0, 0)
+                if index + 1 < count { Thread.sleep(forTimeInterval: Self.fuseInterval) }
+            }
             let age = Int(Date().timeIntervalSince(target.openedAt) * 1000)
-            report.append("\(handle.multitouchID)=\(String(format: "0x%x", status))/\(age)мс")
+            report.append("\(handle.multitouchID)=\(String(format: "0x%x", status))/\(age)мс/×\(count)")
             if status != 0 { dropHandle(handle.multitouchID) }
         }
-        Self.logSink?("щелчок волна=\(pulse.rawValue) устройство=\(device.map(String.init) ?? "все") [\(report.joined(separator: " "))]")
+        Self.logSink?("щелчок \(pulse == .firm ? "посадка" : "выход") устройство=\(device.map(String.init) ?? "все") [\(report.joined(separator: " "))]")
     }
 
     /// Закрыть сессию и открыть заново — соблюдая правило «один дескриптор на
@@ -239,7 +283,8 @@ final class TrayHaptics: @unchecked Sendable {
         let t0 = Date()
         guard open(ref, 0) == 0 else { return nil }
         let fresh = Handle(holder: holder, ref: ref, multitouchID: handle.multitouchID,
-                           openedAt: Date(), openCost: Date().timeIntervalSince(t0))
+                           builtIn: handle.builtIn, openedAt: Date(),
+                           openCost: Date().timeIntervalSince(t0))
         lock.lock()
         handles.append(fresh)
         lock.unlock()
@@ -287,8 +332,11 @@ final class TrayHaptics: @unchecked Sendable {
             let cost = Int(Date().timeIntervalSince(t0) * 1000)
             report.append("\(multitouchID)=\(String(format: "0x%x", status))/\(cost)мс")
             guard status == 0 else { continue }
+            lock.lock()
+            let isBuiltIn = builtInDevices.contains(multitouchID)
+            lock.unlock()
             opened.append(Handle(holder: holder, ref: ref, multitouchID: multitouchID,
-                                 openedAt: Date(),
+                                 builtIn: isBuiltIn, openedAt: Date(),
                                  openCost: Date().timeIntervalSince(t0)))
         }
         lock.lock()
