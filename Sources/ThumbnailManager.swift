@@ -1,4 +1,5 @@
 import AppKit
+import OSLog
 import UniformTypeIdentifiers
 
 enum ThumbStyle {
@@ -105,6 +106,8 @@ final class ThumbnailManager {
     /// Защёлка полного сбора (`TR-29`): вход и выход из стопки через точку
     /// напряжения со щелчком.
     private var detent = TrayDetentModel()
+    nonisolated private static let trayLog = Logger(subsystem: "com.iiii.quickshot",
+                                                    category: "tray")
     /// Кадровая добавка осадки защёлки поверх смещения: раскладка читает её на
     /// каждом кадре, поэтому события жеста осадку не смазывают.
     private var detentDip: CGFloat = 0
@@ -779,6 +782,9 @@ final class ThumbnailManager {
         if hasPhases {
             scrollSettleAnimator.cancel()
             scrollSettleAnimating = false
+            if !scrollGestureActive {
+                Self.trayLog.info("detent gesture: offset=\(self.scrollModel.offset, format: .fixed(precision: 1)) max=\(self.scrollModel.maximumOffset, format: .fixed(precision: 1)) fits=\(TrayDetentModel.fits(self.scrollModel)) engaged=\(self.detent.engaged)")
+            }
             scrollGestureActive = true
         }
 
@@ -851,6 +857,7 @@ final class ThumbnailManager {
     /// кадр — причина и ощущение обязаны совпасть. Тактильно отвечает трекпад
     /// с Force Touch; без него остаётся визуальное тело щелчка.
     private func performDetentClick(_ click: TrayDetentModel.Click) {
+        Self.trayLog.info("detent click: \(click == .snapIn ? "snapIn" : "release") offset=\(self.scrollModel.offset, format: .fixed(precision: 1))")
         NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
         guard click == .snapIn,
               !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
@@ -862,9 +869,9 @@ final class ThumbnailManager {
     /// прыжок к началу зоны, ему осадка не нужна.
     private func runDetentDip() {
         detentDipAnimator.cancel()
-        detentDipAnimator.run(duration: 0.16, onFrame: { [weak self] progress in
+        detentDipAnimator.run(duration: 0.22, onFrame: { [weak self] progress in
             guard let self else { return }
-            self.detentDip = 3.5 * sin(progress * .pi)
+            self.detentDip = 6 * sin(progress * .pi)
             self.applyScrollOffset()
         }, onDone: { [weak self] in
             guard let self else { return }

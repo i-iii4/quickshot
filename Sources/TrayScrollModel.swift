@@ -322,14 +322,22 @@ enum TrayStripLayout {
 /// началу зоны. Модель чистая: дельты жеста входят, наружу выходят новое
 /// смещение и факт щелчка; тактильный и визуальный отклик — дело менеджера.
 struct TrayDetentModel: Equatable {
-    /// Зона напряжения перед упором, pt хода ленты.
-    static let zone: CGFloat = 24
+    /// Зона напряжения перед упором, pt хода ленты. Значения крупные
+    /// намеренно: трекпад отдаёт сотни точек в секунду, и мелкая зона
+    /// проскакивается за одно событие — механика ниже порога восприятия
+    /// неотличима от её отсутствия.
+    static let zone: CGFloat = 56
     /// Порог проскока: осталось меньше — защёлкивает домой.
-    static let snapRemainder: CGFloat = 9
+    static let snapRemainder: CGFloat = 14
     /// Насколько лента медленнее пальца в зоне напряжения.
-    static let tension: CGFloat = 3
+    static let tension: CGFloat = 4
     /// Сырой ход пальца, вырывающий ленту из защёлки.
-    static let escape: CGFloat = 30
+    static let escape: CGFloat = 120
+    /// Знаменатель страгивания при удержании: собранная лента подаётся на
+    /// strain/holdTension, но не дальше holdGive — видно, что она
+    /// сопротивляется, а не медленно едет.
+    static let holdTension: CGFloat = 6
+    static let holdGive: CGFloat = zone / 4
 
     enum Click: Equatable {
         case snapIn
@@ -341,9 +349,19 @@ struct TrayDetentModel: Equatable {
     /// Накопленный сырой ход побега из защёлки.
     private(set) var strain: CGFloat = 0
 
-    /// Короткой ленте защёлка не положена: зона съела бы весь ход.
+    /// Совсем короткой ленте защёлка не положена; на просто короткой зона
+    /// пропорционально уже (`effectiveZone`), чтобы не съедать весь ход.
     static func fits(_ model: TrayScrollModel) -> Bool {
-        model.maximumOffset > zone * 2
+        model.maximumOffset > 40
+    }
+
+    /// Эффективная зона напряжения: не шире 40% всего хода.
+    static func effectiveZone(for model: TrayScrollModel) -> CGFloat {
+        min(zone, model.maximumOffset * 0.4)
+    }
+
+    static func effectiveSnapRemainder(for model: TrayScrollModel) -> CGFloat {
+        min(snapRemainder, effectiveZone(for: model) * 0.25)
     }
 
     /// Синхронизация после программной установки смещения: защёлка следует за
@@ -370,15 +388,16 @@ struct TrayDetentModel: Equatable {
     /// зоны. Вне зоны решает обычный `settled()`.
     func settleTarget(for model: TrayScrollModel) -> CGFloat? {
         guard !engaged, Self.fits(model) else { return nil }
-        let zoneStart = model.maximumOffset - Self.zone
+        let zone = Self.effectiveZone(for: model)
+        let zoneStart = model.maximumOffset - zone
         guard model.offset > zoneStart + 0.5, model.offset < model.maximumOffset else { return nil }
-        return model.offset >= zoneStart + Self.zone / 3 ? model.maximumOffset : zoneStart
+        return model.offset >= zoneStart + zone / 3 ? model.maximumOffset : zoneStart
     }
 
     private mutating func applyFree(delta: CGFloat,
                                     to model: TrayScrollModel) -> (model: TrayScrollModel, click: Click?) {
         var next = model
-        let zoneStart = next.maximumOffset - Self.zone
+        let zoneStart = next.maximumOffset - Self.effectiveZone(for: next)
         guard delta > 0, next.offset + delta > zoneStart else {
             // Вне зоны или движение от упора: до щелчка выход свободен, жест
             // легко отменяется — сопротивление только в сторону сбора.
@@ -389,7 +408,7 @@ struct TrayDetentModel: Equatable {
         let before = max(0, zoneStart - next.offset)
         let tensioned = (delta - before) / Self.tension
         let candidate = max(next.offset, zoneStart) + tensioned
-        if candidate >= next.maximumOffset - Self.snapRemainder {
+        if candidate >= next.maximumOffset - Self.effectiveSnapRemainder(for: next) {
             next.offset = next.maximumOffset
             engaged = true
             strain = 0
@@ -422,10 +441,11 @@ struct TrayDetentModel: Equatable {
             // Вырвалась: накопленное напряжение выпускается одним прыжком.
             engaged = false
             strain = 0
-            next.offset = maxOffset - Self.zone
+            next.offset = maxOffset - Self.effectiveZone(for: next)
             return (next, .release)
         }
-        next.offset = maxOffset - strain / Self.tension
+        next.offset = maxOffset - min(strain / Self.holdTension,
+                                      Self.effectiveZone(for: next) / 4)
         return (next, nil)
     }
 }
