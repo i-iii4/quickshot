@@ -97,6 +97,7 @@ xcrun swiftc \
   -warnings-as-errors \
   -framework AppKit \
   -framework ImageIO \
+  -framework IOKit \
   Sources/CaptureSequence.swift \
   Sources/Clipboard.swift \
   Sources/CaptureArtifact.swift \
@@ -288,6 +289,7 @@ xcrun swiftc \
   -warnings-as-errors \
   -framework AppKit \
   -framework ImageIO \
+  -framework IOKit \
   Sources/AnnotationDocument.swift \
   Sources/AnnotationToolModel.swift \
   Sources/AnnotationSession.swift \
@@ -333,6 +335,7 @@ xcrun swiftc \
   -framework AppKit \
   -framework CoreGraphics \
   -framework ImageIO \
+  -framework IOKit \
   Tests/HubWindowTestSupport.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
@@ -366,6 +369,7 @@ xcrun swiftc \
   -framework AppKit \
   -framework CoreGraphics \
   -framework ImageIO \
+  -framework IOKit \
   Tests/HubWindowTestSupport.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
@@ -399,6 +403,7 @@ xcrun swiftc \
   -framework AppKit \
   -framework CoreGraphics \
   -framework ImageIO \
+  -framework IOKit \
   Tests/HubWindowTestSupport.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
@@ -432,6 +437,7 @@ xcrun swiftc \
   -framework AppKit \
   -framework CoreGraphics \
   -framework ImageIO \
+  -framework IOKit \
   Tests/HubWindowTestSupport.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
@@ -465,6 +471,7 @@ xcrun swiftc \
   -framework AppKit \
   -framework CoreGraphics \
   -framework ImageIO \
+  -framework IOKit \
   Tests/HubWindowTestSupport.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
@@ -498,6 +505,7 @@ xcrun swiftc \
   -framework AppKit \
   -framework CoreGraphics \
   -framework ImageIO \
+  -framework IOKit \
   -framework Vision \
   Tests/HubWindowTestSupport.swift \
   Sources/MotionCurves.swift \
@@ -538,6 +546,7 @@ xcrun swiftc \
   -warnings-as-errors \
   -framework AppKit \
   -framework ImageIO \
+  -framework IOKit \
   Sources/CaptureSequence.swift \
   Sources/Clipboard.swift \
   Sources/AnnotationDocument.swift \
@@ -560,6 +569,7 @@ xcrun swiftc \
   -framework CoreGraphics \
   -framework QuartzCore \
   -framework ImageIO \
+  -framework IOKit \
   -framework Vision \
   -framework UniformTypeIdentifiers \
   Sources/CaptureWindowLevels.swift \
@@ -617,6 +627,7 @@ xcrun swiftc \
   -framework AppKit \
   -framework CoreGraphics \
   -framework ImageIO \
+  -framework IOKit \
   -framework UniformTypeIdentifiers \
   Sources/Clipboard.swift \
   Tests/ClipboardDeliveryTests.swift \
@@ -654,6 +665,7 @@ xcrun swiftc \
   -framework AppKit \
   -framework CoreGraphics \
   -framework ImageIO \
+  -framework IOKit \
   -framework Vision \
   Tests/HubWindowTestSupport.swift \
   Sources/MotionCurves.swift \
@@ -742,6 +754,7 @@ xcrun swiftc \
   -framework AppKit \
   -framework CoreGraphics \
   -framework ImageIO \
+  -framework IOKit \
   -framework QuartzCore \
   Sources/CaptureWindowLevels.swift \
   Sources/WindowCaptureProtection.swift \
@@ -801,6 +814,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
 	  -framework AppKit \
 	  -framework CoreGraphics \
 	  -framework ImageIO \
+  -framework IOKit \
 	  -framework QuartzCore \
   Sources/TrayHostContentView.swift \
   Sources/MotionCurves.swift \
@@ -886,6 +900,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
 	  -framework AppKit \
 	  -framework CoreGraphics \
 	  -framework ImageIO \
+  -framework IOKit \
 	  -framework QuartzCore \
   Sources/TrayHostContentView.swift \
   Sources/MotionCurves.swift \

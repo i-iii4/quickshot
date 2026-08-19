@@ -62,6 +62,7 @@ xcrun swiftc \
   -framework Carbon \
   -framework CoreGraphics \
   -framework ImageIO \
+  -framework IOKit \
   -o "$STAGING_BUNDLE/Contents/MacOS/$APP" \
   "$NATIVE_UI_LIB" \
   Sources/*.swift

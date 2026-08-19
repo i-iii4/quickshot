@@ -107,6 +107,8 @@ final class ThumbnailManager {
     private var detent = TrayDetentModel()
     /// Кадровая добавка осадки защёлки поверх смещения: раскладка читает её на
     /// каждом кадре, поэтому события жеста осадку не смазывают.
+    /// Трекпад, ведущий текущий жест (`TR-29`): щелчок уходит именно в него.
+    private var gestureDevice: UInt64?
     private var detentDip: CGFloat = 0
     private var detentDipAnimating = false
     private lazy var detentDipAnimator = CollectionProgressAnimator(hostView: hostContent)
@@ -791,7 +793,15 @@ final class ThumbnailManager {
             // щелчок стоил доли миллисекунды.
             TrayHaptics.logSink = { [weak self] line in self?.debugTrayLog("haptics: \(line)") }
             TrayHaptics.shared.arm()
-            if Self.trayLogEnabled, event.phase == .began { logScrollSource(event) }
+            // Устройство берётся из самого события (`TR-29`). В инерции
+            // HID-нагрузки может не быть, поэтому источник запоминается на
+            // всё время жеста: защёлка часто срабатывает уже на инерции.
+            if let device = TrayHaptics.shared.device(of: event) {
+                if gestureDevice != device {
+                    debugTrayLog("источник жеста: устройство=\(device)")
+                }
+                gestureDevice = device
+            }
             if fingersDown, detentDipAnimating {
                 // `TR-29`: под пальцем позиция принадлежит пальцу. Пружина
                 // щелчка, продолжающая играть во время медленного свайпа,
@@ -917,7 +927,7 @@ final class ThumbnailManager {
     /// фонового `.accessory`-приложения молчит (см. `TrayHaptics`).
     private func performDetentHaptic(_ click: TrayDetentModel.Click) {
         TrayHaptics.logSink = { [weak self] line in self?.debugTrayLog("haptics: \(line)") }
-        TrayHaptics.shared.click(click == .snapIn ? .firm : .light)
+        TrayHaptics.shared.click(click == .snapIn ? .firm : .light, device: gestureDevice)
     }
 
     /// Пружинная подача `detentDip` к нулю: недодемпфированная пружина, один
@@ -959,17 +969,6 @@ final class ThumbnailManager {
     /// но выключенным: в обычном запуске диск не трогается.
     nonisolated private static let trayLogEnabled =
         ProcessInfo.processInfo.environment["QUICKSHOT_LOG_TRAY"] == "1"
-
-    /// Что система рассказывает о ФИЗИЧЕСКОМ источнике жеста: без публичного
-    /// идентификатора устройства выбирать трекпад для отклика приходится по
-    /// касаниям (`TR-29`). Диагностика включается `QUICKSHOT_LOG_TRAY=1`.
-    private func logScrollSource(_ event: NSEvent) {
-        let touches = event.allTouches()
-        let devices = Set(touches.compactMap { $0.device.map { ObjectIdentifier($0 as AnyObject) } })
-        let deviceText = devices.map { String(describing: $0) }.joined(separator: ",")
-        let source = event.cgEvent?.getIntegerValueField(.eventSourceUnixProcessID) ?? -1
-        debugTrayLog("источник жеста: deviceID=\(event.deviceID) касаний=\(touches.count) устройств=\(devices.count) [\(deviceText)] pid=\(source)")
-    }
 
     nonisolated private func debugTrayLog(_ line: String) {
         guard Self.trayLogEnabled else { return }
