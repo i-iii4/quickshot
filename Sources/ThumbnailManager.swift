@@ -801,6 +801,10 @@ final class ThumbnailManager {
             scrollVelocity = 0
             lastScrollTimestamp = event.timestamp
             momentumHandedToSpring = false
+            // Палец коснулся во время догона: длинная инерционная подача
+            // пережимается в короткую от текущего значения — перенацеливание
+            // вместо среза (скилл, прерываемость).
+            if detentDipAnimating { runDetentSpring(profile: .underFinger) }
         }
         // Инерцию, уже переданную пружине границы, не читаем вовсе — и до
         // общего блока, где события отменяют аниматоры: иначе первое же её
@@ -828,15 +832,6 @@ final class ThumbnailManager {
                     debugTrayLog("источник жеста: устройство=\(device)")
                 }
                 gestureDevice = device
-            }
-            if fingersDown, detentDipAnimating {
-                // `TR-29`: под пальцем позиция принадлежит пальцу. Пружина
-                // щелчка, продолжающая играть во время медленного свайпа,
-                // спорит с прямым управлением — это и есть грязь. Догоняющее
-                // движение снимается мгновенно.
-                detentDipAnimator.cancel()
-                detentDipAnimating = false
-                detentDip = 0
             }
             if !scrollGestureActive {
                 debugTrayLog("gesture offset=\(Int(scrollModel.offset)) max=\(Int(scrollModel.maximumOffset)) fits=\(TrayDetentModel.fits(scrollModel)) engaged=\(detent.engaged)")
@@ -882,21 +877,20 @@ final class ThumbnailManager {
             scrollModel = result.model
             trackVelocity(movement: scrollModel.offset - before, at: event.timestamp)
             if let click = result.click {
-                if fingersDown {
-                    // Под пальцем защёлка ведёт себя как настоящая: короткий
-                    // сухой скачок вперёд, без догоняющей анимации. Палец
-                    // продолжает вести ленту в тот же кадр.
-                    detentDip = 0
-                    performDetentClick(click, spring: false)
-                } else {
-                    // На инерции пальца нет: прыжок модели поглощает подача, а
-                    // пружина доводит презентацию с одним перелётом.
-                    detentDip = presented - scrollModel.offset
-                    performDetentClick(click, spring: true)
-                }
+                // Прыжок модели ВСЕГДА поглощается подачей: сдвиг больше
+                // порога восприятия за один кадр запрещён (`TR-29`, аудит
+                // 19.08.2026 — «уезжает одним движением»). Под пальцем догон
+                // короткий и без перелёта: палец сохраняет контроль над
+                // моделью, затухает только разница. На инерции — длиннее и с
+                // лёгкой осадкой.
+                detentDip = presented - scrollModel.offset
+                performDetentClick(click, profile: fingersDown ? .underFinger : .inertia)
             }
         } else {
             // Колесо шагает дискретно: защёлка следует за фактом без щелчка.
+            // Пружину границы колесо гасит — иначе позицию пишут двое сразу.
+            scrollSettleAnimator.cancel()
+            scrollSettleAnimating = false
             scrollModel = scrollModel.scrolled(by: delta, rubberBand: false)
             detent.sync(with: scrollModel)
         }
@@ -973,9 +967,9 @@ final class ThumbnailManager {
             detent.sync(with: scrollModel)
             detentDip = presented - detentTarget
             if home, !alreadySeated {
-                performDetentClick(.snapIn, spring: true)
+                performDetentClick(.snapIn, profile: .inertia)
             } else {
-                runDetentSpring()
+                runDetentSpring(profile: .inertia)
             }
             applyScrollOffset()
             return
@@ -990,9 +984,12 @@ final class ThumbnailManager {
         // Возврат — пружина с параметрами Apple для перемещения объектов:
         // демпфирование 1.0 (без перелёта), отклик 0.4 с (`TR-13`).
         // Фиксированная кривая читалась резким переходом «без резины».
-        // Пружина стартует со скоростью жеста: без передачи скорости движение
-        // рвётся в момент отпускания (`TR-13`).
-        runBoundarySpring(from: target, displacement: from - target, velocity: scrollVelocity,
+        // Пружина стартует со скоростью жеста. Оценка скорости протухает,
+        // когда палец замер: событий нет, значение остаётся старым, и после
+        // паузы пружина дёргала ленту. Пауза длиннее 0.1 с обнуляет передачу.
+        let sinceLastEvent = ProcessInfo.processInfo.systemUptime - lastScrollTimestamp
+        let releaseVelocity = sinceLastEvent < 0.1 ? scrollVelocity : 0
+        runBoundarySpring(from: target, displacement: from - target, velocity: releaseVelocity,
                           onDone: { [weak self] in
             guard let self else { return }
             self.detent.sync(with: self.scrollModel)
@@ -1035,19 +1032,24 @@ final class ThumbnailManager {
     /// кадр. Перед вызовом прыжок модели уже переложен в `detentDip` —
     /// пружина доводит презентацию до нового места с одним перелётом, который
     /// и есть осадка. Тактильно отвечает трекпад с Force Touch.
-    private func performDetentClick(_ click: TrayDetentModel.Click, spring: Bool) {
-        debugTrayLog("click \(click == .snapIn ? "snapIn" : "release") offset=\(Int(scrollModel.offset)) dip=\(Int(detentDip)) spring=\(spring)")
+    /// Профиль догона подачи: под пальцем — короткий и без перелёта, на
+    /// инерции — длиннее и с лёгкой осадкой.
+    enum DipProfile {
+        case underFinger
+        case inertia
+    }
+
+    private func performDetentClick(_ click: TrayDetentModel.Click, profile: DipProfile) {
+        debugTrayLog("click \(click == .snapIn ? "snapIn" : "release") offset=\(Int(scrollModel.offset)) dip=\(Int(detentDip)) profile=\(profile == .underFinger ? "палец" : "инерция")")
         performDetentHaptic(click)
-        guard spring, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
             detentDip = 0
             applyScrollOffset()
             return
         }
-        runDetentSpring()
+        runDetentSpring(profile: profile)
     }
 
-    /// Щелчок в трекпад напрямую: публичный `NSHapticFeedbackManager` из
-    /// фонового `.accessory`-приложения молчит (см. `TrayHaptics`).
     private func performDetentHaptic(_ click: TrayDetentModel.Click) {
         TrayHaptics.logSink = { [weak self] line in self?.debugTrayLog("haptics: \(line)") }
         TrayHaptics.shared.click(click == .snapIn ? .firm : .light, device: gestureDevice)
@@ -1057,7 +1059,7 @@ final class ThumbnailManager {
     /// видимый перелёт (~16% пути) — у входа он уходит глубже упора (осадка),
     /// у выхода — наружу (отдача). Живёт своим аниматором: события жеста её
     /// не отменяют, повторный щелчок перезапускает от текущей подачи.
-    private func runDetentSpring() {
+    private func runDetentSpring(profile: DipProfile) {
         let d0 = detentDip
         guard abs(d0) > 0.5 else {
             detentDip = 0
@@ -1066,30 +1068,47 @@ final class ThumbnailManager {
         }
         detentDipAnimator.cancel()
         detentDipAnimating = true
-        let duration: CGFloat = 0.34
-        let zeta: CGFloat = 0.5
-        let omega = 6 / (zeta * duration)
-        let omegaD = omega * (1 - zeta * zeta).squareRoot()
-        detentDipAnimator.run(duration: duration, onFrame: { [weak self] progress in
-            guard let self else { return }
-            let t = progress * duration
-            let decay = exp(-zeta * omega * t)
-            let phase = cos(omegaD * t) + (zeta * omega / omegaD) * sin(omegaD * t)
-            self.detentDip = d0 * decay * phase
-            self.applyScrollOffset()
-        }, onDone: { [weak self] in
-            guard let self else { return }
-            self.detentDipAnimating = false
-            self.detentDip = 0
-            self.applyScrollOffset()
-        })
+        switch profile {
+        case .underFinger:
+            // Аддитивный догон по скиллу: модель прыгнула мгновенно, глаз
+            // видит непрерывное движение — разница затухает за ~120 мс,
+            // критическое демпфирование, без перелёта. Палец при этом ведёт
+            // модель, догон только складывается сверху.
+            let duration: CGFloat = 0.12
+            let omega: CGFloat = 6 / duration
+            detentDipAnimator.run(duration: duration, onFrame: { [weak self] progress in
+                guard let self else { return }
+                let t = progress * duration
+                self.detentDip = d0 * (1 + omega * t) * exp(-omega * t)
+                self.applyScrollOffset()
+            }, onDone: { [weak self] in
+                guard let self else { return }
+                self.detentDipAnimating = false
+                self.detentDip = 0
+                self.applyScrollOffset()
+            })
+        case .inertia:
+            // Недодемпфированная подача с одним перелётом ~16% — осадка.
+            let duration: CGFloat = 0.34
+            let zeta: CGFloat = 0.5
+            let omega = 6 / (zeta * duration)
+            let omegaD = omega * (1 - zeta * zeta).squareRoot()
+            detentDipAnimator.run(duration: duration, onFrame: { [weak self] progress in
+                guard let self else { return }
+                let t = progress * duration
+                let decay = exp(-zeta * omega * t)
+                let phase = cos(omegaD * t) + (zeta * omega / omegaD) * sin(omegaD * t)
+                self.detentDip = d0 * decay * phase
+                self.applyScrollOffset()
+            }, onDone: { [weak self] in
+                guard let self else { return }
+                self.detentDipAnimating = false
+                self.detentDip = 0
+                self.applyScrollOffset()
+            })
+        }
     }
 
-    /// Файловый журнал трея по требованию: `QUICKSHOT_LOG_TRAY=1`. Уровень
-    /// info в os_log не долетает до `log show`, а живые прогоны запрещены —
-    /// диагностика идёт в файл `~/Library/Logs/QuickShot-tray.log`. Именно он
-    /// и распутал историю с актуатором (`TR-29`), поэтому остаётся в коде,
-    /// но выключенным: в обычном запуске диск не трогается.
     nonisolated private static let trayLogEnabled =
         ProcessInfo.processInfo.environment["QUICKSHOT_LOG_TRAY"] == "1"
 

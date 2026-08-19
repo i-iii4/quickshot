@@ -377,10 +377,10 @@ struct TrayDetentModel: Equatable {
     /// Сырой ход пальца, вырывающий ленту из защёлки.
     static let escape: CGFloat = 120
     /// Знаменатель страгивания при удержании: собранная лента подаётся на
-    /// strain/holdTension, но не дальше holdGive — видно, что она
-    /// сопротивляется, а не медленно едет.
+    /// strain/holdTension — непрерывно, без потолка: насыщение создавало
+    /// мёртвую зону, где глаз не видел прогресса, и срыв читался взрывом
+    /// (аудит анимации 19.08.2026).
     static let holdTension: CGFloat = 6
-    static let holdGive: CGFloat = zone / 4
 
     enum Click: Equatable {
         case snapIn
@@ -507,8 +507,7 @@ struct TrayDetentModel: Equatable {
             next.offset = maxOffset - Self.effectiveZone(for: next)
             return (next, .release)
         }
-        next.offset = maxOffset - min(strain / Self.holdTension,
-                                      Self.effectiveZone(for: next) / 4)
+        next.offset = maxOffset - strain / Self.holdTension
         return (next, nil)
     }
 }
