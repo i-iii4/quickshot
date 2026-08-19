@@ -310,3 +310,122 @@ enum TrayStripLayout {
                             hidden: false)
     }
 }
+
+/// Защёлка полного сбора (`TR-29`): вход и выход из собранной стопки проходят
+/// точку напряжения — как ход клавиши или крышка шкатулки: сопротивление
+/// растёт, проскок, щелчок, встала на место.
+///
+/// Вход: в последних `zone` pt хода лента идёт медленнее пальца в `tension`
+/// раз, и когда до упора остаётся меньше `snapRemainder`, проскакивает домой
+/// одним кадром. Выход: собранная лента сперва держится — страгивается лишь на
+/// `strain / tension` — и, накопив `escape` сырого хода, вырывается прыжком к
+/// началу зоны. Модель чистая: дельты жеста входят, наружу выходят новое
+/// смещение и факт щелчка; тактильный и визуальный отклик — дело менеджера.
+struct TrayDetentModel: Equatable {
+    /// Зона напряжения перед упором, pt хода ленты.
+    static let zone: CGFloat = 24
+    /// Порог проскока: осталось меньше — защёлкивает домой.
+    static let snapRemainder: CGFloat = 9
+    /// Насколько лента медленнее пальца в зоне напряжения.
+    static let tension: CGFloat = 3
+    /// Сырой ход пальца, вырывающий ленту из защёлки.
+    static let escape: CGFloat = 30
+
+    enum Click: Equatable {
+        case snapIn
+        case release
+    }
+
+    /// Лента стоит в защёлке: собрана до упора.
+    private(set) var engaged = false
+    /// Накопленный сырой ход побега из защёлки.
+    private(set) var strain: CGFloat = 0
+
+    /// Короткой ленте защёлка не положена: зона съела бы весь ход.
+    static func fits(_ model: TrayScrollModel) -> Bool {
+        model.maximumOffset > zone * 2
+    }
+
+    /// Синхронизация после программной установки смещения: защёлка следует за
+    /// фактом, без щелчка.
+    mutating func sync(with model: TrayScrollModel) {
+        engaged = Self.fits(model) && model.offset >= model.maximumOffset - 0.5
+        strain = 0
+    }
+
+    /// Прогон одной дельты жеста через защёлку.
+    mutating func apply(delta: CGFloat,
+                        to model: TrayScrollModel) -> (model: TrayScrollModel, click: Click?) {
+        guard Self.fits(model) else {
+            let next = model.scrolled(by: delta)
+            sync(with: next)
+            return (next, nil)
+        }
+        return engaged ? applyEngaged(delta: delta, to: model)
+                       : applyFree(delta: delta, to: model)
+    }
+
+    /// Куда осесть ленте, если жест замер в зоне напряжения: защёлка не
+    /// оставляет ленту на скате — либо дожимает домой, либо выпускает к началу
+    /// зоны. Вне зоны решает обычный `settled()`.
+    func settleTarget(for model: TrayScrollModel) -> CGFloat? {
+        guard !engaged, Self.fits(model) else { return nil }
+        let zoneStart = model.maximumOffset - Self.zone
+        guard model.offset > zoneStart + 0.5, model.offset < model.maximumOffset else { return nil }
+        return model.offset >= zoneStart + Self.zone / 3 ? model.maximumOffset : zoneStart
+    }
+
+    private mutating func applyFree(delta: CGFloat,
+                                    to model: TrayScrollModel) -> (model: TrayScrollModel, click: Click?) {
+        var next = model
+        let zoneStart = next.maximumOffset - Self.zone
+        guard delta > 0, next.offset + delta > zoneStart else {
+            // Вне зоны или движение от упора: до щелчка выход свободен, жест
+            // легко отменяется — сопротивление только в сторону сбора.
+            next = next.scrolled(by: delta)
+            return (next, nil)
+        }
+        // Часть дельты до зоны — один к одному, остаток — через натяжение.
+        let before = max(0, zoneStart - next.offset)
+        let tensioned = (delta - before) / Self.tension
+        let candidate = max(next.offset, zoneStart) + tensioned
+        if candidate >= next.maximumOffset - Self.snapRemainder {
+            next.offset = next.maximumOffset
+            engaged = true
+            strain = 0
+            return (next, .snapIn)
+        }
+        next.offset = candidate
+        return (next, nil)
+    }
+
+    private mutating func applyEngaged(delta: CGFloat,
+                                       to model: TrayScrollModel) -> (model: TrayScrollModel, click: Click?) {
+        var next = model
+        let maxOffset = next.maximumOffset
+        if delta >= 0 {
+            // Глубже в упор — обычная резинка за краем (`TR-13`).
+            strain = 0
+            next = next.scrolled(by: delta)
+            return (next, nil)
+        }
+        if next.offset > maxOffset {
+            // Сначала вернуться из перетяга; излишек дельты идёт в побег.
+            let back = max(delta, maxOffset - next.offset)
+            next.offset += back
+            let rest = delta - back
+            if rest < -0.001 { return applyEngaged(delta: rest, to: next) }
+            return (next, nil)
+        }
+        strain += -delta
+        if strain >= Self.escape {
+            // Вырвалась: накопленное напряжение выпускается одним прыжком.
+            engaged = false
+            strain = 0
+            next.offset = maxOffset - Self.zone
+            return (next, .release)
+        }
+        next.offset = maxOffset - strain / Self.tension
+        return (next, nil)
+    }
+}

@@ -102,6 +102,13 @@ final class ThumbnailManager {
     private var stackOrderApplied: [ObjectIdentifier] = []
     private var scrollSettleAnimating = false
     private lazy var scrollSettleAnimator = CollectionProgressAnimator(hostView: hostContent)
+    /// Защёлка полного сбора (`TR-29`): вход и выход из стопки через точку
+    /// напряжения со щелчком.
+    private var detent = TrayDetentModel()
+    /// Кадровая добавка осадки защёлки поверх смещения: раскладка читает её на
+    /// каждом кадре, поэтому события жеста осадку не смазывают.
+    private var detentDip: CGFloat = 0
+    private lazy var detentDipAnimator = CollectionProgressAnimator(hostView: hostContent)
 
     /// Уровень трея в покое: выше обычных окон, но НИЖЕ системных
     /// поверхностей. На `.statusBar` карточки перекрывали Центр уведомлений.
@@ -782,7 +789,17 @@ final class ThumbnailManager {
         // хабу. Обратный знак разворачивал ленту против жеста. Жест никогда не
         // прячет и не показывает трей — это делает только клик по кнопке;
         // перетягивание за край лишь пружинит и возвращается.
-        scrollModel = scrollModel.scrolled(by: delta, rubberBand: hasPhases)
+        if hasPhases {
+            // `TR-29`: дельты жеста идут через защёлку — у полного сбора лента
+            // проходит точку напряжения и защёлкивается со щелчком.
+            let result = detent.apply(delta: delta, to: scrollModel)
+            scrollModel = result.model
+            if let click = result.click { performDetentClick(click) }
+        } else {
+            // Колесо шагает дискретно: защёлка следует за фактом без щелчка.
+            scrollModel = scrollModel.scrolled(by: delta, rubberBand: false)
+            detent.sync(with: scrollModel)
+        }
 
         applyScrollOffset()
 
@@ -801,9 +818,16 @@ final class ThumbnailManager {
     /// ease-out — лента отвечает движением, как системный rubber-band.
     private func settleScrollAnimated() {
         let from = scrollModel.offset
-        let target = scrollModel.settled().offset
+        // `TR-29`: жест, замерший в зоне напряжения, не оставляет ленту на
+        // скате — защёлка дожимает её домой (со щелчком при посадке) либо
+        // выпускает к началу зоны.
+        let detentTarget = detent.settleTarget(for: scrollModel)
+        let target = detentTarget ?? scrollModel.settled().offset
+        let clickOnLanding: TrayDetentModel.Click? =
+            detentTarget != nil && target >= scrollModel.maximumOffset - 0.5 ? .snapIn : nil
         guard abs(target - from) > 0.5 else {
             scrollModel.offset = target
+            detent.sync(with: scrollModel)
             applyScrollOffset()
             return
         }
@@ -817,6 +841,34 @@ final class ThumbnailManager {
             guard let self else { return }
             self.scrollSettleAnimating = false
             self.scrollModel.offset = target
+            self.detent.sync(with: self.scrollModel)
+            self.applyScrollOffset()
+            if let clickOnLanding { self.performDetentClick(clickOnLanding) }
+        })
+    }
+
+    /// Щелчок защёлки (`TR-29`): тактильный отклик и визуальная осадка в один
+    /// кадр — причина и ощущение обязаны совпасть. Тактильно отвечает трекпад
+    /// с Force Touch; без него остаётся визуальное тело щелчка.
+    private func performDetentClick(_ click: TrayDetentModel.Click) {
+        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+        guard click == .snapIn,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        runDetentDip()
+    }
+
+    /// Микро-осадка: стопка на миг уходит на пару точек глубже упора и
+    /// отпружинивает — визуальное тело щелчка. У выхода из защёлки своё тело —
+    /// прыжок к началу зоны, ему осадка не нужна.
+    private func runDetentDip() {
+        detentDipAnimator.cancel()
+        detentDipAnimator.run(duration: 0.16, onFrame: { [weak self] progress in
+            guard let self else { return }
+            self.detentDip = 3.5 * sin(progress * .pi)
+            self.applyScrollOffset()
+        }, onDone: { [weak self] in
+            guard let self else { return }
+            self.detentDip = 0
             self.applyScrollOffset()
         })
     }
@@ -1240,17 +1292,18 @@ final class ThumbnailManager {
     }
 
     /// Собрать ленту в стопку у кнопки.
-    private func gatherStackAtHub() { animateScroll(to: scrollModel.maximumOffset) }
+    private func gatherStackAtHub() { animateScroll(to: scrollModel.maximumOffset, detentClick: .snapIn) }
 
     /// Программная прокрутка тем же пружинным возвратом, что и жест:
     /// отдельной кривой у программного сбора нет (`TR-26`).
-    private func animateScroll(to target: CGFloat) {
+    private func animateScroll(to target: CGFloat, detentClick: TrayDetentModel.Click? = nil) {
         scrollSettleAnimator.cancel()
         scrollSettleAnimating = false
         scrollGestureActive = false
         let from = scrollModel.offset
         guard abs(target - from) > 0.5 else {
             scrollModel.offset = target
+            detent.sync(with: scrollModel)
             applyScrollOffset()
             return
         }
@@ -1264,7 +1317,9 @@ final class ThumbnailManager {
             guard let self else { return }
             self.scrollSettleAnimating = false
             self.scrollModel.offset = target
+            self.detent.sync(with: self.scrollModel)
             self.applyScrollOffset()
+            if let detentClick { self.performDetentClick(detentClick) }
         })
     }
 
@@ -1485,6 +1540,7 @@ final class ThumbnailManager {
             scrollModel = scrollModel.settled()
         }
         scrollIntent = .none
+        detent.sync(with: scrollModel)
     }
 
     private func resolvedViewportLayout(on screen: NSScreen) -> ThumbnailLayoutResult {
@@ -1506,7 +1562,7 @@ final class ThumbnailManager {
                                          hubSize: geometry.hubSize,
                                          margin: geometry.margin,
                                          gap: ThumbStyle.gap,
-                                         offset: scrollModel.offset,
+                                         offset: scrollModel.offset + detentDip,
                                          menuBarInset: menuBarInset(on: screen))
         }
 
