@@ -109,10 +109,6 @@ final class ThumbnailManager {
     /// каждом кадре, поэтому события жеста осадку не смазывают.
     /// Трекпад, ведущий текущий жест (`TR-29`): щелчок уходит именно в него.
     private var gestureDevice: UInt64?
-    /// Лежат ли пальцы на трекпаде прямо сейчас. Система не выдаёт тактильный
-    /// отклик, когда трекпада не касаются, поэтому щелчок, пришедшийся на
-    /// инерцию, физически срабатывает, но рукой не ощущается.
-    private var fingersOnTrackpad = false
     private var detentDip: CGFloat = 0
     private var detentDipAnimating = false
     private lazy var detentDipAnimator = CollectionProgressAnimator(hostView: hostContent)
@@ -800,7 +796,6 @@ final class ThumbnailManager {
             // Устройство берётся из самого события (`TR-29`). В инерции
             // HID-нагрузки может не быть, поэтому источник запоминается на
             // всё время жеста: защёлка часто срабатывает уже на инерции.
-            fingersOnTrackpad = fingersDown
             if let device = TrayHaptics.shared.device(of: event) {
                 if gestureDevice != device {
                     debugTrayLog("источник жеста: устройство=\(device)")
@@ -932,7 +927,6 @@ final class ThumbnailManager {
     /// фонового `.accessory`-приложения молчит (см. `TrayHaptics`).
     private func performDetentHaptic(_ click: TrayDetentModel.Click) {
         TrayHaptics.logSink = { [weak self] line in self?.debugTrayLog("haptics: \(line)") }
-        debugTrayLog("щелчок при пальцах \(fingersOnTrackpad ? "НА трекпаде" : "СНЯТЫХ (инерция)")")
         TrayHaptics.shared.click(click == .snapIn ? .firm : .light, device: gestureDevice)
     }
 
