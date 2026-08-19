@@ -791,6 +791,7 @@ final class ThumbnailManager {
             // щелчок стоил доли миллисекунды.
             TrayHaptics.logSink = { [weak self] line in self?.debugTrayLog("haptics: \(line)") }
             TrayHaptics.shared.arm()
+            if Self.trayLogEnabled, event.phase == .began { logScrollSource(event) }
             if fingersDown, detentDipAnimating {
                 // `TR-29`: под пальцем позиция принадлежит пальцу. Пружина
                 // щелчка, продолжающая играть во время медленного свайпа,
@@ -958,6 +959,17 @@ final class ThumbnailManager {
     /// но выключенным: в обычном запуске диск не трогается.
     nonisolated private static let trayLogEnabled =
         ProcessInfo.processInfo.environment["QUICKSHOT_LOG_TRAY"] == "1"
+
+    /// Что система рассказывает о ФИЗИЧЕСКОМ источнике жеста: без публичного
+    /// идентификатора устройства выбирать трекпад для отклика приходится по
+    /// касаниям (`TR-29`). Диагностика включается `QUICKSHOT_LOG_TRAY=1`.
+    private func logScrollSource(_ event: NSEvent) {
+        let touches = event.allTouches()
+        let devices = Set(touches.compactMap { $0.device.map { ObjectIdentifier($0 as AnyObject) } })
+        let deviceText = devices.map { String(describing: $0) }.joined(separator: ",")
+        let source = event.cgEvent?.getIntegerValueField(.eventSourceUnixProcessID) ?? -1
+        debugTrayLog("источник жеста: deviceID=\(event.deviceID) касаний=\(touches.count) устройств=\(devices.count) [\(deviceText)] pid=\(source)")
+    }
 
     nonisolated private func debugTrayLog(_ line: String) {
         guard Self.trayLogEnabled else { return }

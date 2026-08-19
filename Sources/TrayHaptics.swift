@@ -88,8 +88,10 @@ final class TrayHaptics: @unchecked Sendable {
     /// не должен (приёмка 19.08.2026).
     private static let touchLock = NSLock()
     nonisolated(unsafe) private static var lastTouch: [UInt64: Date] = [:]
-    /// Насколько свежим считается касание.
-    private static let touchWindow: TimeInterval = 1.5
+    /// Насколько свежим считается касание. Жест прокрутки идёт непрерывным
+    /// потоком кадров, поэтому окно узкое: рука ушла с трекпада — щелчок туда
+    /// больше не адресуется.
+    private static let touchWindow: TimeInterval = 0.3
 
     private static func noteTouch(_ deviceID: UInt64) {
         touchLock.lock()
@@ -97,19 +99,25 @@ final class TrayHaptics: @unchecked Sendable {
         touchLock.unlock()
     }
 
-    private static func touchedRecently(_ deviceID: UInt64) -> Bool {
+    /// Устройство под рукой: тронутое ПОСЛЕДНИМ, один победитель. Окно
+    /// «недавно тронутых» не годится — при переходе с трекпада на трекпад
+    /// старый ещё считался тронутым, и щёлкали оба.
+    private static func activeDevice() -> (id: UInt64, age: TimeInterval)? {
+        touchLock.lock()
+        let snapshot = lastTouch
+        touchLock.unlock()
+        let now = Date()
+        guard let newest = snapshot.max(by: { $0.value < $1.value }) else { return nil }
+        let age = now.timeIntervalSince(newest.value)
+        return age <= touchWindow ? (newest.key, age) : nil
+    }
+
+    /// Возраст последнего касания устройства — для журнала.
+    private static func touchAge(_ deviceID: UInt64) -> TimeInterval? {
         touchLock.lock()
         let stamp = lastTouch[deviceID]
         touchLock.unlock()
-        guard let stamp else { return false }
-        return Date().timeIntervalSince(stamp) <= touchWindow
-    }
-
-    private static func anyTouchKnown() -> Bool {
-        touchLock.lock()
-        let known = lastTouch.values.contains { Date().timeIntervalSince($0) <= touchWindow }
-        touchLock.unlock()
-        return known
+        return stamp.map { Date().timeIntervalSince($0) }
     }
 
     /// Журнал открытий и ударов: единственный способ узнать, дошёл ли импульс
@@ -146,20 +154,21 @@ final class TrayHaptics: @unchecked Sendable {
             arm()
             return false
         }
-        // Бить только по трекпаду под рукой. Пока ни на одном устройстве
-        // касаний не видели (слежение могло не подняться) — бьём по всем,
-        // иначе щелчок пропал бы вовсе.
-        let addressed = Self.anyTouchKnown()
+        // Бить только по трекпаду под рукой. Пока касаний не видели вовсе
+        // (слежение могло не подняться) — бьём по всем, иначе щелчок пропал
+        // бы совсем.
+        let active = Self.activeDevice()
         var report: [String] = []
         var delivered = false
         for handle in current {
-            guard !addressed || Self.touchedRecently(handle.deviceID) else {
-                report.append("\(handle.deviceID)=пропуск")
+            let ageText = Self.touchAge(handle.deviceID).map { String(format: "%.0fмс", $0 * 1000) } ?? "нет"
+            guard active == nil || active?.id == handle.deviceID else {
+                report.append("\(handle.deviceID)=пропуск(касание \(ageText))")
                 continue
             }
             let status = actuate(handle.ref, pulse.rawValue, 0, 0, 0)
             let age = Int(Date().timeIntervalSince(handle.openedAt) * 1000)
-            report.append("\(handle.deviceID)=\(String(format: "0x%x", status))/\(age)мс")
+            report.append("\(handle.deviceID)=\(String(format: "0x%x", status))/\(age)мс(касание \(ageText))")
             if status == 0 { delivered = true }
         }
         Self.logSink?("щелчок волна=\(pulse.rawValue) [\(report.joined(separator: " "))]")
