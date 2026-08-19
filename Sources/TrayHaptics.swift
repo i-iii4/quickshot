@@ -57,7 +57,14 @@ final class TrayHaptics: @unchecked Sendable {
         let ref: UnsafeMutableRawPointer
         let multitouchID: UInt64
         let openedAt: Date
+        /// Сколько стоило открытие. Дешёвое устройство переоткрывается на
+        /// каждый удар, дорогое живёт с удержанной сессией.
+        let openCost: TimeInterval
     }
+
+    /// Граница дешевизны открытия. Встроенный трекпад открывается за 7-22 мс,
+    /// внешний по Bluetooth — за 30-500 мс.
+    private static let cheapOpen: TimeInterval = 0.04
 
     private let queue = DispatchQueue(label: "io.quickshot.haptics", qos: .userInitiated)
     private let lock = NSLock()
@@ -177,37 +184,63 @@ final class TrayHaptics: @unchecked Sendable {
     /// Щелчок в заданный трекпад. Без устройства (событие не принесло
     /// источник) импульс идёт во все — лучше щелчок не на том трекпаде, чем
     /// тишина.
-    @discardableResult
-    func click(_ pulse: Pulse, device: UInt64?) -> Bool {
+    /// Удар идёт на своём потоке: у дешёвого устройства сессия перед ударом
+    /// открывается заново (удержанная сессия у встроенного трекпада молчит —
+    /// приёмка 19.08.2026), у дорогого бьём по удержанной. Главный поток не
+    /// ждёт ни того, ни другого.
+    func click(_ pulse: Pulse, device: UInt64?) {
+        queue.async { [weak self] in self?.deliver(pulse, device: device) }
+    }
+
+    private func deliver(_ pulse: Pulse, device: UInt64?) {
         lock.lock()
         let current = handles
         let actuate = self.actuate
         lock.unlock()
         guard let actuate, !current.isEmpty else {
-            Self.logSink?("щелчок: дескрипторов нет")
-            arm()
-            return false
+            Self.logSink?("щелчок: сессий нет")
+            openMissing()
+            return
         }
         var report: [String] = []
-        var delivered = false
         for handle in current {
             guard device == nil || device == handle.multitouchID else {
                 report.append("\(handle.multitouchID)=пропуск")
                 continue
             }
-            let status = actuate(handle.ref, pulse.rawValue, 0, 0, 0)
-            let age = Int(Date().timeIntervalSince(handle.openedAt) * 1000)
+            // Дешёвое устройство бьётся по свежей сессии — ровно так, как это
+            // делает эталонная утилита, у которой встроенный трекпад щёлкает.
+            let target = handle.openCost <= Self.cheapOpen ? reopen(handle) ?? handle : handle
+            let status = actuate(target.ref, pulse.rawValue, 0, 0, 0)
+            let age = Int(Date().timeIntervalSince(target.openedAt) * 1000)
             report.append("\(handle.multitouchID)=\(String(format: "0x%x", status))/\(age)мс")
-            if status == 0 {
-                delivered = true
-            } else {
-                // Единственный законный повод переоткрыть сессию.
-                dropHandle(handle.multitouchID)
-            }
+            if status != 0 { dropHandle(handle.multitouchID) }
         }
         Self.logSink?("щелчок волна=\(pulse.rawValue) устройство=\(device.map(String.init) ?? "все") [\(report.joined(separator: " "))]")
-        arm()
-        return delivered
+    }
+
+    /// Закрыть сессию и открыть заново — соблюдая правило «один дескриптор на
+    /// устройство»: сначала закрытие, потом открытие.
+    private func reopen(_ handle: Handle) -> Handle? {
+        lock.lock()
+        let create = self.create
+        let open = self.open
+        let close = self.close
+        handles.removeAll { $0.multitouchID == handle.multitouchID }
+        lock.unlock()
+        _ = close?(handle.ref)
+        guard let create, let open,
+              let actuatorRef = create(handle.multitouchID)?.takeRetainedValue() else { return nil }
+        let holder = actuatorRef as AnyObject
+        let ref = unsafeBitCast(holder, to: UnsafeMutableRawPointer.self)
+        let t0 = Date()
+        guard open(ref, 0) == 0 else { return nil }
+        let fresh = Handle(holder: holder, ref: ref, multitouchID: handle.multitouchID,
+                           openedAt: Date(), openCost: Date().timeIntervalSince(t0))
+        lock.lock()
+        handles.append(fresh)
+        lock.unlock()
+        return fresh
     }
 
     /// Закрыть и забыть сессию устройства: следующий `arm()` откроет её
@@ -251,7 +284,9 @@ final class TrayHaptics: @unchecked Sendable {
             let cost = Int(Date().timeIntervalSince(t0) * 1000)
             report.append("\(multitouchID)=\(String(format: "0x%x", status))/\(cost)мс")
             guard status == 0 else { continue }
-            opened.append(Handle(holder: holder, ref: ref, multitouchID: multitouchID, openedAt: Date()))
+            opened.append(Handle(holder: holder, ref: ref, multitouchID: multitouchID,
+                                 openedAt: Date(),
+                                 openCost: Date().timeIntervalSince(t0)))
         }
         lock.lock()
         handles.append(contentsOf: opened)
