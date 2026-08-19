@@ -482,10 +482,14 @@ fn designTokens(model: *const Model) canvas.DesignTokens {
         tokens.controls.button_secondary.pressed_background = canvas.Color.rgb8(82, 82, 82);
     }
     if (model.surface == .thumbnail_dismiss) {
-        tokens.controls.button_destructive.background = canvas.Color.rgb8(255, 100, 103);
-        tokens.controls.button_destructive.hover_background = canvas.Color.rgb8(228, 78, 81);
-        tokens.controls.button_destructive.active_background = canvas.Color.rgb8(201, 60, 63);
-        tokens.controls.button_destructive.pressed_background = canvas.Color.rgb8(201, 60, 63);
+        // Штатный destructive — красная ПОДЛОЖКА в 10% альфы с красной
+        // иконкой. Сплошная красная заливка вместо неё превращала кнопку в
+        // красный блок. Здесь тот же тихий характер, но непрозрачный: фон
+        // как у копирования, красным остаётся сама иконка.
+        tokens.controls.button_destructive.background = canvas.Color.rgb8(38, 38, 38);
+        tokens.controls.button_destructive.hover_background = canvas.Color.rgb8(64, 64, 64);
+        tokens.controls.button_destructive.active_background = canvas.Color.rgb8(82, 82, 82);
+        tokens.controls.button_destructive.pressed_background = canvas.Color.rgb8(82, 82, 82);
     }
     return tokens;
 }
