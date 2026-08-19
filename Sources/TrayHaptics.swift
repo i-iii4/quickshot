@@ -52,9 +52,6 @@ final class TrayHaptics: @unchecked Sendable {
     private typealias CopyIOHIDEventFn = @convention(c) (CGEvent) -> Unmanaged<CFTypeRef>?
     private typealias EventSenderIDFn = @convention(c) (CFTypeRef) -> UInt64
 
-    /// Дескриптор устаревает — переоткрываем при следующем `arm()`.
-    private static let freshness: TimeInterval = 1.5
-
     private struct Handle {
         let holder: AnyObject
         let ref: UnsafeMutableRawPointer
@@ -65,7 +62,6 @@ final class TrayHaptics: @unchecked Sendable {
     private let queue = DispatchQueue(label: "io.quickshot.haptics", qos: .userInitiated)
     private let lock = NSLock()
     private var handles: [Handle] = []
-    private var openedAt = Date.distantPast
     private var refreshing = false
     /// Соответствие «узел реестра → устройство multitouch». Строится публичным
     /// IOKit, обновляется при неизвестном отправителе (подключили трекпад).
@@ -158,16 +154,24 @@ final class TrayHaptics: @unchecked Sendable {
 
     // MARK: щелчок
 
-    /// Приготовиться: открыть дескрипторы, если устарели. Открытие внешнего
-    /// трекпада по Bluetooth стоит десятки миллисекунд, поэтому идёт в фоне.
+    /// Приготовиться: открыть недостающие сессии. Открытых НЕ трогаем.
+    ///
+    /// Переоткрытие по таймеру было моей самодеятельностью и стоило функции:
+    /// сессия, переоткрытая под лежащим пальцем, у встроенного трекпада
+    /// молчит — система в этот момент пользуется его актуатором сама. Отсюда
+    /// «на встроенном щёлкает один раз, дальше только внешний» (приёмка
+    /// 19.08.2026). Плюс щелчок, попавший в окно между закрытием и открытием,
+    /// терялся вовсе. Сессия открывается один раз и живёт; переоткрывается
+    /// только та, чей удар вернул ошибку.
     func arm() {
         lock.lock()
-        let stale = Date().timeIntervalSince(openedAt) > Self.freshness
+        let missing = knownActuating.isEmpty
+            || handles.count < knownActuating.count
         let busy = refreshing
-        if stale && !busy { refreshing = true }
+        if missing && !busy { refreshing = true }
         lock.unlock()
-        guard stale, !busy else { return }
-        queue.async { [weak self] in self?.refresh() }
+        guard missing, !busy else { return }
+        queue.async { [weak self] in self?.openMissing() }
     }
 
     /// Щелчок в заданный трекпад. Без устройства (событие не принесло
@@ -194,34 +198,48 @@ final class TrayHaptics: @unchecked Sendable {
             let status = actuate(handle.ref, pulse.rawValue, 0, 0, 0)
             let age = Int(Date().timeIntervalSince(handle.openedAt) * 1000)
             report.append("\(handle.multitouchID)=\(String(format: "0x%x", status))/\(age)мс")
-            if status == 0 { delivered = true }
+            if status == 0 {
+                delivered = true
+            } else {
+                // Единственный законный повод переоткрыть сессию.
+                dropHandle(handle.multitouchID)
+            }
         }
         Self.logSink?("щелчок волна=\(pulse.rawValue) устройство=\(device.map(String.init) ?? "все") [\(report.joined(separator: " "))]")
         arm()
         return delivered
     }
 
-    private func refresh() {
+    /// Закрыть и забыть сессию устройства: следующий `arm()` откроет её
+    /// заново. Правило «один открытый дескриптор на устройство» соблюдается —
+    /// сначала закрываем, потом открываем.
+    private func dropHandle(_ multitouchID: UInt64) {
+        lock.lock()
+        let doomed = handles.filter { $0.multitouchID == multitouchID }
+        handles.removeAll { $0.multitouchID == multitouchID }
+        let close = self.close
+        lock.unlock()
+        for handle in doomed { _ = close?(handle.ref) }
+        Self.logSink?("сессия \(multitouchID) закрыта после ошибки")
+    }
+
+    /// Открыть сессии для устройств, у которых их ещё нет. Живые сессии не
+    /// трогаются вовсе.
+    private func openMissing() {
         loadSymbolsIfNeeded()
+        if knownActuating.isEmpty { rebuildDeviceMap() }
         lock.lock()
         let create = self.create
         let open = self.open
-        let close = self.close
-        // Старая сессия закрывается ДО открытия новой: два дескриптора на одно
-        // устройство дают мёртвую сессию на Bluetooth-трекпаде.
-        let previous = handles
-        handles = []
+        let alive = Set(handles.map(\.multitouchID))
         lock.unlock()
-        for handle in previous { _ = close?(handle.ref) }
-
-        if knownActuating.isEmpty { rebuildDeviceMap() }
         guard let create, let open else {
             lock.lock(); refreshing = false; lock.unlock()
             return
         }
-        var fresh: [Handle] = []
+        var opened: [Handle] = []
         var report: [String] = []
-        for multitouchID in knownActuating {
+        for multitouchID in knownActuating where !alive.contains(multitouchID) {
             guard let actuatorRef = create(multitouchID)?.takeRetainedValue() else {
                 report.append("\(multitouchID)=нет актуатора")
                 continue
@@ -233,14 +251,16 @@ final class TrayHaptics: @unchecked Sendable {
             let cost = Int(Date().timeIntervalSince(t0) * 1000)
             report.append("\(multitouchID)=\(String(format: "0x%x", status))/\(cost)мс")
             guard status == 0 else { continue }
-            fresh.append(Handle(holder: holder, ref: ref, multitouchID: multitouchID, openedAt: Date()))
+            opened.append(Handle(holder: holder, ref: ref, multitouchID: multitouchID, openedAt: Date()))
         }
         lock.lock()
-        handles = fresh
-        openedAt = Date()
+        handles.append(contentsOf: opened)
         refreshing = false
+        let total = handles.count
         lock.unlock()
-        Self.logSink?("открыто устройств \(fresh.count): [\(report.joined(separator: " "))]")
+        if !report.isEmpty {
+            Self.logSink?("открыто сессий +\(opened.count) (всего \(total)): [\(report.joined(separator: " "))]")
+        }
     }
 
     private func loadSymbolsIfNeeded() {
