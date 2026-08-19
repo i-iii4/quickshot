@@ -154,18 +154,18 @@ final class TrayHaptics: @unchecked Sendable {
             arm()
             return false
         }
-        // Бить только по трекпаду под рукой. Пока касаний не видели вовсе
-        // (слежение могло не подняться) — бьём по всем, иначе щелчок пропал
-        // бы совсем.
+        // ВРЕМЕННО: импульс идёт во все устройства. Адресный выбор (только
+        // трекпад под рукой) технически работает — журнал это подтвердил, —
+        // но обнажил другое явление: импульс не ощущается именно на том
+        // трекпаде, которого касается рука, и ощущается на лежащем без дела.
+        // Пока явление не изучено, поведение возвращено к рабочему: лучше
+        // щелчок не на том трекпаде, чем тишина (приёмка 19.08.2026).
         let active = Self.activeDevice()
         var report: [String] = []
         var delivered = false
         for handle in current {
             let ageText = Self.touchAge(handle.deviceID).map { String(format: "%.0fмс", $0 * 1000) } ?? "нет"
-            guard active == nil || active?.id == handle.deviceID else {
-                report.append("\(handle.deviceID)=пропуск(касание \(ageText))")
-                continue
-            }
+            _ = active
             let status = actuate(handle.ref, pulse.rawValue, 0, 0, 0)
             let age = Int(Date().timeIntervalSince(handle.openedAt) * 1000)
             report.append("\(handle.deviceID)=\(String(format: "0x%x", status))/\(age)мс(касание \(ageText))")
