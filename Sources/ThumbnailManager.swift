@@ -965,10 +965,14 @@ final class ThumbnailManager {
         if let detentTarget = detent.settleTarget(for: scrollModel) {
             let presented = scrollModel.offset + detentDip
             let home = detentTarget >= scrollModel.maximumOffset - 0.5
+            // Дотяжка недожатого выхода — не новое защёлкивание: щелчок
+            // положен только на переходе состояния, иначе он звучал бы на
+            // каждом коротком недоскролле (`TR-29`).
+            let alreadySeated = detent.engaged
             scrollModel.offset = detentTarget
             detent.sync(with: scrollModel)
             detentDip = presented - detentTarget
-            if home {
+            if home, !alreadySeated {
                 performDetentClick(.snapIn, spring: true)
             } else {
                 runDetentSpring()

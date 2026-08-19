@@ -32,6 +32,7 @@ struct TrayScrollModelTests {
         boundarySpringReturnsWithoutOscillation()
         boundarySpringStaysStillWithoutInput()
         bounceHandoffFiresOnlyAtRealEdges()
+        abortedEscapeSeatsBackAndKeepsTheDetent()
         detentSlowsInsideTheTensionZone()
         detentSnapsHomeWithAClick()
         detentHoldsAgainstSmallEscape()
@@ -740,6 +741,44 @@ struct TrayScrollModelTests {
         expect(!TrayBoundaryHandoff.shouldBounce(model: short, delta: 20,
                                                  fingersDown: false, isMomentum: false),
                "отскок от колеса")
+    }
+
+    /// Недожатый выход: короткий скролл из защёлки, порог не пройден. Лента
+    /// обязана дотянуться обратно в посадочное место, зацепление — уцелеть,
+    /// а следующий полный выход — дать щелчок. Багом короткий скролл
+    /// оставлял ленту в миллиметре от места и убивал щелчок выхода насовсем.
+    private static func abortedEscapeSeatsBackAndKeepsTheDetent() {
+        var model = TrayScrollModel(contentLength: 600, viewportLength: 400,
+                                    offset: 0, lastCardLength: 100)
+        var detent = TrayDetentModel()
+        model.offset = model.maximumOffset
+        detent.sync(with: model)
+        expect(detent.engaged, "защёлка не зацепилась в исходном состоянии")
+
+        // Короткий недоскролл: порог выхода (escape) не пройден.
+        let result = detent.apply(delta: -(TrayDetentModel.escape / 4), to: model, stretch: true)
+        model = result.model
+        expect(result.click == nil, "недоскролл дал щелчок")
+        expect(model.offset < model.maximumOffset - 0.5, "страгивание не видно")
+
+        // Жест кончился: осадка обязана вернуть ленту в посадочное место.
+        let target = detent.settleTarget(for: model)
+        expect(target == model.maximumOffset,
+               "недожатый выход не дотянут в место: \(String(describing: target))")
+        model.offset = model.maximumOffset
+        detent.sync(with: model)
+        expect(detent.engaged, "зацепление потеряно после дотяжки")
+        // В посадочном месте дотягивать больше нечего.
+        expect(detent.settleTarget(for: model) == nil, "дотяжка зациклилась")
+
+        // Полный выход после этого работает и щёлкает.
+        var click: TrayDetentModel.Click?
+        for _ in 0..<6 where click == nil {
+            let step = detent.apply(delta: -(TrayDetentModel.escape / 3), to: model, stretch: true)
+            model = step.model
+            click = step.click
+        }
+        expect(click == .release, "щелчок выхода умер после недоскролла")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

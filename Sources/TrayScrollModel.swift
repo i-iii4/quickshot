@@ -440,7 +440,15 @@ struct TrayDetentModel: Equatable {
     /// оставляет ленту на скате — либо дожимает домой, либо выпускает к началу
     /// зоны. Вне зоны решает обычный `settled()`.
     func settleTarget(for model: TrayScrollModel) -> CGFloat? {
-        guard !engaged, Self.fits(model) else { return nil }
+        guard Self.fits(model) else { return nil }
+        if engaged {
+            // Недожатый выход: порог не пройден — защёлка дотягивает ленту
+            // обратно в посадочное место. Без этого страгивание оставалось
+            // (карточка зависала в миллиметре от места), а `sync` по этой
+            // позиции сбрасывал зацепление, и щелчок выхода пропадал совсем
+            // (приёмка 19.08.2026).
+            return model.offset < model.maximumOffset - 0.5 ? model.maximumOffset : nil
+        }
         let zone = Self.effectiveZone(for: model)
         let zoneStart = model.maximumOffset - zone
         guard model.offset > zoneStart + 0.5, model.offset < model.maximumOffset else { return nil }
