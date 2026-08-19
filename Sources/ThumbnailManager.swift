@@ -802,6 +802,14 @@ final class ThumbnailManager {
             lastScrollTimestamp = event.timestamp
             momentumHandedToSpring = false
         }
+        // Инерцию, уже переданную пружине границы, не читаем вовсе — и до
+        // общего блока, где события отменяют аниматоры: иначе первое же её
+        // событие глушило саму пружину (`TR-13`). Так же ведёт себя системный
+        // скролл: после передачи границе затухание не применяется.
+        if momentumHandedToSpring, event.momentumPhase != [] {
+            if event.momentumPhase == .ended { momentumHandedToSpring = false }
+            return
+        }
         if hasPhases {
             // Новое событие отменяет отложенный возврат: жест продолжается.
             settleGeneration &+= 1
@@ -837,12 +845,6 @@ final class ThumbnailManager {
         }
 
         guard scrollModel.isScrollable || abs(delta) > 0.01 else { return }
-        // Инерцию, уже переданную пружине границы, дальше не читаем: так же
-        // ведёт себя системный скролл (`TR-13`).
-        if momentumHandedToSpring, event.momentumPhase != [] {
-            if event.momentumPhase == .ended { momentumHandedToSpring = false }
-            return
-        }
         scrollIntent = .none
         // Резинка только у жестов с фазами: колесо упирается в край жёстко.
         // Содержимое идёт за пальцами: положительная дельта двигает карточки к
@@ -857,24 +859,28 @@ final class ThumbnailManager {
             // Растягивает резинку только палец: инерция упирается в край,
             // иначе после отпускания лента продолжает уезжать, а возврат
             // приходит с задержкой (приёмка 19.08.2026).
-            let before = scrollModel.offset
-            let result = detent.apply(delta: delta, to: scrollModel, stretch: fingersDown)
-            scrollModel = result.model
-            trackVelocity(movement: scrollModel.offset - before, at: event.timestamp)
-            // Инерция довезла ленту до края: остаток скорости уходит в пружину
-            // отскока, дальше эта инерция не читается (`TR-13`, случай «а»).
-            if !fingersDown, event.momentumPhase != [],
-               abs(scrollModel.offset - before) < abs(delta) - 0.5,
-               abs(scrollVelocity) > 60 {
-                let boundary = scrollModel.offset
-                let outward = delta > 0 ? abs(scrollVelocity) : -abs(scrollVelocity)
+            // Отскок решается ДО применения дельты, прямой проверкой края:
+            // лента на границе и инерция толкает наружу. Скорость — из
+            // текущего кадра (дельта/время), сглаженная оценка к этому
+            // моменту уже испорчена зажатыми кадрами (`TR-13`).
+            if TrayBoundaryHandoff.shouldBounce(model: scrollModel, delta: delta,
+                                                fingersDown: fingersDown,
+                                                isMomentum: event.momentumPhase != []) {
+                let dt = max(0.001, event.timestamp - lastScrollTimestamp)
+                let outward = delta / CGFloat(dt)
+                lastScrollTimestamp = event.timestamp
                 momentumHandedToSpring = true
+                let boundary = scrollModel.offset
                 runBoundarySpring(from: boundary, displacement: 0, velocity: outward) { [weak self] in
                     guard let self else { return }
                     self.detent.sync(with: self.scrollModel)
                 }
                 return
             }
+            let before = scrollModel.offset
+            let result = detent.apply(delta: delta, to: scrollModel, stretch: fingersDown)
+            scrollModel = result.model
+            trackVelocity(movement: scrollModel.offset - before, at: event.timestamp)
             if let click = result.click {
                 if fingersDown {
                     // Под пальцем защёлка ведёт себя как настоящая: короткий
@@ -908,9 +914,13 @@ final class ThumbnailManager {
             settleScrollAnimated()
         } else if (event.phase == .ended || event.phase == .cancelled),
                   abs(scrollModel.overshoot) > 0.5 {
-            // Отпустили за краем — возвращаем немедленно, ждать инерцию
-            // незачем: растягивать её больше нечем.
+            // Отпустили за краем: пружина возврата стартует со скоростью
+            // жеста, а вся последующая инерция игнорируется — иначе её
+            // события отменяли пружину и схлопывали растяжение телепортом.
+            // Системный скролл после отпускания за краем инерцию тоже не
+            // читает (`TR-13`).
             scrollGestureActive = false
+            momentumHandedToSpring = true
             settleScrollAnimated()
         } else if event.phase == .ended || event.phase == .cancelled {
             // Пальцы сняты, но следом может пойти инерция. Возврат из-за края

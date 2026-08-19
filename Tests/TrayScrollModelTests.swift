@@ -31,6 +31,7 @@ struct TrayScrollModelTests {
         boundarySpringBouncesProportionallyToSpeed()
         boundarySpringReturnsWithoutOscillation()
         boundarySpringStaysStillWithoutInput()
+        bounceHandoffFiresOnlyAtRealEdges()
         detentSlowsInsideTheTensionZone()
         detentSnapsHomeWithAClick()
         detentHoldsAgainstSmallEscape()
@@ -692,6 +693,53 @@ struct TrayScrollModelTests {
             let value = TrayBoundarySpring.offset(displacement: 0, velocity: 0, time: t)
             expect(abs(value) < 0.001, "пружина двинулась без входа: \(value)")
         }
+    }
+
+    /// Таблица передачи инерции пружине: только настоящий край, никогда —
+    /// зона защёлки. Косвенный признак «сдвиг меньше дельты» глушил бросок к
+    /// сбору посреди зоны натяжения.
+    private static func bounceHandoffFiresOnlyAtRealEdges() {
+        var strip = TrayScrollModel(contentLength: 1000, viewportLength: 600,
+                                    offset: 0, lastCardLength: 150)
+        // Свободный край, инерция наружу — отскок.
+        expect(TrayBoundaryHandoff.shouldBounce(model: strip, delta: -20,
+                                                fingersDown: false, isMomentum: true),
+               "нет отскока на свободном крае")
+        // Тот же край, но пальцы на трекпаде — растягивает резинка, не пружина.
+        expect(!TrayBoundaryHandoff.shouldBounce(model: strip, delta: -20,
+                                                 fingersDown: true, isMomentum: false),
+               "отскок под пальцем")
+        // Инерция внутрь хода — никакой передачи.
+        expect(!TrayBoundaryHandoff.shouldBounce(model: strip, delta: 20,
+                                                 fingersDown: false, isMomentum: true),
+               "отскок при движении внутрь хода")
+        // Середина хода — никакой передачи.
+        strip.offset = 300
+        expect(!TrayBoundaryHandoff.shouldBounce(model: strip, delta: -20,
+                                                 fingersDown: false, isMomentum: true),
+               "отскок посреди хода")
+        // Зона защёлки: лента идёт медленнее дельт, но это НЕ край.
+        strip.offset = strip.maximumOffset - TrayDetentModel.effectiveZone(for: strip) / 2
+        expect(!TrayBoundaryHandoff.shouldBounce(model: strip, delta: 20,
+                                                 fingersDown: false, isMomentum: true),
+               "отскок в зоне защёлки — бросок к сбору глохнет")
+        // Дальний край с защёлкой — конец хода принадлежит защёлке.
+        strip.offset = strip.maximumOffset
+        expect(!TrayBoundaryHandoff.shouldBounce(model: strip, delta: 20,
+                                                 fingersDown: false, isMomentum: true),
+               "отскок на краю защёлки")
+        // Дальний край короткой ленты без защёлки — отскок положен.
+        var short = TrayScrollModel(contentLength: 130, viewportLength: 600,
+                                    offset: 0, lastCardLength: 100)
+        short.offset = short.maximumOffset
+        expect(!TrayDetentModel.fits(short), "короткая лента получила защёлку")
+        expect(TrayBoundaryHandoff.shouldBounce(model: short, delta: 20,
+                                                fingersDown: false, isMomentum: true),
+               "нет отскока на дальнем крае без защёлки")
+        // Колесо (не инерция) — жёсткий упор, без пружин.
+        expect(!TrayBoundaryHandoff.shouldBounce(model: short, delta: 20,
+                                                 fingersDown: false, isMomentum: false),
+               "отскок от колеса")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
