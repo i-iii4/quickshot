@@ -308,7 +308,7 @@ final class ThumbnailManager {
         if entered {
             // Рука подошла к трею — самое время разбудить актуатор внешнего
             // трекпада: его открытие занимает сотни миллисекунд (`TR-29`).
-            TrayHaptics.shared.prepare()
+            TrayHaptics.shared.arm()
             cancelHoverExit()
             if collapsedPeekItem === thumbnail { cancelCollapsedPeekDismiss() }
             if !trayHoverActive, collapsedPeekItem == nil {
@@ -789,7 +789,8 @@ final class ThumbnailManager {
             // Открытие актуатора внешнего трекпада стоит сотни миллисекунд
             // (Bluetooth): готовим дескриптор в фоне заранее, чтобы сам
             // щелчок стоил доли миллисекунды.
-            TrayHaptics.shared.prepare()
+            TrayHaptics.logSink = { [weak self] line in self?.debugTrayLog("haptics: \(line)") }
+            TrayHaptics.shared.arm()
             if fingersDown, detentDipAnimating {
                 // `TR-29`: под пальцем позиция принадлежит пальцу. Пружина
                 // щелчка, продолжающая играть во время медленного свайпа,
@@ -816,6 +817,7 @@ final class ThumbnailManager {
             // `TR-29`: дельты жеста идут через защёлку — у полного сбора лента
             // проходит точку напряжения и защёлкивается со щелчком.
             let presented = scrollModel.offset + detentDip
+            if TrayDetentModel.isNearDetent(scrollModel) { TrayHaptics.shared.arm() }
             let result = detent.apply(delta: delta, to: scrollModel)
             scrollModel = result.model
             if let click = result.click {
@@ -913,8 +915,8 @@ final class ThumbnailManager {
     /// Щелчок в трекпад напрямую: публичный `NSHapticFeedbackManager` из
     /// фонового `.accessory`-приложения молчит (см. `TrayHaptics`).
     private func performDetentHaptic(_ click: TrayDetentModel.Click) {
-        let delivered = TrayHaptics.shared.click(click == .snapIn ? .firm : .light)
-        debugTrayLog("haptic \(click == .snapIn ? "firm" : "light") delivered=\(delivered)")
+        TrayHaptics.logSink = { [weak self] line in self?.debugTrayLog("haptics: \(line)") }
+        TrayHaptics.shared.click(click == .snapIn ? .firm : .light)
     }
 
     /// Пружинная подача `detentDip` к нулю: недодемпфированная пружина, один
@@ -951,7 +953,7 @@ final class ThumbnailManager {
 
     /// Временный файловый журнал защёлки: уровень info в os_log не долетает
     /// до `log show`, а живые прогоны запрещены — диагностика по файлу.
-    private func debugTrayLog(_ line: String) {
+    nonisolated private func debugTrayLog(_ line: String) {
         let path = NSHomeDirectory() + "/Library/Logs/QuickShot-tray.log"
         let stamp = ISO8601DateFormatter().string(from: Date())
         let entry = "\(stamp) \(line)\n"

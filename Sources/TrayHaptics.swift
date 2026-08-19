@@ -45,12 +45,14 @@ final class TrayHaptics: @unchecked Sendable {
     /// известному смещению: штатный `MTDeviceGetDeviceID` на Apple Silicon
     /// имеет нестабильное соглашение вызова.
     private static let deviceIDOffset = 64
-    /// Дескриптор старше этого срока считается протухшим.
-    private static let freshness: TimeInterval = 2
+    /// Дескриптор старше этого срока обновляется при следующем `arm()`.
+    private static let freshness: TimeInterval = 1.5
 
     private struct Handle {
         let holder: AnyObject
         let ref: UnsafeMutableRawPointer
+        let deviceID: UInt64
+        let openedAt: Date
     }
 
     private let queue = DispatchQueue(label: "io.quickshot.haptics", qos: .userInitiated)
@@ -66,12 +68,17 @@ final class TrayHaptics: @unchecked Sendable {
     private var close: ActuatorCloseFn?
     private var loaded = false
 
+    /// Журнал открытий и ударов: единственный способ узнать, дошёл ли импульс
+    /// до конкретного устройства. Код возврата успеха о срабатывании
+    /// актуатора не говорит, но отсутствие устройства в списке — говорит.
+    nonisolated(unsafe) static var logSink: ((String) -> Void)?
+
     private init() {}
 
-    /// Приготовиться к щелчку: обновить дескрипторы, если они устарели.
-    /// Возвращается немедленно — открытие идёт в фоне. Звать там, где рука
-    /// только подходит к делу: наведение на трей, начало жеста.
-    func prepare() {
+    /// Приготовиться к щелчку: обновить дескрипторы, если устарели. Открытие
+    /// внешнего трекпада по Bluetooth стоит сотни миллисекунд, поэтому идёт в
+    /// фоне; вызов возвращается мгновенно.
+    func arm() {
         lock.lock()
         let stale = Date().timeIntervalSince(openedAt) > Self.freshness
         let busy = refreshing
@@ -90,28 +97,46 @@ final class TrayHaptics: @unchecked Sendable {
         let actuate = self.actuate
         lock.unlock()
         guard let actuate, !current.isEmpty else {
+            Self.logSink?("щелчок: дескрипторов нет")
             NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
-            prepare()
+            arm()
             return false
         }
+        var report: [String] = []
         var delivered = false
-        for handle in current where actuate(handle.ref, pulse.rawValue, 0, 0, 0) == 0 {
-            delivered = true
+        for handle in current {
+            let status = actuate(handle.ref, pulse.rawValue, 0, 0, 0)
+            let age = Int(Date().timeIntervalSince(handle.openedAt) * 1000)
+            report.append("\(handle.deviceID)=\(String(format: "0x%x", status))/\(age)мс")
+            if status == 0 { delivered = true }
         }
-        // Следующий щелчок должен застать свежие дескрипторы: за жестом обычно
-        // идёт ещё один.
-        prepare()
+        Self.logSink?("щелчок волна=\(pulse.rawValue) [\(report.joined(separator: " "))]")
+        arm()
         return delivered
     }
 
     private func refresh() {
         loadSymbolsIfNeeded()
-        guard let createList, let create, let open, let close,
+        lock.lock()
+        let createList = self.createList
+        let create = self.create
+        let open = self.open
+        let close = self.close
+        // Старые сессии закрываются ДО открытия новых: два дескриптора на одно
+        // устройство могут конфликтовать за исключительный доступ.
+        let previous = handles
+        handles = []
+        lock.unlock()
+        for handle in previous { _ = close?(handle.ref) }
+
+        guard let createList, let create, let open,
               let list = createList()?.takeRetainedValue() as NSArray? else {
             lock.lock(); refreshing = false; lock.unlock()
+            Self.logSink?("обновление: символы или список устройств недоступны")
             return
         }
         var fresh: [Handle] = []
+        var report: [String] = []
         for element in list {
             let device = unsafeBitCast(element as AnyObject, to: UnsafeMutableRawPointer.self)
             var deviceID: UInt64 = 0
@@ -120,22 +145,25 @@ final class TrayHaptics: @unchecked Sendable {
                     start: device.advanced(by: Self.deviceIDOffset),
                     count: MemoryLayout<UInt64>.size))
             }
-            guard let actuatorRef = create(deviceID)?.takeRetainedValue() else { continue }
+            guard let actuatorRef = create(deviceID)?.takeRetainedValue() else {
+                report.append("\(deviceID)=нет актуатора")
+                continue
+            }
             let holder = actuatorRef as AnyObject
             let ref = unsafeBitCast(holder, to: UnsafeMutableRawPointer.self)
-            // Устройства без актуатора просто не открываются.
-            guard open(ref, 0) == 0 else { continue }
-            fresh.append(Handle(holder: holder, ref: ref))
+            let t0 = Date()
+            let status = open(ref, 0)
+            let cost = Int(Date().timeIntervalSince(t0) * 1000)
+            report.append("\(deviceID)=\(String(format: "0x%x", status))/\(cost)мс")
+            guard status == 0 else { continue }
+            fresh.append(Handle(holder: holder, ref: ref, deviceID: deviceID, openedAt: Date()))
         }
         lock.lock()
-        let previous = handles
         handles = fresh
         openedAt = Date()
         refreshing = false
         lock.unlock()
-        // Старые сессии закрываются ПОСЛЕ подмены: щелчок, пришедший в этот
-        // момент, бьёт по новым дескрипторам, а не по закрываемым.
-        for handle in previous { _ = close(handle.ref) }
+        Self.logSink?("открыто устройств \(fresh.count): [\(report.joined(separator: " "))]")
     }
 
     private func loadSymbolsIfNeeded() {

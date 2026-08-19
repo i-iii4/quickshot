@@ -360,6 +360,13 @@ struct TrayDetentModel: Equatable {
         min(zone, model.maximumOffset * 0.4)
     }
 
+    /// Лента подошла к защёлке: пора будить актуатор трекпада, его открытие
+    /// стоит сотни миллисекунд (`TR-29`).
+    static func isNearDetent(_ model: TrayScrollModel) -> Bool {
+        guard fits(model) else { return false }
+        return model.offset > model.maximumOffset - effectiveZone(for: model) * 2.5
+    }
+
     static func effectiveSnapRemainder(for model: TrayScrollModel) -> CGFloat {
         min(snapRemainder, effectiveZone(for: model) * 0.25)
     }
