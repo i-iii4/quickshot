@@ -8,6 +8,9 @@ struct TrayScrollModelTests {
         fullTravelCollectsEverythingButTheNewest()
         scrollingStaysInsideBounds()
         rubberBandResistsBeyondEdges()
+        rubberBandFollowsTheFingerMonotonically()
+        rubberBandDoesNotDependOnEventSize()
+        rubberBandStaysBounded()
         settlingReturnsIntoBounds()
         revealOffsetShowsTheNewestCard()
         restingStackHasConstantTiers()
@@ -78,13 +81,64 @@ struct TrayScrollModelTests {
         let pulled = model.scrolled(by: -100)
         expect(pulled.offset < 0, "лента идёт за пальцами за край")
         expect(pulled.offset > -100, "но сопротивляется: \(pulled.offset)")
-        expect(abs(pulled.offset + 25) < 0.001, "сопротивление вчетверо; получили \(pulled.offset)")
 
         let atEnd = TrayScrollModel(contentLength: 1000, viewportLength: 600,
                                     offset: 850, lastCardLength: 150)
         let pushed = atEnd.scrolled(by: 100)
         expect(pushed.overshoot > 0 && pushed.overshoot < 200,
                "дальний край тоже пружинит; получили \(pushed.overshoot)")
+    }
+
+    /// Главный инвариант резинки: пока палец идёт в одну сторону, лента
+    /// движется туда же и никогда не пятится. Прежняя формула пересчитывала
+    /// уже сжатое смещение, из-за чего лента ехала назад при замедлении
+    /// пальца — это и читалось как череда дёрганий.
+    private static func rubberBandFollowsTheFingerMonotonically() {
+        var model = TrayScrollModel(contentLength: 1000, viewportLength: 600,
+                                    offset: 0, lastCardLength: 150)
+        var previous = model.offset
+        // Палец идёт равномерно, потом замедляется — позиция обязана
+        // монотонно уходить за край.
+        for delta in [-30.0, -30, -30, -20, -12, -6, -3, -1] {
+            model = model.scrolled(by: delta)
+            expect(model.offset < previous + 0.001,
+                   "лента попятилась при продолжении жеста: \(previous) → \(model.offset)")
+            previous = model.offset
+        }
+        expect(model.offset < -20, "за краем лента почти не сдвинулась: \(model.offset)")
+    }
+
+    /// Один и тот же путь пальца даёт один и тот же результат, независимо от
+    /// того, пришёл он одним событием или дюжиной мелких.
+    private static func rubberBandDoesNotDependOnEventSize() {
+        let base = TrayScrollModel(contentLength: 1000, viewportLength: 600,
+                                   offset: 0, lastCardLength: 150)
+        let oneStep = base.scrolled(by: -120)
+        var manySteps = base
+        for _ in 0..<12 { manySteps = manySteps.scrolled(by: -10) }
+        expect(abs(oneStep.offset - manySteps.offset) < 0.001,
+               "дробление жеста меняет результат: \(oneStep.offset) против \(manySteps.offset)")
+    }
+
+    /// Сколько ни тяни, за край уходит ограниченная величина: упор должен
+    /// читаться пределом, а не уездом ленты за экран.
+    private static func rubberBandStaysBounded() {
+        var model = TrayScrollModel(contentLength: 1000, viewportLength: 600,
+                                    offset: 0, lastCardLength: 150)
+        for _ in 0..<200 { model = model.scrolled(by: -50) }
+        // Асимптота формулы равна самой глубине растяжения.
+        let limit = TrayScrollModel.stretchDepth(600)
+        expect(abs(model.offset) <= limit + 0.001,
+               "растяжение не ограничено: \(model.offset) при пределе \(limit)")
+        expect(abs(model.offset) > limit * 0.8,
+               "при бесконечном жесте резинка должна дойти до предела: \(model.offset)")
+
+        // На реальном жесте (около 200 pt за краем) уход умеренный.
+        var short = TrayScrollModel(contentLength: 1000, viewportLength: 600,
+                                    offset: 0, lastCardLength: 150)
+        for _ in 0..<10 { short = short.scrolled(by: -20) }
+        expect(abs(short.offset) > 20 && abs(short.offset) < 90,
+               "уход за край на обычном жесте вне ожидания: \(short.offset)")
     }
 
     private static func settlingReturnsIntoBounds() {

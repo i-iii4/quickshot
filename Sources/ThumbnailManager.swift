@@ -109,6 +109,9 @@ final class ThumbnailManager {
     /// каждом кадре, поэтому события жеста осадку не смазывают.
     /// Трекпад, ведущий текущий жест (`TR-29`): щелчок уходит именно в него.
     private var gestureDevice: UInt64?
+    /// Поколение отложенного возврата из-за края: новое событие жеста
+    /// обесценивает ранее запланированный возврат.
+    private var settleGeneration = 0
     private var detentDip: CGFloat = 0
     private var detentDipAnimating = false
     private lazy var detentDipAnimator = CollectionProgressAnimator(hostView: hostContent)
@@ -786,6 +789,8 @@ final class ThumbnailManager {
         let fingersDown = event.phase != []
 
         if hasPhases {
+            // Новое событие отменяет отложенный возврат: жест продолжается.
+            settleGeneration &+= 1
             scrollSettleAnimator.cancel()
             scrollSettleAnimating = false
             // Открытие актуатора внешнего трекпада стоит сотни миллисекунд
@@ -858,9 +863,28 @@ final class ThumbnailManager {
             applyScrollOffset()
             return
         }
-        if event.phase == .ended || event.phase == .cancelled || event.momentumPhase == .ended {
+        if event.momentumPhase == .ended {
+            // Инерция кончилась — жест завершён окончательно.
             scrollGestureActive = false
             settleScrollAnimated()
+        } else if event.phase == .ended || event.phase == .cancelled {
+            // Пальцы сняты, но следом может пойти инерция. Возврат из-за края
+            // откладывается: запущенный сразу, он тут же отменялся первым же
+            // событием инерции, которое снова тянуло ленту наружу — старт,
+            // отмена, старт, и это читалось как дёрганье (приёмка 19.08.2026).
+            scrollGestureActive = false
+            scheduleSettleAfterGesture()
+        }
+    }
+
+    /// Отложенный возврат: любое следующее событие жеста или инерции его
+    /// отменяет, потому что поднимает поколение.
+    private func scheduleSettleAfterGesture() {
+        settleGeneration &+= 1
+        let generation = settleGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+            guard let self, self.settleGeneration == generation else { return }
+            self.settleScrollAnimated()
         }
     }
 

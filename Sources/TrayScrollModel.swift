@@ -14,10 +14,34 @@ import Foundation
 struct TrayScrollModel: Equatable {
     var contentLength: CGFloat
     var viewportLength: CGFloat
-    var offset: CGFloat
+    /// Видимое смещение ленты. Любое присваивание извне синхронизирует
+    /// «сырое» смещение: жест начинается с того места, где лента стоит.
+    var offset: CGFloat {
+        didSet { rawOffset = offset }
+    }
+    /// Смещение без сопротивления — сумма пройденного пальцем. Резинка
+    /// считается ОТ НЕГО, а не от уже сжатого значения: пересчёт сжатого
+    /// делал позицию функцией скорости события, а не пройденного пути, из-за
+    /// чего лента замирала при равномерном движении и ехала назад при
+    /// замедлении (приёмка 19.08.2026 — «череда дёрганий»).
+    private(set) var rawOffset: CGFloat = 0
     /// Длина новейшей карточки: полный сбор оставляет её целиком видимой,
     /// поэтому максимальный ход — до её парковки, а не до конца ленты.
     var lastCardLength: CGFloat = 0
+
+    /// Наблюдатели свойств не срабатывают в конструкторе, поэтому сырое
+    /// смещение синхронизируется здесь явно — иначе первый же жест считался
+    /// бы от нуля вместо текущего положения ленты.
+    init(contentLength: CGFloat,
+         viewportLength: CGFloat,
+         offset: CGFloat,
+         lastCardLength: CGFloat = 0) {
+        self.contentLength = contentLength
+        self.viewportLength = viewportLength
+        self.offset = offset
+        self.lastCardLength = lastCardLength
+        self.rawOffset = offset
+    }
 
     /// Максимальный сдвиг: все карточки в стопке, новейшая запаркована низом
     /// на ярусе стопки, целиком видимая. Лента размечена от яруса парковки,
@@ -31,16 +55,35 @@ struct TrayScrollModel: Equatable {
     /// Смещение после жеста с резиновым сопротивлением за краями (`TR-13`).
     func scrolled(by delta: CGFloat, rubberBand: Bool = true) -> TrayScrollModel {
         var next = self
-        let raw = offset + delta
-        if raw < 0 {
-            next.offset = rubberBand ? raw / 4 : 0
-        } else if raw > maximumOffset {
-            let overshoot = raw - maximumOffset
-            next.offset = rubberBand ? maximumOffset + overshoot / 4 : maximumOffset
-        } else {
-            next.offset = raw
-        }
+        let raw = rawOffset + delta
+        let clamped = min(max(0, raw), maximumOffset)
+        // Присваивание offset синхронизирует rawOffset через наблюдатель,
+        // поэтому сырое значение выставляется ПОСЛЕ него.
+        next.offset = rubberBand
+            ? clamped + Self.resisted(raw - clamped, dimension: Self.stretchDepth(viewportLength))
+            : clamped
+        next.rawOffset = rubberBand ? raw : clamped
         return next
+    }
+
+    /// Глубина, на которой резинка насыщается. Полное окно просмотра дало бы
+    /// растяжение в сотни точек — для ленты карточек это уже не упор, а уезд
+    /// содержимого за экран.
+    static func stretchDepth(_ viewportLength: CGFloat) -> CGFloat {
+        max(60, viewportLength * 0.25)
+    }
+
+    /// Сопротивление за краем: чем дальше уведён палец, тем меньше идёт
+    /// лента, но идёт всегда — и всегда в ту же сторону, что и палец.
+    /// Сколько ни тяни, смещение не превысит `dimension` (асимптота формулы),
+    /// поэтому упор ощущается пределом, а не остановкой.
+    static func resisted(_ overshoot: CGFloat,
+                         dimension: CGFloat,
+                         constant: CGFloat = 0.55) -> CGFloat {
+        guard overshoot != 0, dimension > 0 else { return 0 }
+        let magnitude = abs(overshoot)
+        let resistedMagnitude = (magnitude * dimension * constant) / (dimension + constant * magnitude)
+        return overshoot < 0 ? -resistedMagnitude : resistedMagnitude
     }
 
     /// Возврат в границы после отпускания.
