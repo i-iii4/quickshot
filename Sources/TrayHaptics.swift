@@ -45,6 +45,9 @@ final class TrayHaptics: @unchecked Sendable {
     private typealias ActuatorOpenFn = @convention(c) (UnsafeMutableRawPointer, UInt32) -> Int32
     private typealias ActuatorActuateFn = @convention(c) (UnsafeMutableRawPointer, Int32, UInt32, UInt32, UInt32) -> Int32
     private typealias ActuatorCloseFn = @convention(c) (UnsafeMutableRawPointer) -> Int32
+    private typealias ContactCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, Int32, Double, Int32) -> Void
+    private typealias RegisterContactFn = @convention(c) (UnsafeMutableRawPointer, @escaping ContactCallback) -> Void
+    private typealias DeviceStartFn = @convention(c) (UnsafeMutableRawPointer, Int32) -> Void
 
     /// Идентификатор устройства лежит в непрозрачной структуре `MTDevice` по
     /// известному смещению: штатный `MTDeviceGetDeviceID` на Apple Silicon
@@ -71,7 +74,43 @@ final class TrayHaptics: @unchecked Sendable {
     private var open: ActuatorOpenFn?
     private var actuate: ActuatorActuateFn?
     private var close: ActuatorCloseFn?
+    private var registerContact: RegisterContactFn?
+    private var deviceStart: DeviceStartFn?
     private var loaded = false
+    private var watching = false
+    /// Список устройств удерживается живым, пока работает слежение: обратный
+    /// вызов получает указатель на устройство, и освобождение списка сделало
+    /// бы этот указатель висячим — падение вместо щелчка.
+    private var watchedDevices: NSArray?
+
+    /// Когда на устройстве последний раз лежали пальцы. Щёлкать должен тот
+    /// трекпад, что под рукой: лежащий рядом на столе второй трекпад щёлкать
+    /// не должен (приёмка 19.08.2026).
+    private static let touchLock = NSLock()
+    nonisolated(unsafe) private static var lastTouch: [UInt64: Date] = [:]
+    /// Насколько свежим считается касание.
+    private static let touchWindow: TimeInterval = 1.5
+
+    private static func noteTouch(_ deviceID: UInt64) {
+        touchLock.lock()
+        lastTouch[deviceID] = Date()
+        touchLock.unlock()
+    }
+
+    private static func touchedRecently(_ deviceID: UInt64) -> Bool {
+        touchLock.lock()
+        let stamp = lastTouch[deviceID]
+        touchLock.unlock()
+        guard let stamp else { return false }
+        return Date().timeIntervalSince(stamp) <= touchWindow
+    }
+
+    private static func anyTouchKnown() -> Bool {
+        touchLock.lock()
+        let known = lastTouch.values.contains { Date().timeIntervalSince($0) <= touchWindow }
+        touchLock.unlock()
+        return known
+    }
 
     /// Журнал открытий и ударов: единственный способ узнать, дошёл ли импульс
     /// до конкретного устройства. Код возврата успеха о срабатывании
@@ -107,9 +146,17 @@ final class TrayHaptics: @unchecked Sendable {
             arm()
             return false
         }
+        // Бить только по трекпаду под рукой. Пока ни на одном устройстве
+        // касаний не видели (слежение могло не подняться) — бьём по всем,
+        // иначе щелчок пропал бы вовсе.
+        let addressed = Self.anyTouchKnown()
         var report: [String] = []
         var delivered = false
         for handle in current {
+            guard !addressed || Self.touchedRecently(handle.deviceID) else {
+                report.append("\(handle.deviceID)=пропуск")
+                continue
+            }
             let status = actuate(handle.ref, pulse.rawValue, 0, 0, 0)
             let age = Int(Date().timeIntervalSince(handle.openedAt) * 1000)
             report.append("\(handle.deviceID)=\(String(format: "0x%x", status))/\(age)мс")
@@ -150,6 +197,7 @@ final class TrayHaptics: @unchecked Sendable {
                     start: device.advanced(by: Self.deviceIDOffset),
                     count: MemoryLayout<UInt64>.size))
             }
+            startWatching(device: device, deviceID: deviceID)
             guard let actuatorRef = create(deviceID)?.takeRetainedValue() else {
                 report.append("\(deviceID)=нет актуатора")
                 continue
@@ -167,8 +215,40 @@ final class TrayHaptics: @unchecked Sendable {
         handles = fresh
         openedAt = Date()
         refreshing = false
+        if registerContact != nil, deviceStart != nil, !watching {
+            watching = true
+            watchedDevices = list
+        }
         lock.unlock()
         Self.logSink?("открыто устройств \(fresh.count): [\(report.joined(separator: " "))]")
+    }
+
+    /// Поднять слежение за касаниями: система зовёт обратный вызов на каждый
+    /// кадр касаний, по нему и видно, какой трекпад сейчас под рукой.
+    /// Поднимается один раз на процесс — повторный старт устройства ничего не
+    /// даёт, а лишние подписки только грузят систему.
+    private func startWatching(device: UnsafeMutableRawPointer, deviceID: UInt64) {
+        lock.lock()
+        let already = watching
+        let registerContact = self.registerContact
+        let deviceStart = self.deviceStart
+        lock.unlock()
+        guard !already, let registerContact, let deviceStart else { return }
+        // Обратный вызов — сишная функция без контекста, поэтому устройство
+        // опознаётся по тому же смещению в структуре, что и при открытии.
+        let callback: ContactCallback = { device, _, fingers, _, _ in
+            guard fingers > 0, let device else { return }
+            var deviceID: UInt64 = 0
+            withUnsafeMutableBytes(of: &deviceID) { buffer in
+                buffer.copyMemory(from: UnsafeRawBufferPointer(
+                    start: device.advanced(by: TrayHaptics.deviceIDOffset),
+                    count: MemoryLayout<UInt64>.size))
+            }
+            TrayHaptics.noteTouch(deviceID)
+        }
+        registerContact(device, callback)
+        deviceStart(device, 0)
+        Self.logSink?("слежение за касаниями поднято: \(deviceID)")
     }
 
     private func loadSymbolsIfNeeded() {
@@ -181,7 +261,13 @@ final class TrayHaptics: @unchecked Sendable {
               let pOpen = dlsym(lib, "MTActuatorOpen"),
               let pActuate = dlsym(lib, "MTActuatorActuate"),
               let pClose = dlsym(lib, "MTActuatorClose") else { return }
+        let pRegister = dlsym(lib, "MTRegisterContactFrameCallback")
+        let pStart = dlsym(lib, "MTDeviceStart")
         lock.lock()
+        if let pRegister, let pStart {
+            registerContact = unsafeBitCast(pRegister, to: RegisterContactFn.self)
+            deviceStart = unsafeBitCast(pStart, to: DeviceStartFn.self)
+        }
         createList = unsafeBitCast(pCreateList, to: CreateListFn.self)
         create = unsafeBitCast(pCreate, to: ActuatorCreateFn.self)
         open = unsafeBitCast(pOpen, to: ActuatorOpenFn.self)
