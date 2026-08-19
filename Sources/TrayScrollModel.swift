@@ -59,30 +59,30 @@ struct TrayScrollModel: Equatable {
         let clamped = min(max(0, raw), maximumOffset)
         // Присваивание offset синхронизирует rawOffset через наблюдатель,
         // поэтому сырое значение выставляется ПОСЛЕ него.
-        next.offset = rubberBand
-            ? clamped + Self.resisted(raw - clamped, dimension: Self.stretchDepth(viewportLength))
-            : clamped
+        next.offset = rubberBand ? clamped + Self.resisted(raw - clamped) : clamped
         next.rawOffset = rubberBand ? raw : clamped
         return next
     }
 
-    /// Глубина, на которой резинка насыщается. Полное окно просмотра дало бы
-    /// растяжение в сотни точек — для ленты карточек это уже не упор, а уезд
-    /// содержимого за экран.
-    static func stretchDepth(_ viewportLength: CGFloat) -> CGFloat {
-        max(60, viewportLength * 0.25)
-    }
+    /// Предел ухода за край. Лента карточек — не страница: уводить её на
+    /// сотни точек нельзя, иначе резинки не чувствуется вовсе и карточки
+    /// «свободно катаются» (приёмка 19.08.2026). Предел фиксированный и
+    /// небольшой, от размера окна не зависит.
+    static let stretchLimit: CGFloat = 64
+    /// Доля хода пальца, которую лента отрабатывает в самом начале выхода за
+    /// край. Дальше сопротивление растёт до полного упора.
+    static let stretchStart: CGFloat = 0.35
 
     /// Сопротивление за краем: чем дальше уведён палец, тем меньше идёт
     /// лента, но идёт всегда — и всегда в ту же сторону, что и палец.
     /// Сколько ни тяни, смещение не превысит `dimension` (асимптота формулы),
     /// поэтому упор ощущается пределом, а не остановкой.
-    static func resisted(_ overshoot: CGFloat,
-                         dimension: CGFloat,
-                         constant: CGFloat = 0.55) -> CGFloat {
-        guard overshoot != 0, dimension > 0 else { return 0 }
+    static func resisted(_ overshoot: CGFloat) -> CGFloat {
+        guard overshoot != 0 else { return 0 }
         let magnitude = abs(overshoot)
-        let resistedMagnitude = (magnitude * dimension * constant) / (dimension + constant * magnitude)
+        let limit = stretchLimit
+        let start = stretchStart
+        let resistedMagnitude = (magnitude * limit * start) / (limit + start * magnitude)
         return overshoot < 0 ? -resistedMagnitude : resistedMagnitude
     }
 
@@ -421,16 +421,19 @@ struct TrayDetentModel: Equatable {
         strain = 0
     }
 
-    /// Прогон одной дельты жеста через защёлку.
+    /// Прогон одной дельты жеста через защёлку. `stretch` — можно ли уводить
+    /// ленту за край: тянет только палец, инерция упирается (приёмка
+    /// 19.08.2026 — после отпускания лента продолжала уезжать).
     mutating func apply(delta: CGFloat,
-                        to model: TrayScrollModel) -> (model: TrayScrollModel, click: Click?) {
+                        to model: TrayScrollModel,
+                        stretch: Bool = true) -> (model: TrayScrollModel, click: Click?) {
         guard Self.fits(model) else {
-            let next = model.scrolled(by: delta)
+            let next = model.scrolled(by: delta, rubberBand: stretch)
             sync(with: next)
             return (next, nil)
         }
-        return engaged ? applyEngaged(delta: delta, to: model)
-                       : applyFree(delta: delta, to: model)
+        return engaged ? applyEngaged(delta: delta, to: model, stretch: stretch)
+                       : applyFree(delta: delta, to: model, stretch: stretch)
     }
 
     /// Куда осесть ленте, если жест замер в зоне напряжения: защёлка не
@@ -445,13 +448,14 @@ struct TrayDetentModel: Equatable {
     }
 
     private mutating func applyFree(delta: CGFloat,
-                                    to model: TrayScrollModel) -> (model: TrayScrollModel, click: Click?) {
+                                    to model: TrayScrollModel,
+                                    stretch: Bool) -> (model: TrayScrollModel, click: Click?) {
         var next = model
         let zoneStart = next.maximumOffset - Self.effectiveZone(for: next)
         guard delta > 0, next.offset + delta > zoneStart else {
             // Вне зоны или движение от упора: до щелчка выход свободен, жест
             // легко отменяется — сопротивление только в сторону сбора.
-            next = next.scrolled(by: delta)
+            next = next.scrolled(by: delta, rubberBand: stretch)
             return (next, nil)
         }
         // Часть дельты до зоны — один к одному, остаток — через натяжение.
@@ -469,13 +473,14 @@ struct TrayDetentModel: Equatable {
     }
 
     private mutating func applyEngaged(delta: CGFloat,
-                                       to model: TrayScrollModel) -> (model: TrayScrollModel, click: Click?) {
+                                       to model: TrayScrollModel,
+                                       stretch: Bool) -> (model: TrayScrollModel, click: Click?) {
         var next = model
         let maxOffset = next.maximumOffset
         if delta >= 0 {
             // Глубже в упор — обычная резинка за краем (`TR-13`).
             strain = 0
-            next = next.scrolled(by: delta)
+            next = next.scrolled(by: delta, rubberBand: stretch)
             return (next, nil)
         }
         if next.offset > maxOffset {
@@ -483,7 +488,7 @@ struct TrayDetentModel: Equatable {
             let back = max(delta, maxOffset - next.offset)
             next.offset += back
             let rest = delta - back
-            if rest < -0.001 { return applyEngaged(delta: rest, to: next) }
+            if rest < -0.001 { return applyEngaged(delta: rest, to: next, stretch: stretch) }
             return (next, nil)
         }
         strain += -delta

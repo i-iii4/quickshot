@@ -11,6 +11,7 @@ struct TrayScrollModelTests {
         rubberBandFollowsTheFingerMonotonically()
         rubberBandDoesNotDependOnEventSize()
         rubberBandStaysBounded()
+        momentumDoesNotStretchTheBand()
         settlingReturnsIntoBounds()
         revealOffsetShowsTheNewestCard()
         restingStackHasConstantTiers()
@@ -105,7 +106,7 @@ struct TrayScrollModelTests {
                    "лента попятилась при продолжении жеста: \(previous) → \(model.offset)")
             previous = model.offset
         }
-        expect(model.offset < -20, "за краем лента почти не сдвинулась: \(model.offset)")
+        expect(model.offset < -10, "за краем лента почти не сдвинулась: \(model.offset)")
     }
 
     /// Один и тот же путь пальца даёт один и тот же результат, независимо от
@@ -126,8 +127,8 @@ struct TrayScrollModelTests {
         var model = TrayScrollModel(contentLength: 1000, viewportLength: 600,
                                     offset: 0, lastCardLength: 150)
         for _ in 0..<200 { model = model.scrolled(by: -50) }
-        // Асимптота формулы равна самой глубине растяжения.
-        let limit = TrayScrollModel.stretchDepth(600)
+        // Асимптота формулы равна пределу ухода за край.
+        let limit = TrayScrollModel.stretchLimit
         expect(abs(model.offset) <= limit + 0.001,
                "растяжение не ограничено: \(model.offset) при пределе \(limit)")
         expect(abs(model.offset) > limit * 0.8,
@@ -137,8 +138,20 @@ struct TrayScrollModelTests {
         var short = TrayScrollModel(contentLength: 1000, viewportLength: 600,
                                     offset: 0, lastCardLength: 150)
         for _ in 0..<10 { short = short.scrolled(by: -20) }
-        expect(abs(short.offset) > 20 && abs(short.offset) < 90,
+        expect(abs(short.offset) > 10 && abs(short.offset) < TrayScrollModel.stretchLimit,
                "уход за край на обычном жесте вне ожидания: \(short.offset)")
+    }
+
+    /// Резинку тянет только палец. Инерция упирается в край: иначе лента
+    /// продолжает уезжать уже после отпускания, а возврат приходит с
+    /// задержкой.
+    private static func momentumDoesNotStretchTheBand() {
+        let model = TrayScrollModel(contentLength: 1000, viewportLength: 600,
+                                    offset: 0, lastCardLength: 150)
+        let byFinger = model.scrolled(by: -80, rubberBand: true)
+        expect(byFinger.offset < -1, "палец обязан уводить ленту за край")
+        let byMomentum = model.scrolled(by: -80, rubberBand: false)
+        expect(byMomentum.offset == 0, "инерция увела ленту за край: \(byMomentum.offset)")
     }
 
     private static func settlingReturnsIntoBounds() {

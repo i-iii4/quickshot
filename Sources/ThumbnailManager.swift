@@ -834,7 +834,10 @@ final class ThumbnailManager {
             // проходит точку напряжения и защёлкивается со щелчком.
             let presented = scrollModel.offset + detentDip
             if TrayDetentModel.isNearDetent(scrollModel) { TrayHaptics.shared.arm() }
-            let result = detent.apply(delta: delta, to: scrollModel)
+            // Растягивает резинку только палец: инерция упирается в край,
+            // иначе после отпускания лента продолжает уезжать, а возврат
+            // приходит с задержкой (приёмка 19.08.2026).
+            let result = detent.apply(delta: delta, to: scrollModel, stretch: fingersDown)
             scrollModel = result.model
             if let click = result.click {
                 if fingersDown {
@@ -865,6 +868,12 @@ final class ThumbnailManager {
         }
         if event.momentumPhase == .ended {
             // Инерция кончилась — жест завершён окончательно.
+            scrollGestureActive = false
+            settleScrollAnimated()
+        } else if (event.phase == .ended || event.phase == .cancelled),
+                  abs(scrollModel.overshoot) > 0.5 {
+            // Отпустили за краем — возвращаем немедленно, ждать инерцию
+            // незачем: растягивать её больше нечем.
             scrollGestureActive = false
             settleScrollAnimated()
         } else if event.phase == .ended || event.phase == .cancelled {
