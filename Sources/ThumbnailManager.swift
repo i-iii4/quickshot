@@ -108,6 +108,7 @@ final class ThumbnailManager {
     /// Кадровая добавка осадки защёлки поверх смещения: раскладка читает её на
     /// каждом кадре, поэтому события жеста осадку не смазывают.
     private var detentDip: CGFloat = 0
+    private var detentDipAnimating = false
     private lazy var detentDipAnimator = CollectionProgressAnimator(hostView: hostContent)
 
     /// Уровень трея в покое: выше обычных окон, но НИЖЕ системных
@@ -775,10 +776,22 @@ final class ThumbnailManager {
         let delta = event.hasPreciseScrollingDeltas ? raw : raw * Self.wheelLineHeight
         // Трекпад шлёт фазы жеста и инерции; классическое колесо — нет.
         let hasPhases = event.phase != [] || event.momentumPhase != []
+        // Пальцы на трекпаде: фаза самого жеста. Инерция приходит уже без них
+        // (`momentumPhase`) — и это разные режимы для анимации щелчка.
+        let fingersDown = event.phase != []
 
         if hasPhases {
             scrollSettleAnimator.cancel()
             scrollSettleAnimating = false
+            if fingersDown, detentDipAnimating {
+                // `TR-29`: под пальцем позиция принадлежит пальцу. Пружина
+                // щелчка, продолжающая играть во время медленного свайпа,
+                // спорит с прямым управлением — это и есть грязь. Догоняющее
+                // движение снимается мгновенно.
+                detentDipAnimator.cancel()
+                detentDipAnimating = false
+                detentDip = 0
+            }
             if !scrollGestureActive {
                 debugTrayLog("gesture offset=\(Int(scrollModel.offset)) max=\(Int(scrollModel.maximumOffset)) fits=\(TrayDetentModel.fits(scrollModel)) engaged=\(detent.engaged)")
             }
@@ -799,11 +812,18 @@ final class ThumbnailManager {
             let result = detent.apply(delta: delta, to: scrollModel)
             scrollModel = result.model
             if let click = result.click {
-                // Прыжок модели поглощает подача: презентация остаётся на
-                // месте, к новой позиции её доводит пружина — непрерывно,
-                // с одним перелётом-осадкой. Телепорт кадра запрещён.
-                detentDip = presented - scrollModel.offset
-                performDetentClick(click)
+                if fingersDown {
+                    // Под пальцем защёлка ведёт себя как настоящая: короткий
+                    // сухой скачок вперёд, без догоняющей анимации. Палец
+                    // продолжает вести ленту в тот же кадр.
+                    detentDip = 0
+                    performDetentClick(click, spring: false)
+                } else {
+                    // На инерции пальца нет: прыжок модели поглощает подача, а
+                    // пружина доводит презентацию с одним перелётом.
+                    detentDip = presented - scrollModel.offset
+                    performDetentClick(click, spring: true)
+                }
             }
         } else {
             // Колесо шагает дискретно: защёлка следует за фактом без щелчка.
@@ -839,7 +859,7 @@ final class ThumbnailManager {
             detent.sync(with: scrollModel)
             detentDip = presented - detentTarget
             if home {
-                performDetentClick(.snapIn)
+                performDetentClick(.snapIn, spring: true)
             } else {
                 runDetentSpring()
             }
@@ -872,21 +892,22 @@ final class ThumbnailManager {
     /// кадр. Перед вызовом прыжок модели уже переложен в `detentDip` —
     /// пружина доводит презентацию до нового места с одним перелётом, который
     /// и есть осадка. Тактильно отвечает трекпад с Force Touch.
-    private func performDetentClick(_ click: TrayDetentModel.Click) {
-        debugTrayLog("click \(click == .snapIn ? "snapIn" : "release") offset=\(Int(scrollModel.offset)) dip=\(Int(detentDip))")
-        performDetentHaptic()
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+    private func performDetentClick(_ click: TrayDetentModel.Click, spring: Bool) {
+        debugTrayLog("click \(click == .snapIn ? "snapIn" : "release") offset=\(Int(scrollModel.offset)) dip=\(Int(detentDip)) spring=\(spring)")
+        performDetentHaptic(click)
+        guard spring, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
             detentDip = 0
             applyScrollOffset()
-        } else {
-            runDetentSpring()
+            return
         }
+        runDetentSpring()
     }
 
-    /// Паттерн alignment — системный отклик защёлкивания при перетаскивании;
-    /// он и семантически точен, и не гейтится нажатием Force Touch.
-    private func performDetentHaptic() {
-        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+    /// Щелчок в трекпад напрямую: публичный `NSHapticFeedbackManager` из
+    /// фонового `.accessory`-приложения молчит (см. `TrayHaptics`).
+    private func performDetentHaptic(_ click: TrayDetentModel.Click) {
+        let delivered = TrayHaptics.shared.click(click == .snapIn ? .firm : .light)
+        debugTrayLog("haptic \(click == .snapIn ? "firm" : "light") delivered=\(delivered)")
     }
 
     /// Пружинная подача `detentDip` к нулю: недодемпфированная пружина, один
@@ -901,6 +922,7 @@ final class ThumbnailManager {
             return
         }
         detentDipAnimator.cancel()
+        detentDipAnimating = true
         let duration: CGFloat = 0.34
         let zeta: CGFloat = 0.5
         let omega = 6 / (zeta * duration)
@@ -914,6 +936,7 @@ final class ThumbnailManager {
             self.applyScrollOffset()
         }, onDone: { [weak self] in
             guard let self else { return }
+            self.detentDipAnimating = false
             self.detentDip = 0
             self.applyScrollOffset()
         })
@@ -1382,7 +1405,7 @@ final class ThumbnailManager {
             self.applyScrollOffset()
             // Кнопочный сбор садится своим ease: осадка вдогонку читалась бы
             // вторым движением, остаётся только тактильная посадка.
-            if detentClick != nil { self.performDetentHaptic() }
+            if let detentClick { self.performDetentHaptic(detentClick) }
         })
     }
 
