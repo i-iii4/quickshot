@@ -109,6 +109,14 @@ final class ThumbnailManager {
     /// каждом кадре, поэтому события жеста осадку не смазывают.
     /// Трекпад, ведущий текущий жест (`TR-29`): щелчок уходит именно в него.
     private var gestureDevice: UInt64?
+    /// Скорость ленты в видимых координатах, pt/с: сглаженная оценка по
+    /// событиям. Нужна пружине границы — без передачи скорости движение
+    /// рвётся в момент отпускания (`TR-13`).
+    private var scrollVelocity: CGFloat = 0
+    private var lastScrollTimestamp: TimeInterval = 0
+    /// Инерция уже передана пружине границы: остальные её события
+    /// игнорируются, как это делает системный скролл.
+    private var momentumHandedToSpring = false
     /// Поколение отложенного возврата из-за края: новое событие жеста
     /// обесценивает ранее запланированный возврат.
     private var settleGeneration = 0
@@ -788,6 +796,12 @@ final class ThumbnailManager {
         // (`momentumPhase`) — и это разные режимы для анимации щелчка.
         let fingersDown = event.phase != []
 
+        if event.phase == .began {
+            // Новый жест — новая история скорости.
+            scrollVelocity = 0
+            lastScrollTimestamp = event.timestamp
+            momentumHandedToSpring = false
+        }
         if hasPhases {
             // Новое событие отменяет отложенный возврат: жест продолжается.
             settleGeneration &+= 1
@@ -823,6 +837,12 @@ final class ThumbnailManager {
         }
 
         guard scrollModel.isScrollable || abs(delta) > 0.01 else { return }
+        // Инерцию, уже переданную пружине границы, дальше не читаем: так же
+        // ведёт себя системный скролл (`TR-13`).
+        if momentumHandedToSpring, event.momentumPhase != [] {
+            if event.momentumPhase == .ended { momentumHandedToSpring = false }
+            return
+        }
         scrollIntent = .none
         // Резинка только у жестов с фазами: колесо упирается в край жёстко.
         // Содержимое идёт за пальцами: положительная дельта двигает карточки к
@@ -837,8 +857,24 @@ final class ThumbnailManager {
             // Растягивает резинку только палец: инерция упирается в край,
             // иначе после отпускания лента продолжает уезжать, а возврат
             // приходит с задержкой (приёмка 19.08.2026).
+            let before = scrollModel.offset
             let result = detent.apply(delta: delta, to: scrollModel, stretch: fingersDown)
             scrollModel = result.model
+            trackVelocity(movement: scrollModel.offset - before, at: event.timestamp)
+            // Инерция довезла ленту до края: остаток скорости уходит в пружину
+            // отскока, дальше эта инерция не читается (`TR-13`, случай «а»).
+            if !fingersDown, event.momentumPhase != [],
+               abs(scrollModel.offset - before) < abs(delta) - 0.5,
+               abs(scrollVelocity) > 60 {
+                let boundary = scrollModel.offset
+                let outward = delta > 0 ? abs(scrollVelocity) : -abs(scrollVelocity)
+                momentumHandedToSpring = true
+                runBoundarySpring(from: boundary, displacement: 0, velocity: outward) { [weak self] in
+                    guard let self else { return }
+                    self.detent.sync(with: self.scrollModel)
+                }
+                return
+            }
             if let click = result.click {
                 if fingersDown {
                     // Под пальцем защёлка ведёт себя как настоящая: короткий
@@ -897,17 +933,15 @@ final class ThumbnailManager {
         }
     }
 
-    /// Отклик пружины возврата (Apple: перемещение объектов — демпфирование
-    /// 1.0, отклик 0.4 с). Длительность кадров с запасом на дохождение.
-    private static let settleResponse: CGFloat = 0.4
-    private static let settleDuration: CGFloat = 0.55
-
-    /// Доля непройденного пути у критически задемпфированной пружины:
-    /// `(1 + ωt)·e^(−ωt)`, где `ω = 2π / отклик`. Ноль перелёта по построению.
-    private static func criticallyDampedRemainder(_ time: CGFloat) -> CGFloat {
-        let omega = 2 * CGFloat.pi / settleResponse
-        let x = omega * time
-        return (1 + x) * exp(-x)
+    /// Оценка скорости ленты по событиям, pt/с. Сглаживание убирает выброс от
+    /// одиночного рваного кадра, иначе он задал бы скорость передачи пружине.
+    private func trackVelocity(movement: CGFloat, at timestamp: TimeInterval) {
+        defer { lastScrollTimestamp = timestamp }
+        let dt = timestamp - lastScrollTimestamp
+        guard dt > 0.0005, dt < 0.2 else { return }
+        let instant = movement / CGFloat(dt)
+        let alpha: CGFloat = 0.3
+        scrollVelocity = scrollVelocity * (1 - alpha) + instant * alpha
     }
 
     /// Возврат из-за края после отпускания: не мгновенный clamp, а короткий
@@ -942,19 +976,44 @@ final class ThumbnailManager {
         // Возврат — пружина с параметрами Apple для перемещения объектов:
         // демпфирование 1.0 (без перелёта), отклик 0.4 с (`TR-13`).
         // Фиксированная кривая читалась резким переходом «без резины».
+        // Пружина стартует со скоростью жеста: без передачи скорости движение
+        // рвётся в момент отпускания (`TR-13`).
+        runBoundarySpring(from: target, displacement: from - target, velocity: scrollVelocity,
+                          onDone: { [weak self] in
+            guard let self else { return }
+            self.detent.sync(with: self.scrollModel)
+        })
+    }
+
+    /// Пружина границы: лента возвращается к `boundary`, начиная со смещения
+    /// `displacement` и скорости `velocity` (наружу — положительная). Один
+    /// механизм и для возврата растянутой ленты, и для отскока от края.
+    private func runBoundarySpring(from boundary: CGFloat,
+                                   displacement: CGFloat,
+                                   velocity: CGFloat,
+                                   onDone: @escaping () -> Void) {
+        guard abs(displacement) > 0.5 || abs(velocity) > 1 else {
+            scrollSettleAnimating = false
+            scrollModel.offset = boundary
+            applyScrollOffset()
+            onDone()
+            return
+        }
         scrollSettleAnimating = true
-        let duration = Self.settleDuration
+        let duration = TrayBoundarySpring.duration
         scrollSettleAnimator.run(duration: duration, onFrame: { [weak self] progress in
             guard let self else { return }
-            let remaining = Self.criticallyDampedRemainder(progress * duration)
-            self.scrollModel.offset = target + (from - target) * remaining
+            let x = TrayBoundarySpring.offset(displacement: displacement,
+                                                  velocity: velocity,
+                                                  time: progress * duration)
+            self.scrollModel.offset = boundary + x
             self.applyScrollOffset()
         }, onDone: { [weak self] in
             guard let self else { return }
             self.scrollSettleAnimating = false
-            self.scrollModel.offset = target
-            self.detent.sync(with: self.scrollModel)
+            self.scrollModel.offset = boundary
             self.applyScrollOffset()
+            onDone()
         })
     }
 

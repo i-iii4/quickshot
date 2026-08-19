@@ -27,6 +27,10 @@ struct TrayScrollModelTests {
         cardsAreNeverClippedByTheZoneEdges()
         scrubbingIsContinuous()
         deeperLayersGoBehind()
+        boundarySpringIsContinuousAtHandoff()
+        boundarySpringBouncesProportionallyToSpeed()
+        boundarySpringReturnsWithoutOscillation()
+        boundarySpringStaysStillWithoutInput()
         detentSlowsInsideTheTensionZone()
         detentSnapsHomeWithAClick()
         detentHoldsAgainstSmallEscape()
@@ -628,6 +632,66 @@ struct TrayScrollModelTests {
                "мелкий замер не выпущен к началу зоны")
         model.offset = zoneStart - 10
         expect(detent.settleTarget(for: model) == nil, "цель защёлки вне зоны")
+    }
+
+    // MARK: пружина границы (`TR-13`)
+
+    /// Непрерывность в точке передачи: позиция и скорость на входе пружины
+    /// совпадают с тем, что было в момент передачи. Разрыв скорости — это и
+    /// есть «нет замедления».
+    private static func boundarySpringIsContinuousAtHandoff() {
+        for (x0, v0) in [(0.0, 900.0), (40.0, -300.0), (25.0, 0.0)] {
+            let position = TrayBoundarySpring.offset(displacement: x0, velocity: v0, time: 0)
+            let speed = TrayBoundarySpring.velocity(displacement: x0, velocity: v0, time: 0)
+            expect(abs(position - x0) < 0.001, "позиция рвётся на входе: \(position) вместо \(x0)")
+            expect(abs(speed - v0) < 0.001, "скорость рвётся на входе: \(speed) вместо \(v0)")
+        }
+    }
+
+    /// Отскок существует и пропорционален скорости: вдвое быстрее — вдвое
+    /// глубже. Подбирать глубину не нужно, она следует из скорости.
+    private static func boundarySpringBouncesProportionallyToSpeed() {
+        func peakByScan(_ v0: CGFloat) -> CGFloat {
+            stride(from: 0.0, through: TrayBoundarySpring.duration, by: 0.001)
+                .map { TrayBoundarySpring.offset(displacement: 0, velocity: v0, time: $0) }
+                .max() ?? 0
+        }
+        let slow = peakByScan(400)
+        let fast = peakByScan(800)
+        expect(slow > 1, "отскока нет вовсе: \(slow)")
+        expect(abs(slow - TrayBoundarySpring.peak(velocity: 400)) < slow * 0.01,
+               "пик разошёлся с формулой: \(slow) против \(TrayBoundarySpring.peak(velocity: 400))")
+        expect(abs(fast / slow - 2) < 0.02,
+               "глубина непропорциональна скорости: \(fast) против \(slow)")
+    }
+
+    /// Возврат монотонный и полный: знак не меняется (нет колебаний), хвост к
+    /// концу прогона исчезает.
+    private static func boundarySpringReturnsWithoutOscillation() {
+        for (x0, v0) in [(60.0, 0.0), (0.0, 700.0), (30.0, 500.0)] {
+            var previous = TrayBoundarySpring.offset(displacement: x0, velocity: v0, time: 0)
+            var peak = abs(previous)
+            var crossedZero = false
+            for t in stride(from: 0.0, through: TrayBoundarySpring.duration, by: 0.005) {
+                let value = TrayBoundarySpring.offset(displacement: x0, velocity: v0, time: t)
+                peak = max(peak, abs(value))
+                if value * previous < -0.001 { crossedZero = true }
+                previous = value
+            }
+            expect(!crossedZero, "пружина колеблется при x0=\(x0) v0=\(v0)")
+            let tail = abs(TrayBoundarySpring.offset(displacement: x0, velocity: v0,
+                                                     time: TrayBoundarySpring.duration))
+            expect(tail < peak * 0.005, "хвост не исчез: \(tail) при пике \(peak)")
+        }
+    }
+
+    /// Без смещения и скорости пружина не двигает ленту: медленное подведение
+    /// к краю отскока не даёт.
+    private static func boundarySpringStaysStillWithoutInput() {
+        for t in stride(from: 0.0, through: TrayBoundarySpring.duration, by: 0.02) {
+            let value = TrayBoundarySpring.offset(displacement: 0, velocity: 0, time: t)
+            expect(abs(value) < 0.001, "пружина двинулась без входа: \(value)")
+        }
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

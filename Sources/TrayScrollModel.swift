@@ -504,3 +504,40 @@ struct TrayDetentModel: Equatable {
         return (next, nil)
     }
 }
+
+/// Пружина границы ленты (`TR-13`).
+///
+/// Критически задемпфированная пружина с начальным смещением и НАЧАЛЬНОЙ
+/// СКОРОСТЬЮ — один механизм на оба случая границы:
+/// - возврат растянутой ленты после отпускания (`displacement` > 0);
+/// - отскок от края, когда инерция довезла ленту до упора (`displacement` = 0,
+///   скорость наружу).
+///
+/// Параметры не подбираются: демпфирование 1.0 и отклик 0.4 с — значения Apple
+/// для перемещения объектов («Designing Fluid Interfaces», WWDC 2018).
+/// Колебаний нет по построению, глубина отскока пропорциональна скорости.
+enum TrayBoundarySpring {
+    /// Отклик пружины, с.
+    static let response: CGFloat = 0.4
+    /// Сколько прогонять кадры: к этому времени хвост меньше половины
+    /// процента пути.
+    static let duration: CGFloat = 0.7
+    static var omega: CGFloat { 2 * .pi / response }
+
+    /// Уход за край в момент `time`: `(x0 + (v0 + ω·x0)·t)·e^(−ω·t)`.
+    static func offset(displacement x0: CGFloat, velocity v0: CGFloat, time: CGFloat) -> CGFloat {
+        (x0 + (v0 + omega * x0) * time) * exp(-omega * time)
+    }
+
+    /// Пик отскока при чистой передаче скорости: `v0/(ω·e)`.
+    static func peak(velocity v0: CGFloat) -> CGFloat {
+        v0 / (omega * CGFloat(M_E))
+    }
+
+    /// Скорость ленты в момент `time` — производная `offset`. Нужна для
+    /// проверки непрерывности в точке передачи.
+    static func velocity(displacement x0: CGFloat, velocity v0: CGFloat, time: CGFloat) -> CGFloat {
+        let w = omega
+        return (v0 - w * (v0 + w * x0) * time) * exp(-w * time)
+    }
+}
