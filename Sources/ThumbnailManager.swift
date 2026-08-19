@@ -951,9 +951,16 @@ final class ThumbnailManager {
         })
     }
 
-    /// Временный файловый журнал защёлки: уровень info в os_log не долетает
-    /// до `log show`, а живые прогоны запрещены — диагностика по файлу.
+    /// Файловый журнал трея по требованию: `QUICKSHOT_LOG_TRAY=1`. Уровень
+    /// info в os_log не долетает до `log show`, а живые прогоны запрещены —
+    /// диагностика идёт в файл `~/Library/Logs/QuickShot-tray.log`. Именно он
+    /// и распутал историю с актуатором (`TR-29`), поэтому остаётся в коде,
+    /// но выключенным: в обычном запуске диск не трогается.
+    nonisolated private static let trayLogEnabled =
+        ProcessInfo.processInfo.environment["QUICKSHOT_LOG_TRAY"] == "1"
+
     nonisolated private func debugTrayLog(_ line: String) {
+        guard Self.trayLogEnabled else { return }
         let path = NSHomeDirectory() + "/Library/Logs/QuickShot-tray.log"
         let stamp = ISO8601DateFormatter().string(from: Date())
         let entry = "\(stamp) \(line)\n"
