@@ -1126,7 +1126,13 @@ final class ThumbnailManager {
             layout()
             return
         }
-        let (visible, hidden) = cardLayout(on: screen)
+        var (visible, hidden) = cardLayout(on: screen)
+        // `TR-34`: после щелчка сбора видна только верхняя карточка — колода
+        // «закрыта», задние слои прячутся. До щелчка ярусы видны как обычно.
+        if detent.engaged, let top = visible.max(by: { $0.1.index < $1.1.index }) {
+            for (item, _) in visible where item !== top.0 { hidden.append(item) }
+            visible = [top]
+        }
         for item in hidden { item.hide() }
         for (item, slot) in visible {
             place(item, at: slot)
