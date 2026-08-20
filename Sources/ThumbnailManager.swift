@@ -1170,10 +1170,14 @@ final class ThumbnailManager {
         // Панель ставится по своему измеренному размеру: растянутая на всю
         // ширину, она рисовала ряд кнопок натуральной величины у левого края
         // и скомканно (приёмка 19.08.2026).
-        casePanel.frame = NSRect(x: caseRect.minX + side,
-                                 y: caseRect.maxY - gap - panelSize.height,
-                                 width: panelSize.width,
-                                 height: panelSize.height)
+        let panelRect = NSRect(x: caseRect.minX + side,
+                               y: caseRect.maxY - gap - panelSize.height,
+                               width: panelSize.width,
+                               height: panelSize.height)
+        if casePanel.frame != panelRect {
+            casePanel.frame = panelRect
+            casePanel.needsLayout = true
+        }
         caseView.needsLayout = true
         if !caseVisible {
             caseVisible = true

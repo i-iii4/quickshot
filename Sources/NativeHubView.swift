@@ -2624,15 +2624,32 @@ final class NativeCasePanelView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) не поддерживается") }
 
     func setCount(_ count: Int) {
+        guard count != lastCount else { return }
+        lastCount = count
         nativeView.setCount(count)
         // Замер даёт объединение рамок КНОПОК; счётчик и внутренние отступы
         // ряда в него не входят, поэтому добавляем запас — иначе панель
-        // получалась короче содержимого и кнопки наезжали друг на друга
-        // (приёмка 19.08.2026).
+        // получалась короче содержимого и кнопки наезжали друг на друга.
+        //
+        // Замер рендерит панель шириной 800: после него ОБЯЗАТЕЛЬНО вернуть
+        // рендер в реальные границы, иначе на экране остаётся вёрстка под
+        // 800 pt, втиснутая в узкую панель — кнопки жмутся к левому краю и
+        // сминаются (приёмка 20.08.2026). Плюс замер идёт только при смене
+        // счётчика, а не на каждой раскладке.
         let buttons = nativeView.measureButtonContentSize()
         measured = NSSize(width: buttons.width + Self.counterSlack,
                           height: max(buttons.height, NativeHubMetrics.height) + Self.rowPadding * 2)
         invalidateIntrinsicContentSize()
+        redrawAtCurrentBounds()
+    }
+
+    private var lastCount = -1
+
+    /// Перерисовать панель в её настоящих границах.
+    private func redrawAtCurrentBounds() {
+        guard bounds.width > 1, bounds.height > 1 else { return }
+        nativeView.frame = bounds
+        nativeView.renderNow()
     }
 
     /// Место под счётчик справа от кнопок.
@@ -2646,6 +2663,8 @@ final class NativeCasePanelView: NSView {
     override func layout() {
         super.layout()
         nativeView.frame = bounds
+        // Границы изменились — вёрстка обязана пересчитаться под них.
+        nativeView.renderNow()
     }
 
     /// Мышь ловится только кнопками: остальная площадь панели принадлежит
