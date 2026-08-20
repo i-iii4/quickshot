@@ -14,6 +14,8 @@ import AppKit
 @MainActor
 final class TrayCaseView: NSView {
     /// Отступ подложки вокруг стопки.
+    /// Отступ подложки вокруг стопки. Должен совпадать с добавкой в
+    /// `ThumbStyle.margin` — там он вписан числом из-за изоляции актора.
     static let padding: CGFloat = 8
     /// Скругление контура шкатулки.
     static let cornerRadius: CGFloat = 18

@@ -3,7 +3,11 @@ import UniformTypeIdentifiers
 
 enum ThumbStyle {
     static let gap: CGFloat = 12                 // зазор между карточками
-    static let margin: CGFloat = 15              // зазор до края экрана (`TR-30`)
+    /// Зазор до края экрана меряется по ВНЕШНЕМУ краю шкатулки (`TR-30`):
+    /// подложка выступает за карточки на свой отступ, поэтому карточки
+    /// отодвинуты на сумму.
+    static let edgeGap: CGFloat = 15
+    static let margin: CGFloat = edgeGap + 8   // 8 — отступ подложки, TrayCaseView.padding
     static let minWidth: CGFloat = 120
     static let maxWidth: CGFloat = 640
     static let defaultWidth: CGFloat = 240
@@ -1161,10 +1165,10 @@ final class ThumbnailManager {
         let caseRect = NSRect(x: body.minX,
                               y: body.minY,
                               width: max(body.width, panelSize.width + padding * 2),
-                              height: body.height + panelSize.height)
+                              height: body.height + panelSize.height + padding)
         caseView.frame = caseRect
         casePanel.frame = NSRect(x: caseRect.minX + padding,
-                                 y: caseRect.maxY - panelSize.height - padding / 2,
+                                 y: caseRect.maxY - panelSize.height - padding,
                                  width: caseRect.width - padding * 2,
                                  height: panelSize.height)
         caseView.needsLayout = true
