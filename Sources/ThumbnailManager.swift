@@ -63,6 +63,11 @@ final class ThumbnailManager {
         collectionModel.ids.compactMap { itemByID[$0] }
     }
     private let artifactStore: CaptureArtifactStore
+    /// Целевые рамки карточек, которые сейчас ВЛЕТАЮТ в ленту. Контур
+    /// шкатулки берёт их вместо текущих: влетающая стоит сбоку от своего
+    /// места, и контур по её живой рамке уводил шкатулку вбок (приёмка
+    /// 20.08.2026).
+    private var enteringTargets: [ObjectIdentifier: NSRect] = [:]
     private var collapsed = false
     private var anchorScreen: NSScreen?
     private let hub = HubWindow()
@@ -577,13 +582,18 @@ final class ThumbnailManager {
             reflowing.append((item, oldFrame))
         }
 
-        guard let origin = visible.first(where: { $0.0 === inserted })?.1.origin else {
+        guard let slot = visible.first(where: { $0.0 === inserted })?.1 else {
             inserted.hide()
             return
         }
-        inserted.prepareInsertion(at: toLocal(origin),
+        inserted.prepareInsertion(at: toLocal(slot.origin),
                                   from: collectionDirectionalOffset(),
                                   reduceMotion: reduceMotion)
+        // Новая карточка тоже влетает сбоку: контур шкатулки берёт её место,
+        // а не текущее положение.
+        enteringTargets[ObjectIdentifier(inserted)] = thumbnailVisibleFrame(
+            slot: slot, cardSize: inserted.cardSize,
+            vertical: TrayPosition.current.isVertical)
         runCollectionMotion(duration: reduceMotion ? TrayAnim.reducedTransition : TrayAnim.removalAndReflow,
                             onFrame: { [weak inserted] progress in
             inserted?.applyInsertion(progress: progress, reduceMotion: reduceMotion)
@@ -592,6 +602,7 @@ final class ThumbnailManager {
             }
         }, completion: { [weak self, weak inserted] in
             inserted?.finishCollectionMotion()
+            self?.enteringTargets.removeAll()
             for (item, _) in reflowing { item.finishCollectionMotion() }
             for item in self?.items ?? [] where !visibleIDs.contains(ObjectIdentifier(item)) {
                 item.hide()
@@ -711,6 +722,9 @@ final class ThumbnailManager {
                     item.prepareInsertion(at: toLocal(slot.origin),
                                           from: collectionDirectionalOffset(),
                                           reduceMotion: reduceMotion)
+                    enteringTargets[identifier] = thumbnailVisibleFrame(
+                        slot: slot, cardSize: item.cardSize,
+                        vertical: TrayPosition.current.isVertical)
                     entering.append(item)
                     continue
                 }
@@ -753,6 +767,7 @@ final class ThumbnailManager {
             for (item, _) in reflowing { item.finishCollectionMotion() }
             for item in entering { item.finishCollectionMotion() }
             for item in animatedRemoved { self.closeAndRelease(item) }
+            self.enteringTargets.removeAll()
             if self.items.isEmpty {
                 self.collapsed = false
                 self.trayHoverActive = false
@@ -1205,7 +1220,9 @@ final class ThumbnailManager {
         // него (`TR-30`).
         var contour = CGRect.null
         for item in items where !item.hostView.isHidden {
-            contour = contour.union(item.visibleCardFrame)
+            // Влетающая карточка входит в контур своим МЕСТОМ, а не текущим
+            // положением: иначе шкатулка гонится за ней от края экрана.
+            contour = contour.union(enteringTargets[ObjectIdentifier(item)] ?? item.visibleCardFrame)
         }
         guard !contour.isNull, contour.width > 1, contour.height > 1 else { return }
         casePanel.setCount(items.count)

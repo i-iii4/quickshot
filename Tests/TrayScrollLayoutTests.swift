@@ -23,11 +23,42 @@ struct TrayScrollLayoutTests {
         bandFieldsReachSlots()
         trailingStackStaysOnScreen()
         deeperLayersGoBehind()
+        visibleFrameFollowsTheSlot()
         print("TrayScrollLayoutTests: passed")
     }
 
     /// Смещение обязано двигать координаты, иначе прокрутка существует только
     /// в модели.
+    /// Целевая рамка карточки по слоту — та же геометрия, что кладёт сама
+    /// карточка. По ней контур шкатулки берёт МЕСТО влетающей карточки:
+    /// по живой рамке шкатулку уводило вбок вслед за влётом.
+    private static func visibleFrameFollowsTheSlot() {
+        let card = NSSize(width: 200, height: 150)
+
+        // Полная карточка: рамка совпадает со слотом, без полей.
+        let full = ThumbnailLayoutSlot(index: 0, origin: NSPoint(x: 300, y: 40))
+        let frame = thumbnailVisibleFrame(slot: full, cardSize: card, vertical: false)
+        expect(frame == NSRect(x: 300, y: 40, width: 200, height: 150),
+               "полная карточка встала не по слоту: \(frame)")
+
+        // Слой стопки: полоса короче карточки и центрирована поперёк оси на
+        // то, что съела перспектива.
+        var band = ThumbnailLayoutSlot(index: 1, origin: NSPoint(x: 300, y: 40))
+        band.isFullCard = false
+        band.length = 12
+        band.scale = 0.8
+        let bandFrame = thumbnailVisibleFrame(slot: band, cardSize: card, vertical: false)
+        expect(abs(bandFrame.width - 12) < 0.001, "полоса взяла не свою длину: \(bandFrame.width)")
+        expect(abs(bandFrame.height - 120) < 0.001, "перспектива не применилась: \(bandFrame.height)")
+        expect(abs(bandFrame.minY - (40 + 15)) < 0.001,
+               "полоса не центрирована поперёк оси: \(bandFrame.minY)")
+
+        // Вертикальная лента: оси меняются местами.
+        let vertical = thumbnailVisibleFrame(slot: band, cardSize: card, vertical: true)
+        expect(abs(vertical.height - 12) < 0.001, "вертикальная полоса взяла не свою длину")
+        expect(abs(vertical.minX - (300 + 20)) < 0.001, "вертикальная полоса не центрирована")
+    }
+
     private static func offsetMovesCards() {
         let heights = Array(repeating: CGFloat(200), count: 10)
         let atStart = layout(heights: heights, offset: 0)

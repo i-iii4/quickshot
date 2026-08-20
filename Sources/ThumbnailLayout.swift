@@ -275,3 +275,27 @@ private func stripOrigin(screenFrame: NSRect,
                        y: screenFrame.maxY - margin)
     }
 }
+
+/// Видимая рамка карточки для слота раскладки, в глобальных координатах и без
+/// поля под тень. Повторяет геометрию `ThumbnailWindow.layoutSlice`: полоса
+/// центрируется поперёк оси ленты на величину, съеденную перспективой.
+///
+/// Нужна контуру шкатулки: карточка, которая ещё ВЛЕТАЕТ в ленту, стоит сбоку
+/// от своего места, и контур по её текущей рамке уводил шкатулку вбок вслед за
+/// ней (приёмка 20.08.2026).
+func thumbnailVisibleFrame(slot: ThumbnailLayoutSlot,
+                           cardSize: NSSize,
+                           vertical: Bool) -> NSRect {
+    let length = slot.isFullCard
+        ? (vertical ? cardSize.height : cardSize.width) * slot.scale
+        : max(1, slot.length)
+    let crossInset = vertical
+        ? cardSize.width * (1 - slot.scale) / 2
+        : cardSize.height * (1 - slot.scale) / 2
+    let width = vertical ? max(1, cardSize.width * slot.scale) : length
+    let height = vertical ? length : max(1, cardSize.height * slot.scale)
+    let origin = vertical
+        ? NSPoint(x: slot.origin.x + crossInset, y: slot.origin.y)
+        : NSPoint(x: slot.origin.x, y: slot.origin.y + crossInset)
+    return NSRect(origin: origin, size: NSSize(width: width, height: height))
+}
