@@ -57,6 +57,7 @@
           <row gap="8" cross="center" padding="6" label="Case actions">
             <button size="sm" variant="destructive" icon="x" label="Close all" on-press="delete"></button>
             <button size="sm" variant="secondary" icon="copy" label="Copy all" on-press="copy_all"></button>
+            <button size="sm" variant="secondary" icon="download" label="Save all" on-press="save_as"></button>
             <text size="sm" foreground="text_muted" wrap="false">{countText}</text>
           </row>
         </if>

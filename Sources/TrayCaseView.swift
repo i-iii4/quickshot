@@ -14,7 +14,7 @@ import AppKit
 @MainActor
 final class TrayCaseView: NSView {
     /// Отступ подложки вокруг стопки.
-    static let padding: CGFloat = 10
+    static let padding: CGFloat = 8
     /// Скругление контура шкатулки.
     static let cornerRadius: CGFloat = 18
 

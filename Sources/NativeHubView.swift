@@ -2601,6 +2601,7 @@ final class NativeThumbnailButtonView: NSView {
 final class NativeCasePanelView: NSView {
     var onDeleteAll: (() -> Void)?
     var onCopyAll: (() -> Void)?
+    var onSaveAll: (() -> Void)?
 
     private let nativeView = NativeHubRenderView(frame: .zero)
     private var measured = NSSize(width: 120, height: 28)
@@ -2613,6 +2614,7 @@ final class NativeCasePanelView: NSView {
             switch pressed {
             case .delete: self?.onDeleteAll?()
             case .copyAll: self?.onCopyAll?()
+            case .saveAs: self?.onSaveAll?()
             default: break
             }
         }
