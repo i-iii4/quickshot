@@ -41,6 +41,7 @@ struct TrayScrollModelTests {
         deckClosureIsMonotonic()
         deckClosureIsContinuous()
         deckClosureHitsItsBounds()
+        detentHoldRevealsTheTiers()
         deckCoverFinishesTheNearTierFirst()
         deckCoverHasNoSpeedStep()
         deckCollapseKeepsCardsContinuous()
@@ -888,6 +889,52 @@ struct TrayScrollModelTests {
                    "разрыв перекрытия на позиции \(step): скачок \(shift - previous)")
             previous = shift
         }
+    }
+
+    /// Подтягивание до щелчка ПРИОТКРЫВАЕТ ярусы соразмерно ходу, а
+    /// отпускание закрывает обратно. Требование заказчика словами
+    /// пользователя: «потянул чуть-чуть, не дожидаясь щелчка, увидел
+    /// немножко нижний ярус; отпустил — всё вернулось на место».
+    ///
+    /// Тест сторожит СВЯЗКУ двух параметров, а не одно число: люфт защёлки
+    /// `escape / holdTension` обязан дотягиваться за плато схлопывания
+    /// `zone × (1 - completionPoint)`. Настройка любого из них поодиночке
+    /// снова сделает подтягивание немым — так и случилось 20.08.2026.
+    private static func detentHoldRevealsTheTiers() {
+        let model = deckStrip()
+        let closed = TrayDeckClosure.collapse(presented: model.maximumOffset, model: model)
+        expect(abs(closed - 1) < 0.001, "дома колода не закрыта: \(closed)")
+
+        var previous = closed
+        var reveal: [CGFloat] = []
+        for share in [CGFloat(0.4), 0.7, 0.99] {
+            var detent = TrayDetentModel()
+            var home = model
+            home.offset = model.maximumOffset
+            detent.sync(with: home)
+            let (pulled, click) = detent.apply(delta: -(TrayDetentModel.escape * share), to: home)
+            expect(click == nil, "защёлка сорвалась на доле \(share)")
+            let value = TrayDeckClosure.collapse(presented: pulled.offset, model: model)
+            expect(value <= previous + 0.001, "приоткрывание не монотонно на доле \(share)")
+            previous = value
+            reveal.append(1 - value)
+        }
+
+        // На полном ходе удержания ярусы должны выглядывать ЗАМЕТНО, иначе
+        // требование выполнено лишь на бумаге: четверть — это около 3.5 pt
+        // ближнего яруса, различимый глазом край.
+        expect(reveal.last! > 0.25,
+               "подтягивание почти не открывает колоду: \(reveal.last! * 100)%")
+
+        // Отпускание возвращает ленту домой, и колода закрывается обратно.
+        var detent = TrayDetentModel()
+        var home = model
+        home.offset = model.maximumOffset
+        detent.sync(with: home)
+        let (pulled, _) = detent.apply(delta: -(TrayDetentModel.escape * 0.9), to: home)
+        expect(pulled.offset < model.maximumOffset, "подтягивание не сдвинуло ленту")
+        let released = TrayDeckClosure.collapse(presented: model.maximumOffset, model: model)
+        expect(abs(released - 1) < 0.001, "после возврата колода не закрылась: \(released)")
     }
 
     /// Критерий 3: на краю зоны перекрытия нет, у посадки ярусы закрыты
