@@ -38,8 +38,6 @@ struct TrayScrollModelTests {
         detentHoldsAgainstSmallEscape()
         detentReleasesWithAJump()
         detentSkipsShortStrips()
-        mirroredDetentSnapsAtTheFarEnd()
-        mirroredDetentReleasesLikeTheNearOne()
         detentBackingOutOfTheZoneIsFree()
         detentSettleFinishesTheZone()
         print("TrayScrollModelTests: passed")
@@ -79,22 +77,17 @@ struct TrayScrollModelTests {
         let clampedEnd = model.scrolled(by: 5000, rubberBand: false)
         expect(clampedEnd.offset == model.maximumOffset, "прокрутка упирается в конец")
 
-        // `TR-33`: обратный ход есть — лента уезжает до зеркальной парковки.
         let clampedStart = model.scrolled(by: -5000, rubberBand: false)
-        expect(clampedStart.offset == model.minimumOffset,
-               "прокрутка упирается в зеркальную парковку; получили \(clampedStart.offset)")
+        expect(clampedStart.offset == 0, "прокрутка упирается в начало")
     }
 
     /// `TR-13`: за краем движение сопротивляется, а не останавливается насухо.
     private static func rubberBandResistsBeyondEdges() {
-        // `TR-33`: край — не ноль, а зеркальная парковка; резинка живёт за ней.
-        var model = TrayScrollModel(contentLength: 1000, viewportLength: 600,
+        let model = TrayScrollModel(contentLength: 1000, viewportLength: 600,
                                     offset: 0, lastCardLength: 150)
-        model.offset = model.minimumOffset
-        let edge = model.minimumOffset
         let pulled = model.scrolled(by: -100)
-        expect(pulled.offset < edge, "лента идёт за пальцами за край")
-        expect(pulled.offset > edge - 100, "но сопротивляется: \(pulled.offset - edge)")
+        expect(pulled.offset < 0, "лента идёт за пальцами за край")
+        expect(pulled.offset > -100, "но сопротивляется: \(pulled.offset)")
 
         let atEnd = TrayScrollModel(contentLength: 1000, viewportLength: 600,
                                     offset: 850, lastCardLength: 150)
@@ -110,8 +103,6 @@ struct TrayScrollModelTests {
     private static func rubberBandFollowsTheFingerMonotonically() {
         var model = TrayScrollModel(contentLength: 1000, viewportLength: 600,
                                     offset: 0, lastCardLength: 150)
-        model.offset = model.minimumOffset
-        let edge = model.minimumOffset
         var previous = model.offset
         // Палец идёт равномерно, потом замедляется — позиция обязана
         // монотонно уходить за край.
@@ -121,15 +112,14 @@ struct TrayScrollModelTests {
                    "лента попятилась при продолжении жеста: \(previous) → \(model.offset)")
             previous = model.offset
         }
-        expect(model.offset < edge - 10, "за краем лента почти не сдвинулась: \(model.offset - edge)")
+        expect(model.offset < -10, "за краем лента почти не сдвинулась: \(model.offset)")
     }
 
     /// Один и тот же путь пальца даёт один и тот же результат, независимо от
     /// того, пришёл он одним событием или дюжиной мелких.
     private static func rubberBandDoesNotDependOnEventSize() {
-        var base = TrayScrollModel(contentLength: 1000, viewportLength: 600,
+        let base = TrayScrollModel(contentLength: 1000, viewportLength: 600,
                                    offset: 0, lastCardLength: 150)
-        base.offset = base.minimumOffset
         let oneStep = base.scrolled(by: -120)
         var manySteps = base
         for _ in 0..<12 { manySteps = manySteps.scrolled(by: -10) }
@@ -142,24 +132,20 @@ struct TrayScrollModelTests {
     private static func rubberBandStaysBounded() {
         var model = TrayScrollModel(contentLength: 1000, viewportLength: 600,
                                     offset: 0, lastCardLength: 150)
-        model.offset = model.minimumOffset
-        let edge = model.minimumOffset
         for _ in 0..<200 { model = model.scrolled(by: -50) }
         // Асимптота формулы равна характерному размеру — длине карточки.
         let limit = model.stretchDimension
-        expect(abs(model.offset - edge) <= limit + 0.001,
-               "растяжение не ограничено: \(model.offset - edge) при пределе \(limit)")
-        expect(abs(model.offset - edge) > limit * 0.8,
-               "при бесконечном жесте резинка должна дойти до предела: \(model.offset - edge)")
+        expect(abs(model.offset) <= limit + 0.001,
+               "растяжение не ограничено: \(model.offset) при пределе \(limit)")
+        expect(abs(model.offset) > limit * 0.8,
+               "при бесконечном жесте резинка должна дойти до предела: \(model.offset)")
 
         // На реальном жесте (около 200 pt за краем) уход умеренный.
         var short = TrayScrollModel(contentLength: 1000, viewportLength: 600,
                                     offset: 0, lastCardLength: 150)
-        short.offset = short.minimumOffset
-        let shortEdge = short.minimumOffset
         for _ in 0..<10 { short = short.scrolled(by: -20) }
-        expect(abs(short.offset - shortEdge) > 10 && abs(short.offset - shortEdge) < short.stretchDimension,
-               "уход за край на обычном жесте вне ожидания: \(short.offset - shortEdge)")
+        expect(abs(short.offset) > 10 && abs(short.offset) < short.stretchDimension,
+               "уход за край на обычном жесте вне ожидания: \(short.offset)")
     }
 
     /// Резинку тянет только палец. Инерция упирается в край: иначе лента
@@ -168,23 +154,19 @@ struct TrayScrollModelTests {
     private static func momentumDoesNotStretchTheBand() {
         let model = TrayScrollModel(contentLength: 1000, viewportLength: 600,
                                     offset: 0, lastCardLength: 150)
-        var atEdge = model
-        atEdge.offset = model.minimumOffset
-        let byFinger = atEdge.scrolled(by: -80, rubberBand: true)
-        expect(byFinger.offset < atEdge.offset - 1, "палец обязан уводить ленту за край")
-        let byMomentum = atEdge.scrolled(by: -80, rubberBand: false)
-        expect(byMomentum.offset == atEdge.offset, "инерция увела ленту за край: \(byMomentum.offset)")
+        let byFinger = model.scrolled(by: -80, rubberBand: true)
+        expect(byFinger.offset < -1, "палец обязан уводить ленту за край")
+        let byMomentum = model.scrolled(by: -80, rubberBand: false)
+        expect(byMomentum.offset == 0, "инерция увела ленту за край: \(byMomentum.offset)")
     }
 
     private static func settlingReturnsIntoBounds() {
         var model = TrayScrollModel(contentLength: 1000, viewportLength: 600,
                                     offset: 0, lastCardLength: 150)
-        model.offset = model.minimumOffset
-        let edge = model.minimumOffset
         model = model.scrolled(by: -200)
-        expect(model.offset < edge, "перетянуто за край")
+        expect(model.offset < 0, "перетянуто за край")
         model = model.settled()
-        expect(model.offset == edge, "отпускание возвращает в границы")
+        expect(model.offset == 0, "отпускание возвращает в границы")
     }
 
     /// `TR-5`: докрутка до нового снимка ставит его целиком ниже дальнего
@@ -797,55 +779,6 @@ struct TrayScrollModelTests {
             click = step.click
         }
         expect(click == .release, "щелчок выхода умер после недоскролла")
-    }
-
-    /// `TR-33`: у дальнего края работает та же защёлка — натяжение, щелчок,
-    /// посадка. Проверяем зеркально ближней.
-    private static func mirroredDetentSnapsAtTheFarEnd() {
-        var model = TrayScrollModel(contentLength: 400, viewportLength: 900,
-                                    offset: 0, lastCardLength: 120)
-        model.firstCardLength = 120
-        expect(TrayDetentModel.fitsFar(model),
-               "у длинного экрана нет обратного хода: \(model.minimumOffset)")
-
-        var detent = TrayDetentModel()
-        var click: TrayDetentModel.Click?
-        for _ in 0..<200 where click == nil {
-            let step = detent.apply(delta: -20, to: model, stretch: true)
-            model = step.model
-            click = step.click
-        }
-        expect(click == .snapIn, "зеркальная защёлка не щёлкнула")
-        expect(abs(model.offset - model.minimumOffset) < 0.001,
-               "посадка не в зеркальной точке: \(model.offset)")
-        expect(detent.engaged && detent.engagedEnd == .far,
-               "зацепление не отмечено дальним концом")
-    }
-
-    /// Выход из зеркальной защёлки требует того же побега и даёт щелчок.
-    private static func mirroredDetentReleasesLikeTheNearOne() {
-        var model = TrayScrollModel(contentLength: 400, viewportLength: 900,
-                                    offset: 0, lastCardLength: 120)
-        model.firstCardLength = 120
-        model.offset = model.minimumOffset
-        var detent = TrayDetentModel()
-        detent.sync(with: model)
-        expect(detent.engaged && detent.engagedEnd == .far, "sync не увидел дальнюю посадку")
-
-        // Малый ход обратно защёлку не отпускает.
-        let small = detent.apply(delta: TrayDetentModel.escape / 4, to: model, stretch: true)
-        expect(small.click == nil, "зеркальная защёлка отпустила раньше порога")
-        expect(detent.engaged, "зацепление потеряно от малого хода")
-
-        var click: TrayDetentModel.Click?
-        var work = small.model
-        for _ in 0..<10 where click == nil {
-            let step = detent.apply(delta: TrayDetentModel.escape / 3, to: work, stretch: true)
-            work = step.model
-            click = step.click
-        }
-        expect(click == .release, "зеркальная защёлка не дала щелчка выхода")
-        expect(!detent.engaged, "зацепление осталось после побега")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

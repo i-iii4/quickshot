@@ -48,18 +48,6 @@ struct TrayScrollModel: Equatable {
     /// поэтому ход — ровно до начала новейшей карточки.
     var maximumOffset: CGFloat { max(0, contentLength - lastCardLength) }
 
-    /// Первая карточка ленты — её длина нужна для зеркального сбора.
-    var firstCardLength: CGFloat = 0
-
-    /// Ход в ОБРАТНУЮ сторону: лента уезжает вверх, пока первая карточка не
-    /// запаркуется у дальнего края (`TR-33`). Стопка собирается зеркально,
-    /// как у ближнего края. Ноль, если экран короче ленты — тогда дальняя
-    /// стопка образуется и без дополнительного хода.
-    var minimumOffset: CGFloat {
-        let farPark = max(TrayStripLayout.parkLevel + 1, viewportLength - TrayStripLayout.parkLevel)
-        return min(0, TrayStripLayout.parkLevel + firstCardLength - farPark)
-    }
-
     /// Прокрутка осмысленна, как только есть хотя бы одна карточка: даже две
     /// карточки можно собрать в стопку у кнопки.
     var isScrollable: Bool { contentLength > 0.5 }
@@ -68,7 +56,7 @@ struct TrayScrollModel: Equatable {
     func scrolled(by delta: CGFloat, rubberBand: Bool = true) -> TrayScrollModel {
         var next = self
         let raw = rawOffset + delta
-        let clamped = min(max(minimumOffset, raw), maximumOffset)
+        let clamped = min(max(0, raw), maximumOffset)
         // Присваивание offset синхронизирует rawOffset через наблюдатель,
         // поэтому сырое значение выставляется ПОСЛЕ него.
         next.offset = rubberBand
@@ -101,12 +89,12 @@ struct TrayScrollModel: Equatable {
     /// Возврат в границы после отпускания.
     func settled() -> TrayScrollModel {
         var next = self
-        next.offset = min(max(minimumOffset, offset), maximumOffset)
+        next.offset = min(max(0, offset), maximumOffset)
         return next
     }
 
     var overshoot: CGFloat {
-        if offset < minimumOffset { return offset - minimumOffset }
+        if offset < 0 { return offset }
         if offset > maximumOffset { return offset - maximumOffset }
         return 0
     }
@@ -401,18 +389,8 @@ struct TrayDetentModel: Equatable {
         case release
     }
 
-    /// Конец ленты, у которого работает защёлка (`TR-33`).
-    enum End: Equatable {
-        /// Стопка у ближнего края — там, где лента начинается.
-        case near
-        /// Зеркальная стопка у дальнего края.
-        case far
-    }
-
     /// Лента стоит в защёлке: собрана до упора.
     private(set) var engaged = false
-    /// У какого конца лента защёлкнута.
-    private(set) var engagedEnd: End = .near
     /// Накопленный сырой ход побега из защёлки.
     private(set) var strain: CGFloat = 0
 
@@ -422,172 +400,116 @@ struct TrayDetentModel: Equatable {
         model.maximumOffset > 40
     }
 
-    /// Есть ли зеркальная защёлка у дальнего края (`TR-33`): нужен реальный
-    /// ход в обратную сторону.
-    static func fitsFar(_ model: TrayScrollModel) -> Bool {
-        model.minimumOffset < -40
-    }
-
     /// Эффективная зона напряжения: не шире 40% всего хода.
     static func effectiveZone(for model: TrayScrollModel) -> CGFloat {
         min(zone, model.maximumOffset * 0.4)
     }
 
-    static func effectiveZone(for model: TrayScrollModel, end: End) -> CGFloat {
-        switch end {
-        case .near: return min(zone, model.maximumOffset * 0.4)
-        case .far: return min(zone, abs(model.minimumOffset) * 0.4)
-        }
-    }
-
-    /// Точка посадки: у ближнего края — максимум хода, у дальнего — минимум.
-    static func target(_ model: TrayScrollModel, end: End) -> CGFloat {
-        end == .near ? model.maximumOffset : model.minimumOffset
-    }
-
-    /// Знак движения К посадке: к ближнему краю смещение растёт, к дальнему
-    /// убывает. Вся механика ниже написана один раз и работает для обоих
-    /// концов через этот знак (`TR-33`).
-    static func direction(_ end: End) -> CGFloat { end == .near ? 1 : -1 }
-
-    static func fits(_ model: TrayScrollModel, end: End) -> Bool {
-        end == .near ? fits(model) : fitsFar(model)
-    }
-
     /// Лента подошла к защёлке: пора будить актуатор трекпада, его открытие
     /// стоит сотни миллисекунд (`TR-29`).
     static func isNearDetent(_ model: TrayScrollModel) -> Bool {
-        for end in [End.near, End.far] where fits(model, end: end) {
-            let zone = effectiveZone(for: model, end: end)
-            let distance = abs(target(model, end: end) - model.offset)
-            if distance < zone * 2.5 { return true }
-        }
-        return false
+        guard fits(model) else { return false }
+        return model.offset > model.maximumOffset - effectiveZone(for: model) * 2.5
     }
 
-    static func effectiveSnapRemainder(for model: TrayScrollModel, end: End = .near) -> CGFloat {
-        min(snapRemainder, effectiveZone(for: model, end: end) * 0.25)
+    static func effectiveSnapRemainder(for model: TrayScrollModel) -> CGFloat {
+        min(snapRemainder, effectiveZone(for: model) * 0.25)
     }
 
     /// Синхронизация после программной установки смещения: защёлка следует за
     /// фактом, без щелчка.
     mutating func sync(with model: TrayScrollModel) {
+        engaged = Self.fits(model) && model.offset >= model.maximumOffset - 0.5
         strain = 0
-        for end in [End.near, End.far] where Self.fits(model, end: end) {
-            if abs(model.offset - Self.target(model, end: end)) <= 0.5 {
-                engaged = true
-                engagedEnd = end
-                return
-            }
-        }
-        engaged = false
     }
 
     /// Прогон одной дельты жеста через защёлку. `stretch` — можно ли уводить
-    /// ленту за край: тянет только палец, инерция упирается.
+    /// ленту за край: тянет только палец, инерция упирается (приёмка
+    /// 19.08.2026 — после отпускания лента продолжала уезжать).
     mutating func apply(delta: CGFloat,
                         to model: TrayScrollModel,
                         stretch: Bool = true) -> (model: TrayScrollModel, click: Click?) {
-        if engaged, Self.fits(model, end: engagedEnd) {
-            return applyEngaged(delta: delta, to: model, stretch: stretch, end: engagedEnd)
-        }
-        // Свободный ход: к какому концу идём, того защёлка и ловит.
-        let end: End = delta >= 0 ? .near : .far
-        guard Self.fits(model, end: end) else {
+        guard Self.fits(model) else {
             let next = model.scrolled(by: delta, rubberBand: stretch)
             sync(with: next)
             return (next, nil)
         }
-        return applyFree(delta: delta, to: model, stretch: stretch, end: end)
+        return engaged ? applyEngaged(delta: delta, to: model, stretch: stretch)
+                       : applyFree(delta: delta, to: model, stretch: stretch)
     }
 
     /// Куда осесть ленте, если жест замер в зоне напряжения: защёлка не
     /// оставляет ленту на скате — либо дожимает домой, либо выпускает к началу
-    /// зоны.
+    /// зоны. Вне зоны решает обычный `settled()`.
     func settleTarget(for model: TrayScrollModel) -> CGFloat? {
+        guard Self.fits(model) else { return nil }
         if engaged {
-            guard Self.fits(model, end: engagedEnd) else { return nil }
             // Недожатый выход: порог не пройден — защёлка дотягивает ленту
-            // обратно в посадочное место.
-            let home = Self.target(model, end: engagedEnd)
-            return abs(model.offset - home) > 0.5 ? home : nil
+            // обратно в посадочное место. Без этого страгивание оставалось
+            // (карточка зависала в миллиметре от места), а `sync` по этой
+            // позиции сбрасывал зацепление, и щелчок выхода пропадал совсем
+            // (приёмка 19.08.2026).
+            return model.offset < model.maximumOffset - 0.5 ? model.maximumOffset : nil
         }
-        for end in [End.near, End.far] where Self.fits(model, end: end) {
-            let dir = Self.direction(end)
-            let home = Self.target(model, end: end)
-            let zone = Self.effectiveZone(for: model, end: end)
-            let zoneStart = home - dir * zone
-            let progress = (model.offset - zoneStart) * dir
-            guard progress > 0.5, progress < zone else { continue }
-            return progress >= zone / 3 ? home : zoneStart
-        }
-        return nil
+        let zone = Self.effectiveZone(for: model)
+        let zoneStart = model.maximumOffset - zone
+        guard model.offset > zoneStart + 0.5, model.offset < model.maximumOffset else { return nil }
+        return model.offset >= zoneStart + zone / 3 ? model.maximumOffset : zoneStart
     }
 
     private mutating func applyFree(delta: CGFloat,
                                     to model: TrayScrollModel,
-                                    stretch: Bool,
-                                    end: End) -> (model: TrayScrollModel, click: Click?) {
+                                    stretch: Bool) -> (model: TrayScrollModel, click: Click?) {
         var next = model
-        let dir = Self.direction(end)
-        let home = Self.target(next, end: end)
-        let zone = Self.effectiveZone(for: next, end: end)
-        let zoneStart = home - dir * zone
-        // Всё считается в «пути к посадке»: путь растёт по мере приближения.
-        let travelled = (next.offset - zoneStart) * dir
-        let step = delta * dir
-        guard step > 0, travelled + step > 0 else {
-            // Вне зоны или движение от упора: до щелчка выход свободен.
+        let zoneStart = next.maximumOffset - Self.effectiveZone(for: next)
+        guard delta > 0, next.offset + delta > zoneStart else {
+            // Вне зоны или движение от упора: до щелчка выход свободен, жест
+            // легко отменяется — сопротивление только в сторону сбора.
             next = next.scrolled(by: delta, rubberBand: stretch)
             return (next, nil)
         }
         // Часть дельты до зоны — один к одному, остаток — через натяжение.
-        let before = max(0, -travelled)
-        let tensioned = (step - before) / Self.tension
-        let candidate = max(travelled, 0) + tensioned
-        if candidate >= zone - Self.effectiveSnapRemainder(for: next, end: end) {
-            next.offset = home
+        let before = max(0, zoneStart - next.offset)
+        let tensioned = (delta - before) / Self.tension
+        let candidate = max(next.offset, zoneStart) + tensioned
+        if candidate >= next.maximumOffset - Self.effectiveSnapRemainder(for: next) {
+            next.offset = next.maximumOffset
             engaged = true
-            engagedEnd = end
             strain = 0
             return (next, .snapIn)
         }
-        next.offset = zoneStart + dir * candidate
+        next.offset = candidate
         return (next, nil)
     }
 
     private mutating func applyEngaged(delta: CGFloat,
                                        to model: TrayScrollModel,
-                                       stretch: Bool,
-                                       end: End) -> (model: TrayScrollModel, click: Click?) {
+                                       stretch: Bool) -> (model: TrayScrollModel, click: Click?) {
         var next = model
-        let dir = Self.direction(end)
-        let home = Self.target(next, end: end)
-        let step = delta * dir
-        if step >= 0 {
+        let maxOffset = next.maximumOffset
+        if delta >= 0 {
             // Глубже в упор — обычная резинка за краем (`TR-13`).
             strain = 0
             next = next.scrolled(by: delta, rubberBand: stretch)
             return (next, nil)
         }
-        let beyond = (next.offset - home) * dir
-        if beyond > 0 {
+        if next.offset > maxOffset {
             // Сначала вернуться из перетяга; излишек дельты идёт в побег.
-            let back = max(step, -beyond) * dir
+            let back = max(delta, maxOffset - next.offset)
             next.offset += back
             let rest = delta - back
-            if abs(rest) > 0.001 { return applyEngaged(delta: rest, to: next, stretch: stretch, end: end) }
+            if rest < -0.001 { return applyEngaged(delta: rest, to: next, stretch: stretch) }
             return (next, nil)
         }
-        strain += -step
+        strain += -delta
         if strain >= Self.escape {
             // Вырвалась: накопленное напряжение выпускается одним прыжком.
             engaged = false
             strain = 0
-            next.offset = home - dir * Self.effectiveZone(for: next, end: end)
+            next.offset = maxOffset - Self.effectiveZone(for: next)
             return (next, .release)
         }
-        next.offset = home - dir * (strain / Self.holdTension)
+        next.offset = maxOffset - strain / Self.holdTension
         return (next, nil)
     }
 }
