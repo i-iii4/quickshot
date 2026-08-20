@@ -198,7 +198,9 @@ enum TrayStripLayout {
     static let depthScaleStep: CGFloat = 0.1
     /// Зазор между кнопкой хаба и базой стопки. Ярусы кромок — и есть резерв
     /// между кнопкой и лентой, отдельный большой отступ поверх них не нужен.
-    static let hubClearance: CGFloat = 4
+    /// Зазор под кнопку хаба. Хаб упразднён (`TR-30`), поэтому ноль: иначе
+    /// он добавлялся к отступу карточки от края экрана.
+    static let hubClearance: CGFloat = 0
 
     static func depthScale(_ depth: CGFloat) -> CGFloat {
         max(0.65, 1 - depthScaleStep * depth)

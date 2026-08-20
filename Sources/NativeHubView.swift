@@ -2618,16 +2618,27 @@ final class NativeCasePanelView: NSView {
             default: break
             }
         }
-        measured = nativeView.measureButtonContentSize()
+        setCount(0)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) не поддерживается") }
 
     func setCount(_ count: Int) {
         nativeView.setCount(count)
-        measured = nativeView.measureButtonContentSize()
+        // Замер даёт объединение рамок КНОПОК; счётчик и внутренние отступы
+        // ряда в него не входят, поэтому добавляем запас — иначе панель
+        // получалась короче содержимого и кнопки наезжали друг на друга
+        // (приёмка 19.08.2026).
+        let buttons = nativeView.measureButtonContentSize()
+        measured = NSSize(width: buttons.width + Self.counterSlack,
+                          height: max(buttons.height, NativeHubMetrics.height) + Self.rowPadding * 2)
         invalidateIntrinsicContentSize()
     }
+
+    /// Место под счётчик справа от кнопок.
+    private static let counterSlack: CGFloat = 26
+    /// Внутренние поля ряда из разметки панели.
+    private static let rowPadding: CGFloat = 6
 
     override var fittingSize: NSSize { measured }
     override var intrinsicContentSize: NSSize { measured }
