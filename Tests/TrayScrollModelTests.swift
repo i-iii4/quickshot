@@ -42,7 +42,8 @@ struct TrayScrollModelTests {
         deckClosureIsContinuous()
         deckClosureHitsItsBounds()
         detentHoldRevealsTheTiers()
-        deckCoverFinishesTheNearTierFirst()
+        deckSqueezesEveryGapAlike()
+        deckCurveEasesInAndClosesLinearly()
         deckCoverHasNoSpeedStep()
         deckCollapseKeepsCardsContinuous()
         flickProjectionMatchesApplesFormula()
@@ -891,6 +892,37 @@ struct TrayScrollModelTests {
         }
     }
 
+    /// Сжатие РАВНОМЕРНОЕ: промежутки стопки сокращаются в той же
+    /// пропорции, что и зазор между стопкой и доезжающей карточкой.
+    /// Требование заказчика: «если бы это были физические объекты и я их
+    /// сжимал, расстояние между ними сокращалось бы равномерно; нет
+    /// момента, когда я вижу меньше объектов».
+    ///
+    /// Зазор равен остатку пути и кривой не подчиняется — поэтому кривая
+    /// схлопывания обязана давать раскрытие, линейное по остатку. Гладкая
+    /// с обоих концов кривая этого не даёт: у посадки она гасит промежутки
+    /// стопки быстрее, чем закрывается зазор, и слои пропадают по одному.
+    private static func deckSqueezesEveryGapAlike() {
+        let model = deckStrip()
+        let zone = TrayDetentModel.effectiveZone(for: model)
+        var ratios: [CGFloat] = []
+        var distance = zone
+        while distance > 2 {
+            let presented = model.maximumOffset - distance
+            let open = 1 - TrayDeckClosure.collapse(presented: presented, model: model)
+            // Промежуток стопки — ярус, сжатый на ту же долю; зазор — сам
+            // остаток пути. Отношение обязано держаться, а не уходить в ноль.
+            let tierGap = TrayStripLayout.edgeLength * open
+            ratios.append(tierGap / distance)
+            distance -= 2
+        }
+        let low = ratios.min() ?? 0
+        let high = ratios.max() ?? 0
+        expect(low > 0.08, "промежутки стопки схлопываются раньше зазора: \(low)")
+        expect(high / max(low, 0.0001) < 2.5,
+               "сжатие неравномерно: отношение гуляет от \(low) до \(high)")
+    }
+
     /// Подтягивание до щелчка ПРИОТКРЫВАЕТ ярусы соразмерно ходу, а
     /// отпускание закрывает обратно. Требование заказчика словами
     /// пользователя: «потянул чуть-чуть, не дожидаясь щелчка, увидел
@@ -920,10 +952,10 @@ struct TrayScrollModelTests {
             reveal.append(1 - value)
         }
 
-        // На полном ходе удержания ярусы должны выглядывать ЗАМЕТНО, иначе
-        // требование выполнено лишь на бумаге: четверть — это около 3.5 pt
-        // ближнего яруса, различимый глазом край.
-        expect(reveal.last! > 0.25,
+        // На полном ходе удержания колода обязана быть ЗАМЕТНО приоткрыта.
+        // Порог — пятая часть: на люфте защёлки в 8 pt раскрытие 27%, и
+        // ярус выглядывает примерно на 1.9 pt, различимый глазом край.
+        expect(reveal.last! > 0.2,
                "подтягивание почти не открывает колоду: \(reveal.last! * 100)%")
 
         // Отпускание возвращает ленту домой, и колода закрывается обратно.
@@ -950,12 +982,12 @@ struct TrayScrollModelTests {
         expect(abs(TrayDeckClosure.collapse(presented: model.maximumOffset, model: model) - 1) < 0.001,
                "у посадки колода не схлопнута полностью")
 
-        // Закрытие завершается ЗАМЕТНО раньше щелчка: сначала колода
-        // сложилась, потом щёлкнул замок. Совпадение смазывало оба события.
+        // Схлопывание завершается РОВНО в посадке, а не раньше. Плато у
+        // посадки, где промежутки стопки уже нулевые, а зазор до доезжающей
+        // карточки ещё нет, роняло число видимых слоёв (приёмка 20.08.2026).
         let completionDistance = zone * (1 - TrayDeckClosure.completionPoint)
-        let snapDistance = TrayDetentModel.effectiveSnapRemainder(for: model)
-        expect(completionDistance > snapDistance + 4,
-               "схлопывание и щелчок совпадают: \(completionDistance) против \(snapDistance)")
+        expect(completionDistance < 0.001,
+               "схлопывание кончается раньше посадки: \(completionDistance) pt плато")
         let atCompletion = TrayDeckClosure.collapse(
             presented: model.maximumOffset - completionDistance, model: model)
         expect(atCompletion >= 0.999, "колода не сложилась к своей точке: \(atCompletion)")
@@ -967,12 +999,16 @@ struct TrayScrollModelTests {
                "короткая лента закрывает колоду")
     }
 
-    /// Критерий 4: кривая гладкая с ОБОИХ концов — скорость нулевая и на
-    /// входе в зону, и в точке закрытия, максимум в середине хода.
-    /// Односторонние кривые дают удар на той границе, где скорость
-    /// ненулевая: степенная вставала колом в конце, обратная дёргала колоду
-    /// на входе (аудит 20.08.2026).
-    private static func deckCoverFinishesTheNearTierFirst() {
+    /// Критерий 4: кривая гладкая на ВХОДЕ в зону и ЛИНЕЙНА у посадки.
+    ///
+    /// Два конца отвечают за разное. На входе скорость обязана быть
+    /// нулевой — иначе колода дёргается в движение при пересечении границы
+    /// зоны. У посадки, наоборот, скорость обязана быть НЕнулевой: зазор
+    /// между стопкой и доезжающей карточкой закрывается линейно по остатку
+    /// пути, и промежутки стопки должны сокращаться в той же пропорции.
+    /// Гладкая с обоих концов кривая гасила их раньше зазора, и число
+    /// видимых слоёв падало с трёх до одного (приёмка 20.08.2026).
+    private static func deckCurveEasesInAndClosesLinearly() {
         let step: CGFloat = 0.001
         let startSpeed = (TrayDeckClosure.curve(step) - TrayDeckClosure.curve(0)) / step
         let endSpeed = (TrayDeckClosure.curve(1) - TrayDeckClosure.curve(1 - step)) / step
@@ -980,11 +1016,15 @@ struct TrayScrollModelTests {
 
         expect(startSpeed < midSpeed * 0.05,
                "колода дёргается на входе в зону: скорость \(startSpeed) против \(midSpeed)")
-        expect(endSpeed < midSpeed * 0.05,
-               "колода обрывается в конце: скорость \(endSpeed) против \(midSpeed)")
-        expect(abs(TrayDeckClosure.curve(0.5) - 0.5) < 0.001,
-               "кривая несимметрична в середине: \(TrayDeckClosure.curve(0.5))")
-        expect(abs(TrayDeckClosure.curve(1) - 1) < 0.001, "колода не закрывается полностью")
+        expect(endSpeed > midSpeed,
+               "у посадки кривая замедляется и гасит слои раньше зазора: \(endSpeed)")
+
+        // Раскрытие линейно по остатку пути: доля, на которую колода
+        // раскрыта, пропорциональна тому, сколько ленте осталось доехать.
+        let a = 1 - TrayDeckClosure.curve(1 - 0.02)
+        let b = 1 - TrayDeckClosure.curve(1 - 0.04)
+        expect(abs(b / a - 2) < 0.15,
+               "раскрытие не пропорционально остатку пути: \(b / a) вместо 2")
     }
 
     /// Скорость схлопывания меняется ПЛАВНО: кусочно-линейное деление
