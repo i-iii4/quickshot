@@ -42,6 +42,7 @@ struct TrayScrollModelTests {
         deckClosureIsContinuous()
         deckClosureHitsItsBounds()
         deckCoverFinishesTheNearTierFirst()
+        deckCoverHasNoSpeedStep()
         flickProjectionMatchesApplesFormula()
         flickSnapsOnlyWhenItLandsInTheZone()
         detentBackingOutOfTheZoneIsFree()
@@ -929,6 +930,26 @@ struct TrayScrollModelTests {
         let half = TrayDeckClosure.coverShift(0.5)
         expect(half < tier, "к середине хода накрыто больше ближнего яруса: \(half)")
         expect(half > tier * 0.6, "к середине хода ближний ярус почти не накрыт: \(half)")
+    }
+
+    /// Скорость крышки меняется ПЛАВНО: кусочно-линейная версия удваивала её
+    /// ступенькой на границе ярусов, и глаз читал рывок ровно в этой точке.
+    /// Проверяем непрерывность первой производной по всему ходу.
+    private static func deckCoverHasNoSpeedStep() {
+        let step: CGFloat = 0.01
+        var previousSpeed: CGFloat?
+        var maxJump: CGFloat = 0
+        for c in stride(from: 0.0, through: 1.0 - step, by: step) {
+            let speed = (TrayDeckClosure.coverShift(c + step)
+                         - TrayDeckClosure.coverShift(c)) / step
+            if let previousSpeed {
+                maxJump = max(maxJump, abs(speed - previousSpeed))
+            }
+            previousSpeed = speed
+        }
+        // Соседние шаги отличаются на доли точки; ступенька дала бы разрыв
+        // порядка удвоения скорости.
+        expect(maxJump < 1.0, "скорость крышки меняется ступенькой: скачок \(maxJump)")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
