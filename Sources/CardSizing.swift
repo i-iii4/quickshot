@@ -16,31 +16,39 @@ struct CardLayout {
 enum CardSizing {
     static let minHeight: CGFloat = 96
     static let maxHeightFraction: CGFloat = 0.42   // потолок высоты = 42% высоты экрана
-    static let tallAspect: CGFloat = 2.0           // максимум height/width (1:2)
-    static let wideAspect: CGFloat = 0.42          // минимум height/width (≈2.4:1)
+    /// Все миниатюры одного соотношения 3:4 (ширина к высоте) — лента
+    /// становится ровной, карточки взаимозаменяемы по месту (`TR-37`).
+    /// Раньше карточка повторяла пропорции снимка, и лента выглядела рваной.
+    static let fixedAspect: CGFloat = 4.0 / 3.0    // height / width
+
+    /// Максимальная ширина, при которой высота ещё умещается в потолок:
+    /// соотношение держится строго, поэтому ограничивать надо ширину.
+    static func maxWidth(screenHeight: CGFloat) -> CGFloat {
+        maxHeightFraction * screenHeight / fixedAspect
+    }
 
     static func layout(imageW: Int, imageH: Int, width W: CGFloat, screenHeight: CGFloat) -> CardLayout {
         let iw = CGFloat(max(1, imageW)), ih = CGFloat(max(1, imageH))
+        let cardH = max(minHeight, W * fixedAspect)
         let nativeAspect = ih / iw
-        let targetAspect = min(tallAspect, max(wideAspect, nativeAspect))
-        let maxH = maxHeightFraction * screenHeight
-        let cardH = min(maxH, max(minHeight, W * targetAspect))
-        let cardAspect = cardH / W
 
+        // Обрезка ЦЕНТРИРОВАННАЯ: лишнее снимается симметрично с обеих
+        // сторон, в кадре остаётся середина. Прежний якорь сверху-слева
+        // отбрасывал правый край и низ целиком.
         var cropW = iw, cropH = ih
         var edge: CropEdge = .none
-        if nativeAspect > cardAspect + 0.005 {            // кадр выше карточки — режем низ
-            cropW = iw
-            cropH = min(ih, (iw * cardAspect).rounded())  // clamp: cropping(to:) вернёт nil, если выйти за кадр
+        if nativeAspect > fixedAspect + 0.005 {           // кадр выше — режем верх и низ
+            cropH = min(ih, (iw * fixedAspect).rounded())
             edge = .bottom
-        } else if nativeAspect < cardAspect - 0.005 {     // кадр шире карточки — режем правый край
-            cropH = ih
-            cropW = min(iw, (ih / cardAspect).rounded())
+        } else if nativeAspect < fixedAspect - 0.005 {    // кадр шире — режем оба края
+            cropW = min(iw, (ih / fixedAspect).rounded())
             edge = .right
         }
         return CardLayout(height: cardH,
                           cropped: edge != .none,
                           cropEdge: edge,
-                          cropRect: CGRect(x: 0, y: 0, width: max(1, cropW), height: max(1, cropH)))
+                          cropRect: CGRect(x: ((iw - cropW) / 2).rounded(),
+                                           y: ((ih - cropH) / 2).rounded(),
+                                           width: max(1, cropW), height: max(1, cropH)))
     }
 }

@@ -71,6 +71,17 @@ xcrun swiftc \
   -swift-version 6 \
   -strict-concurrency=complete \
   -warnings-as-errors \
+  Sources/CardSizing.swift \
+  Tests/CardSizingTests.swift \
+  -o "$OUT_DIR/CardSizingTests"
+"$OUT_DIR/CardSizingTests"
+
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
   Sources/CaptureGestureBuffer.swift \
   Tests/CaptureGestureBufferTests.swift \
   -o "$CAPTURE_GESTURE_OUT"

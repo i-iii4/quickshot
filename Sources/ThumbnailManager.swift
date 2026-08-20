@@ -1910,6 +1910,9 @@ final class ThumbnailManager {
             gap: ThumbStyle.gap,
             resizeBand: ThumbStyle.resizeBand,
             minimum: ThumbStyle.minWidth,
-            maximum: ThumbStyle.maxWidth)
+            // Соотношение 3:4 держится строго (`TR-37`), поэтому потолок
+            // высоты ограничивает ШИРИНУ: иначе карточка переросла бы экран.
+            maximum: min(ThumbStyle.maxWidth,
+                         CardSizing.maxWidth(screenHeight: screen.frame.height)))
     }
 }
