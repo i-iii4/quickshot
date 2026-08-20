@@ -246,6 +246,20 @@ struct ThumbnailMotionTests {
                                            vertical: false)
         try require(freedH.x == candidate.x && freedH.y == candidate.y,
                     "Horizontal card leaving the stack was pinned to its old Y")
+
+        // `TR-38`: ось раскрытия выбирает жест.
+        try require(trayAxisPick(accumulatedX: 4, accumulatedY: 6, threshold: 10) == nil,
+                    "Axis was picked before the threshold")
+        try require(trayAxisPick(accumulatedX: 2, accumulatedY: 14, threshold: 10) == true,
+                    "Pulling up did not open the vertical axis")
+        try require(trayAxisPick(accumulatedX: -14, accumulatedY: 2, threshold: 10) == false,
+                    "Pulling left did not open the horizontal axis")
+        // Направление хода значения не имеет — только ось.
+        try require(trayAxisPick(accumulatedX: 0, accumulatedY: -14, threshold: 10) == true,
+                    "Pulling down picked a different axis than pulling up")
+        // Ровная диагональ достаётся вертикали: она основная.
+        try require(trayAxisPick(accumulatedX: 12, accumulatedY: 12, threshold: 10) == true,
+                    "A clean diagonal did not fall back to the vertical axis")
     }
 
     private static func run(_ name: String, _ body: () throws -> Void) {

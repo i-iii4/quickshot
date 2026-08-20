@@ -59,6 +59,26 @@ final class ThumbnailManager {
 
     private var collectionModel = ThumbnailCollectionModel()
     private var itemByID: [UUID: ThumbnailWindow] = [:]
+    /// Край, у которого лежит стопка и вдоль которого раскрывается лента.
+    /// Пока ось не выбрана — берётся из позиции трея.
+    private var activeEdge: ThumbnailLayoutEdge {
+        openAxis ?? ThumbnailLayoutEdge(rawValue: TrayPosition.current.rawValue) ?? .right
+    }
+
+    /// Вторая ось для текущей позиции трея, или `nil`, если её нет.
+    /// Пара обязана выходить из ОДНОГО угла, иначе выбор оси двигал бы
+    /// собранную стопку. Для трея у правого края это `.right` и `.bottom`:
+    /// обе собираются в правом нижнем углу.
+    private var alternateEdge: ThumbnailLayoutEdge? {
+        switch ThumbnailLayoutEdge(rawValue: TrayPosition.current.rawValue) ?? .right {
+        case .right: return .bottom
+        case .bottom: return .right
+        default: return nil
+        }
+    }
+
+    private var axisIsVertical: Bool { activeEdge.isVertical }
+
     private var items: [ThumbnailWindow] {
         collectionModel.ids.compactMap { itemByID[$0] }
     }
@@ -68,6 +88,17 @@ final class ThumbnailManager {
     /// места, и контур по её живой рамке уводил шкатулку вбок (приёмка
     /// 20.08.2026).
     private var enteringTargets: [ObjectIdentifier: NSRect] = [:]
+    /// Ось, вдоль которой сейчас раскрыта колода (`TR-38`). `nil` — колода
+    /// собрана и ось ещё не выбрана: в собранном состоянии обе оси дают
+    /// одну и ту же геометрию, поэтому выбор незаметен.
+    private var openAxis: ThumbnailLayoutEdge?
+    /// Ход пальца, накопленный до выбора оси.
+    private var axisPickupX: CGFloat = 0
+    private var axisPickupY: CGFloat = 0
+    /// Порог выбора оси. Столько же, сколько система тратит на распознавание
+    /// направления свайпа: меньше — ось скачет на дрожании руки.
+    private static let axisPickThreshold: CGFloat = 10
+
     private var collapsed = false
     private var anchorScreen: NSScreen?
 
@@ -577,7 +608,7 @@ final class ThumbnailManager {
                                                       oldOuterFrame: oldFrame,
                                                       targetOuterSize: outerSize(of: item),
                                                       resizeBand: ThumbStyle.resizeBand,
-                                                      vertical: TrayPosition.current.isVertical),
+                                                      vertical: axisIsVertical),
                                reduceMotion: reduceMotion)
             reflowing.append((item, oldFrame))
         }
@@ -593,7 +624,7 @@ final class ThumbnailManager {
         // а не текущее положение.
         enteringTargets[ObjectIdentifier(inserted)] = thumbnailVisibleFrame(
             slot: slot, cardSize: inserted.cardSize,
-            vertical: TrayPosition.current.isVertical)
+            vertical: axisIsVertical)
         runCollectionMotion(duration: reduceMotion ? TrayAnim.reducedTransition : TrayAnim.removalAndReflow,
                             onFrame: { [weak inserted] progress in
             inserted?.applyInsertion(progress: progress, reduceMotion: reduceMotion)
@@ -724,7 +755,7 @@ final class ThumbnailManager {
                                           reduceMotion: reduceMotion)
                     enteringTargets[identifier] = thumbnailVisibleFrame(
                         slot: slot, cardSize: item.cardSize,
-                        vertical: TrayPosition.current.isVertical)
+                        vertical: axisIsVertical)
                     entering.append(item)
                     continue
                 }
@@ -734,7 +765,7 @@ final class ThumbnailManager {
                                                       oldOuterFrame: oldFrame,
                                                       targetOuterSize: outerSize(of: item),
                                                       resizeBand: ThumbStyle.resizeBand,
-                                                      vertical: TrayPosition.current.isVertical),
+                                                      vertical: axisIsVertical),
                     reduceMotion: reduceMotion)
                 reflowing.append((item, oldFrame))
             }
@@ -789,7 +820,52 @@ final class ThumbnailManager {
     }
 
     private func collectionDirectionalOffset() -> NSPoint {
-        thumbnailCollectionOffset(vertical: TrayPosition.current.isVertical)
+        thumbnailCollectionOffset(vertical: axisIsVertical)
+    }
+
+    /// Отпускает ось, когда колода снова собрана (`TR-38`): следующий жест
+    /// снова свободен выбрать, вверх раскрывать или влево. Пока жест или
+    /// пружина живы, ось держится — сброс на ходу сменил бы систему
+    /// координат под пальцем.
+    private func releaseOpenAxisIfGathered() {
+        guard openAxis != nil, !scrollGestureActive, !scrollSettleAnimating else { return }
+        guard scrollModel.offset >= scrollModel.maximumOffset - 0.5 else { return }
+        openAxis = nil
+        axisPickupX = 0
+        axisPickupY = 0
+    }
+
+    /// Копит ход пальца и выбирает ось раскрытия (`TR-38`). Возвращает
+    /// `true`, когда ось уже выбрана и событие можно обрабатывать обычным
+    /// путём, и `false`, пока порог не пройден.
+    ///
+    /// До порога лента НЕ двигается: иначе первые точки движения уводили бы
+    /// её по случайной оси. После выбора ось держится до конца жеста —
+    /// смена оси на ходу читается как срыв, а не как управление.
+    private func pickOpenAxis(with event: NSEvent) -> Bool {
+        if event.phase == .began {
+            axisPickupX = 0
+            axisPickupY = 0
+        }
+        axisPickupX += event.scrollingDeltaX
+        axisPickupY += event.scrollingDeltaY
+        guard let vertical = trayAxisPick(accumulatedX: axisPickupX,
+                                          accumulatedY: axisPickupY,
+                                          threshold: Self.axisPickThreshold) else { return false }
+        let base = ThumbnailLayoutEdge(rawValue: TrayPosition.current.rawValue) ?? .right
+        let chosen = vertical
+            ? (base.isVertical ? base : (alternateEdge ?? base))
+            : (base.isVertical ? (alternateEdge ?? base) : base)
+        guard chosen != activeEdge else {
+            openAxis = chosen
+            return true
+        }
+        openAxis = chosen
+        // Смена оси меняет систему координат ленты: собранная колода в обеих
+        // стоит в одном углу, поэтому пересчёт незаметен, но раскладка обязана
+        // пройти заново, иначе карточки останутся в координатах прежней оси.
+        layout()
+        return true
     }
 
     /// Scrolls the finite tray viewport. A newly captured
@@ -799,7 +875,11 @@ final class ThumbnailManager {
     /// ты находишься, и не позволяет остановиться между карточками.
     func scrollTray(with event: NSEvent) {
         guard !cardsAreCollapsed else { return }
-        let vertical = TrayPosition.current.isVertical
+        // `TR-38`: ось раскрытия выбирает ЖЕСТ. Пока колода собрана и ось не
+        // выбрана, лента не двигается — копится ход пальца, и по нему
+        // решается, вверх раскрывать или влево.
+        if openAxis == nil, alternateEdge != nil, pickOpenAxis(with: event) == false { return }
+        let vertical = axisIsVertical
         let raw = vertical
             ? event.scrollingDeltaY
             : (abs(event.scrollingDeltaX) > 0.01 ? event.scrollingDeltaX : event.scrollingDeltaY)
@@ -1218,6 +1298,7 @@ final class ThumbnailManager {
     /// `refreshHostPointerRouting`, и зона приёма мыши отставала от карточек
     /// (аудит 20.08.2026).
     private func finishLayoutPass() {
+        releaseOpenAxisIfGathered()
         applyStackOrder()
         updateCase()
         refreshHoverUnderPointer()
@@ -1291,7 +1372,7 @@ final class ThumbnailManager {
                            opacity: slot.opacity,
                            shadowFraction: slot.shadowFraction,
                            stackOrder: slot.stackOrder,
-                           vertical: TrayPosition.current.isVertical)
+                           vertical: axisIsVertical)
         }
     }
 
@@ -1388,7 +1469,7 @@ final class ThumbnailManager {
                                                       oldOuterFrame: oldFrame,
                                                       targetOuterSize: outerSize(of: item),
                                                       resizeBand: ThumbStyle.resizeBand,
-                                                      vertical: TrayPosition.current.isVertical),
+                                                      vertical: axisIsVertical),
                     reduceMotion: reduceMotion)
                 reflowing.append((item, oldFrame))
             } else {
@@ -1729,6 +1810,7 @@ final class ThumbnailManager {
         collapsedPeekItem = nil
         trayHoverActive = false
         collapsed = true
+        openAxis = nil
         runTrayTransition(to: 1, on: screen)
     }
 
@@ -1743,7 +1825,7 @@ final class ThumbnailManager {
     }
 
     private func runTrayTransition(to target: CGFloat, on screen: NSScreen) {
-        let travelOffset = thumbnailTrayTravelOffset(vertical: TrayPosition.current.isVertical)
+        let travelOffset = thumbnailTrayTravelOffset(vertical: axisIsVertical)
         let (visible, hidden) = cardLayout(on: screen)
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
 
@@ -1871,7 +1953,7 @@ final class ThumbnailManager {
     /// вопрос «есть ли куда скроллить и насколько перетянуто», раскладку
     /// по-прежнему считает `ThumbnailLayout`.
     private func syncScrollModel(on screen: NSScreen) {
-        let vertical = TrayPosition.current.isVertical
+        let vertical = axisIsVertical
         let gap = ThumbStyle.gap
         let lengths = items.map { vertical ? $0.cardSize.height : $0.cardSize.width }
         let content = lengths.reduce(0, +) + gap * CGFloat(max(0, lengths.count - 1))
@@ -1977,7 +2059,9 @@ final class ThumbnailManager {
             ? ThumbStyle.margin
             : ThumbStyle.margin
         // `TR-30`: хаб-виджет упразднён, места под него лента не резервирует.
-        return (ThumbnailLayoutEdge(rawValue: position.rawValue)!,
+        // Край берётся из АКТИВНОЙ оси (`TR-38`), а не только из позиции трея:
+        // жест решает, раскрывается колода вверх или влево.
+        return (activeEdge,
                 .zero,
                 margin)
     }

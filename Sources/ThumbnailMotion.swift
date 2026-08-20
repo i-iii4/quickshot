@@ -291,3 +291,19 @@ final class TrayProgressAnimator: NSObject {
 
     isolated deinit { link?.invalidate() }
 }
+
+/// Ось раскрытия колоды выбирается ЖЕСТОМ (`TR-38`): потянул вверх —
+/// раскрылось вверх, потянул влево — влево. До порога не двигается ничего,
+/// иначе лента дёргалась бы по случайной оси на первых точках движения.
+/// После выбора ось держится до конца жеста: смена оси на ходу читалась бы
+/// как срыв, а не как управление.
+///
+/// `nil` — порог ещё не пройден, ось не выбрана. `true` — вертикальная.
+func trayAxisPick(accumulatedX: CGFloat,
+                  accumulatedY: CGFloat,
+                  threshold: CGFloat) -> Bool? {
+    let dx = abs(accumulatedX), dy = abs(accumulatedY)
+    guard max(dx, dy) >= threshold else { return nil }
+    // Ровная диагональ достаётся вертикали: она основная и привычная.
+    return dy >= dx
+}
