@@ -1148,12 +1148,15 @@ final class ThumbnailManager {
             }
             return
         }
-        // Шкатулка строится по ВЕРХНЕЙ карточке и по её ВИДИМЫМ границам:
-        // рамка контейнера раздута полем под тень, а ярусы стопки в контур не
-        // входят — они прячутся под подложкой (`TR-30`).
-        guard let top = items.last(where: { !$0.hostView.isHidden }) else { return }
-        let contour = top.visibleCardFrame
-        guard contour.width > 1, contour.height > 1 else { return }
+        // Шкатулка строится по ВИДИМЫМ границам карточек: рамка контейнера
+        // раздута полем под тень, по ней отступы выходили больше заданных.
+        // В контур входит и самый нижний ярус стопки — 8 pt отсчитываются от
+        // него (`TR-30`).
+        var contour = CGRect.null
+        for item in items where !item.hostView.isHidden {
+            contour = contour.union(item.visibleCardFrame)
+        }
+        guard !contour.isNull, contour.width > 1, contour.height > 1 else { return }
         casePanel.setCount(items.count)
         let panelSize = casePanel.fittingSize
         let side = TrayCaseView.sidePadding
