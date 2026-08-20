@@ -202,6 +202,7 @@ private enum NativeControlSurface: String {
     case thumbnail
     case thumbnailCopy = "thumbnail_copy"
     case thumbnailDismiss = "thumbnail_dismiss"
+    case casePanel = "case_panel"
     case pinned
     case settings
     case annotationToolbar = "annotation_toolbar"
@@ -559,6 +560,11 @@ private final class NativeHubRenderView: NSView {
             .intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
         guard pixelRect.width > 0, pixelRect.height > 0 else { return nil }
         return image.cropping(to: pixelRect)
+    }
+
+    /// Счётчик снимков для панели шкатулки (`TR-30`).
+    func setCount(_ count: Int) {
+        sendCommand("hub.count:\(max(0, count))")
     }
 
     func hasInteractiveButton(at point: NSPoint) -> Bool {
@@ -2587,6 +2593,63 @@ final class NativeThumbnailButtonView: NSView {
         nativeView.debugPixel(at: point)
     }
 #endif
+}
+
+/// Панель шкатулки (`TR-30`): закрыть всё, копировать всё, счётчик снимков.
+/// Рисуется нативной поверхностью `case_panel`, фон прозрачный — подложку даёт
+/// сама шкатулка.
+final class NativeCasePanelView: NSView {
+    var onDeleteAll: (() -> Void)?
+    var onCopyAll: (() -> Void)?
+
+    private let nativeView = NativeHubRenderView(frame: .zero)
+    private var measured = NSSize(width: 120, height: 28)
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        addSubview(nativeView)
+        nativeView.setSurface(.casePanel)
+        nativeView.onButtonPressed = { [weak self] pressed in
+            switch pressed {
+            case .delete: self?.onDeleteAll?()
+            case .copyAll: self?.onCopyAll?()
+            default: break
+            }
+        }
+        measured = nativeView.measureButtonContentSize()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) не поддерживается") }
+
+    func setCount(_ count: Int) {
+        nativeView.setCount(count)
+        measured = nativeView.measureButtonContentSize()
+        invalidateIntrinsicContentSize()
+    }
+
+    override var fittingSize: NSSize { measured }
+    override var intrinsicContentSize: NSSize { measured }
+
+    override func layout() {
+        super.layout()
+        nativeView.frame = bounds
+    }
+
+    /// Мышь ловится только кнопками: остальная площадь панели принадлежит
+    /// подложке шкатулки.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        guard bounds.contains(local) else { return nil }
+        return nativeView.hasInteractiveButton(at: nativeView.convert(local, from: self)) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        nativeView.mouseDown(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        nativeView.mouseUp(with: event)
+    }
 }
 
 final class NativePinnedCopyButtonView: NSView {

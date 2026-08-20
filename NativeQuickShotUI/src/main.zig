@@ -142,6 +142,10 @@ pub const Model = struct {
         return model.surface == .thumbnail_dismiss;
     }
 
+    pub fn casePanelSurface(model: *const Model) bool {
+        return model.surface == .case_panel;
+    }
+
     pub fn hubBubbleSurface(model: *const Model) bool {
         return model.surface == .hub_bubble;
     }
@@ -172,6 +176,14 @@ pub const Model = struct {
 
     pub fn copyLabel(model: *const Model) []const u8 {
         return if (model.copied) "Copied screenshot" else "Copy screenshot";
+    }
+
+    /// Счётчик снимков в панели шкатулки (`TR-30`). Буфер статический:
+    /// разметка читает срез во время отрисовки, аллокатор здесь недоступен.
+    var count_buffer: [8]u8 = undefined;
+
+    pub fn countText(model: *const Model) []const u8 {
+        return std.fmt.bufPrint(&count_buffer, "{d}", .{model.count}) catch "0";
     }
 
     pub fn annotationToolbarSurface(model: *const Model) bool {
@@ -234,6 +246,8 @@ pub const Surface = enum {
     // поверхности, иначе их не поставить в противоположные углы одним рядом.
     thumbnail_copy,
     thumbnail_dismiss,
+    /// Панель шкатулки (`TR-30`): закрыть, копировать, счётчик.
+    case_panel,
     pinned,
     settings,
     annotation_toolbar,
@@ -467,7 +481,7 @@ fn designTokens(model: *const Model) canvas.DesignTokens {
         .contrast = if (model.high_contrast) .high else .standard,
         .reduce_motion = model.reduce_motion,
     });
-    if (model.surface == .hub or model.surface == .hub_bubble or model.surface == .hub_core_background or model.surface == .hub_core_foreground or model.surface == .thumbnail or model.surface == .thumbnail_copy or model.surface == .thumbnail_dismiss or model.surface == .pinned) {
+    if (model.surface == .hub or model.surface == .hub_bubble or model.surface == .hub_core_background or model.surface == .hub_core_foreground or model.surface == .thumbnail or model.surface == .thumbnail_copy or model.surface == .thumbnail_dismiss or model.surface == .case_panel or model.surface == .pinned) {
         tokens.colors.background = canvas.Color.rgba8(0, 0, 0, 0);
     }
     // Кнопки карточки лежат прямо на скриншоте (`TR-28`): их фон обязан быть
@@ -648,6 +662,8 @@ fn onCommand(name: []const u8) ?Msg {
         if (std.mem.eql(u8, raw, "thumbnail")) return .{ .set_surface = .thumbnail };
         if (std.mem.eql(u8, raw, "thumbnail_copy")) return .{ .set_surface = .thumbnail_copy };
         if (std.mem.eql(u8, raw, "thumbnail_dismiss")) return .{ .set_surface = .thumbnail_dismiss };
+
+        if (std.mem.eql(u8, raw, "case_panel")) return .{ .set_surface = .case_panel };
         if (std.mem.eql(u8, raw, "pinned")) return .{ .set_surface = .pinned };
         if (std.mem.eql(u8, raw, "settings")) return .{ .set_surface = .settings };
         if (std.mem.eql(u8, raw, "annotation_toolbar")) return .{ .set_surface = .annotation_toolbar };

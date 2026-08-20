@@ -53,6 +53,14 @@
           </row>
         </if>
         <else>
+        <if test="{casePanelSurface}">
+          <row gap="8" cross="center" padding="6" label="Case actions">
+            <button size="sm" variant="destructive" icon="x" label="Close all" on-press="delete"></button>
+            <button size="sm" variant="secondary" icon="copy" label="Copy all" on-press="copy_all"></button>
+            <text size="sm" foreground="text_muted" wrap="false">{countText}</text>
+          </row>
+        </if>
+        <else>
           <if test="{annotationToolbarSurface}">
             <column gap="6" padding="6" label="Annotation toolbar">
               <if test="{toolbarCompact}">
@@ -222,6 +230,7 @@
       </else>
     </else>
   </else>
+        </else>
         </else>
           </else>
 </row>

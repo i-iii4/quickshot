@@ -109,6 +109,11 @@ final class ThumbnailManager {
     /// каждом кадре, поэтому события жеста осадку не смазывают.
     /// Трекпад, ведущий текущий жест (`TR-29`): щелчок уходит именно в него.
     private var gestureDevice: UInt64?
+    /// Шкатулка (`TR-30`): подложка под собранной стопкой и панель кнопок над
+    /// ней. Видима строго когда лента защёлкнута.
+    private let caseView = TrayCaseView(frame: .zero)
+    private let casePanel = NativeCasePanelView(frame: .zero)
+    private var caseVisible = false
     /// Скорость ленты в видимых координатах, pt/с: сглаженная оценка по
     /// событиям. Нужна пружине границы — без передачи скорости движение
     /// рвётся в момент отпускания (`TR-13`).
@@ -159,7 +164,16 @@ final class ThumbnailManager {
         host.onScrollWheel = { [weak self] event in
             self?.handleHostScroll(event) ?? false
         }
+        // Шкатулка (`TR-30`): подложка ЗА карточками, панель — НАД ними.
+        caseView.isHidden = true
+        casePanel.isHidden = true
+        casePanel.onDeleteAll = { [weak self] in self?.deleteAll() }
+        casePanel.onCopyAll = { [weak self] in self?.copyAll() }
+        hostContent.addSubview(caseView)
         hostContent.addSubview(hub.view)              // хаб — верхний сабвью; карточки кладём под него
+        hostContent.addSubview(casePanel)
+        // Хаб-виджет упразднён (`TR-30`): панель кнопок живёт в шкатулке.
+        hub.view.isHidden = true
 
         let saved = defaults.double(forKey: widthKey)
         if saved > 0 {
@@ -1154,7 +1168,47 @@ final class ThumbnailManager {
             place(item, at: slot)
         }
         applyStackOrder()
+        updateCase()
         refreshHoverUnderPointer()
+    }
+
+    /// Шкатулка (`TR-30`): видима строго когда лента защёлкнута; контур —
+    /// объединение видимых карточек с отступом, панель кнопок сверху.
+    private func updateCase() {
+        let engaged = detent.engaged && !cardsAreCollapsed && !items.isEmpty
+        guard engaged else {
+            if caseVisible {
+                caseVisible = false
+                caseView.isHidden = true
+                casePanel.isHidden = true
+            }
+            return
+        }
+        var contour = CGRect.null
+        for item in items where !item.hostView.isHidden && item.hostView.alphaValue > 0.01 {
+            contour = contour.union(item.hostView.frame)
+        }
+        guard !contour.isNull else { return }
+        let padding = TrayCaseView.padding
+        casePanel.setCount(items.count)
+        let panelSize = casePanel.fittingSize
+        let body = contour.insetBy(dx: -padding, dy: -padding)
+        // Панель — над карточками, на той же подложке.
+        let caseRect = NSRect(x: body.minX,
+                              y: body.minY,
+                              width: max(body.width, panelSize.width + padding * 2),
+                              height: body.height + panelSize.height)
+        caseView.frame = caseRect
+        casePanel.frame = NSRect(x: caseRect.minX + padding,
+                                 y: caseRect.maxY - panelSize.height - padding / 2,
+                                 width: caseRect.width - padding * 2,
+                                 height: panelSize.height)
+        caseView.needsLayout = true
+        if !caseVisible {
+            caseVisible = true
+            caseView.isHidden = false
+            casePanel.isHidden = false
+        }
     }
 
     /// Развёрнутая карточка встаёт целиком, слой стопки — полосой-кромкой.
@@ -1863,8 +1917,9 @@ final class ThumbnailManager {
         let margin = position == .left
             ? ThumbStyle.margin + hub.leadingRevealClearance
             : ThumbStyle.margin
+        // `TR-30`: хаб-виджет упразднён, места под него лента не резервирует.
         return (ThumbnailLayoutEdge(rawValue: position.rawValue)!,
-                NSSize(width: hub.width, height: hub.height),
+                .zero,
                 margin)
     }
 
