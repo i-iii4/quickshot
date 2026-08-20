@@ -903,13 +903,15 @@ struct TrayScrollModelTests {
         expect(abs(TrayDeckClosure.collapse(presented: model.maximumOffset, model: model) - 1) < 0.001,
                "у посадки колода не схлопнута полностью")
 
-        // Закрытие завершается раньше посадки: за четверть зоны до неё уже
-        // единица.
-        let beforeHome = TrayDeckClosure.value(
-            presented: model.maximumOffset - zone * (1 - TrayDeckClosure.completionPoint),
-            model: model)
-        expect(beforeHome >= 0.999,
-               "перекрытие не успело завершиться до посадки: \(beforeHome)")
+        // Закрытие завершается ЗАМЕТНО раньше щелчка: сначала колода
+        // сложилась, потом щёлкнул замок. Совпадение смазывало оба события.
+        let completionDistance = zone * (1 - TrayDeckClosure.completionPoint)
+        let snapDistance = TrayDetentModel.effectiveSnapRemainder(for: model)
+        expect(completionDistance > snapDistance + 4,
+               "схлопывание и щелчок совпадают: \(completionDistance) против \(snapDistance)")
+        let atCompletion = TrayDeckClosure.collapse(
+            presented: model.maximumOffset - completionDistance, model: model)
+        expect(atCompletion >= 0.999, "колода не сложилась к своей точке: \(atCompletion)")
 
         // Короткой ленте закрытие не положено.
         let short = TrayScrollModel(contentLength: 130, viewportLength: 400,
@@ -918,24 +920,19 @@ struct TrayScrollModelTests {
                "короткая лента закрывает колоду")
     }
 
-    /// Критерий 4: к двум третям хода колода сходится наполовину — ближний
-    /// ярус уже накрыт, дальний ещё нет. Деление неравномерное: дальний
-    /// мельче и уже растворён, равное тратило бы половину пути на почти
-    /// незаметное изменение.
+    /// Критерий 4: отклик мгновенный, приход мягкий. В начале колода
+    /// сходится быстро — «потянул и сразу видно»; в точке закрытия скорость
+    /// падает до нуля, поэтому колода закрывается, а не обрывается.
     private static func deckCoverFinishesTheNearTierFirst() {
-        let model = deckStrip()
-        let zone = TrayDetentModel.effectiveZone(for: model)
-        let span = zone * TrayDeckClosure.completionPoint
-        let atShare = TrayDeckClosure.collapse(
-            presented: model.maximumOffset - zone + span * TrayDeckClosure.nearLayerShare,
-            model: model)
-        expect(abs(atShare - 0.5) < 0.001,
-               "к своей доле хода колода сошлась не наполовину: \(atShare)")
+        let start = TrayDeckClosure.curve(0.1)
+        expect(start > 0.15, "в начале хода колода почти не реагирует: \(start)")
 
-        let half = TrayDeckClosure.collapse(
-            presented: model.maximumOffset - zone + span * 0.5, model: model)
-        expect(half < 0.5, "к середине хода схлопнуто больше половины: \(half)")
-        expect(half > 0.25, "к середине хода колода почти не сошлась: \(half)")
+        let step: CGFloat = 0.001
+        let endSpeed = (TrayDeckClosure.curve(1) - TrayDeckClosure.curve(1 - step)) / step
+        let startSpeed = (TrayDeckClosure.curve(step) - TrayDeckClosure.curve(0)) / step
+        expect(endSpeed < startSpeed * 0.1,
+               "движение обрывается вместо мягкого прихода: скорость в конце \(endSpeed)")
+        expect(abs(TrayDeckClosure.curve(1) - 1) < 0.001, "колода не закрывается полностью")
     }
 
     /// Скорость схлопывания меняется ПЛАВНО: кусочно-линейное деление
