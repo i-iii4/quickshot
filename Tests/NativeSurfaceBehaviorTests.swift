@@ -10,6 +10,7 @@ struct NativeSurfaceBehaviorTests {
         run("House metrics come from Native SDK", testHouseMetrics)
         run("floating surfaces have transparent canvas gaps", testFloatingSurfaceTransparency)
         run("thumbnail controls fit, hover, and click", testThumbnailControls)
+        run("case panel lays out without overlap", testCasePanelLayout)
         run("pinned copy control fits, hovers, and clicks", testPinnedControl)
         run("settings controls fit, hover, and dispatch", testSettingsControls)
 
@@ -126,6 +127,29 @@ struct NativeSurfaceBehaviorTests {
         try dismissHost.click(dismissButtons[0].frame, in: dismissView)
         try require(dismissCount == 1 && copyCount == 1,
                     "Dismiss click dispatched the wrong thumbnail action")
+    }
+
+    /// Панель шкатулки (`TR-30`): три кнопки в ряд, без наложений, целиком
+    /// внутри измеренного размера. Растянутая на всю ширину панель рисовала
+    /// ряд у левого края и сминала кнопки — приёмка 19.08.2026.
+    private static func testCasePanelLayout() throws {
+        let panel = NativeCasePanelView(frame: .zero)
+        panel.setCount(4)
+        let size = panel.fittingSize
+        panel.frame = NSRect(origin: .zero, size: size)
+        _ = Host(view: panel, size: size)
+        let buttons = panel.debugButtons().sorted { $0.frame.minX < $1.frame.minX }
+        try require(buttons.count == 3,
+                    "в панели ожидались три кнопки: \(buttons.map(\.title))")
+        try requireContainedAndSeparated(buttons, in: panel.bounds, context: "case panel")
+        for button in buttons {
+            try require(button.frame.width > 20 && button.frame.height > 20,
+                        "кнопка смята: \(button.title) \(button.frame)")
+        }
+        // Справа от кнопок остаётся место под счётчик.
+        let rightmost = buttons.last!.frame.maxX
+        try require(size.width - rightmost > 12,
+                    "счётчику не хватило места: \(size.width - rightmost)")
     }
 
     private static func testPinnedControl() throws {

@@ -2663,6 +2663,10 @@ final class NativeCasePanelView: NSView {
     override func mouseUp(with event: NSEvent) {
         nativeView.mouseUp(with: event)
     }
+
+    #if TESTING
+    func debugButtons() -> [NativeControlDebugButtonSnapshot] { nativeDebugButtons(nativeView, in: self) }
+    #endif
 }
 
 final class NativePinnedCopyButtonView: NSView {
