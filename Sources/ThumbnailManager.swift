@@ -1126,18 +1126,25 @@ final class ThumbnailManager {
             layout()
             return
         }
-        let (visible, hidden) = cardLayout(on: screen)
-        // `TR-34`: колода закрывается НАЕЗЖАНИЕМ — верхняя карточка едет к
-        // краю и накрывает ярусы собой. Ярусы не двигаются и не гаснут: они
-        // просто заслонены. Степень закрытия — чистая функция той же видимой
-        // позиции ленты, что двигает карточки, поэтому пропущенных состояний
-        // быть не может по построению.
+        var (visible, hidden) = cardLayout(on: screen)
+        // `TR-34`: закрытая колода показывает только верхнюю карточку. Степень
+        // закрытия — ЧИСТАЯ ФУНКЦИЯ той же видимой позиции ленты, что двигает
+        // карточки: своей анимации и своего состояния у ярусов нет, поэтому
+        // пропущенных кадров быть не может по построению.
         let closure = deckClosure()
-        let topIndex = visible.max(by: { $0.1.index < $1.1.index })?.1.index
+        var topSlot: ThumbnailLayoutSlot?
+        if closure > 0.001 { topSlot = visible.max(by: { $0.1.index < $1.1.index })?.1 }
+        if closure > 0.999, let topSlot {
+            for (item, slot) in visible where slot.index != topSlot.index { hidden.append(item) }
+            visible = visible.filter { $0.1.index == topSlot.index }
+        }
         for item in hidden { item.hide() }
+        let layers = max(1, visible.count - 1)
         for (item, slot) in visible {
+            let isTop = slot.index == topSlot?.index
             place(item, at: slot,
-                  coverShift: slot.index == topIndex ? TrayStripLayout.parkLevel * closure : 0)
+                  collapseTo: isTop ? nil : topSlot?.origin,
+                  closure: isTop ? 0 : layerClosure(closure, slot: slot, visible: visible, layers: layers))
         }
         applyStackOrder()
         updateCase()
@@ -1206,22 +1213,37 @@ final class ThumbnailManager {
         return min(1, max(0, 1 - distance / span))
     }
 
+    /// Очередь слоёв (`TR-34`): ближний к верхней карточке трогается раньше
+    /// дальнего, окна одинаковой длины — скорость у всех одна, отличается
+    /// только старт.
+    private func layerClosure(_ closure: CGFloat,
+                              slot: ThumbnailLayoutSlot,
+                              visible: [(ThumbnailWindow, ThumbnailLayoutSlot)],
+                              layers: Int) -> CGFloat {
+        guard layers > 1 else { return closure }
+        let depth = CGFloat(max(0, visible.filter { $0.1.index > slot.index }.count - 1))
+        let stagger: CGFloat = 0.2
+        let start = depth / CGFloat(max(1, layers - 1)) * stagger
+        return min(1, max(0, (closure - start) / (1 - stagger)))
+    }
 
     private func place(_ item: ThumbnailWindow,
                        at slot: ThumbnailLayoutSlot,
-                       coverShift: CGFloat = 0) {
+                       collapseTo: NSPoint? = nil,
+                       closure: CGFloat = 0) {
         var origin = slot.origin
-        if coverShift > 0.001 {
-            // Верхняя карточка съезжает К КРАЮ на высоту ярусов и накрывает
-            // их. Направление зависит от того, у какого края стоит трей.
-            switch TrayPosition.current {
-            case .left, .right: origin.y -= coverShift
-            case .bottom: origin.x += coverShift
-            case .top: origin.y += coverShift
-            }
+        var opacity = slot.opacity
+        var shadow = slot.shadowFraction
+        if let collapseTo, closure > 0.001 {
+            // Ярус едет к верхней карточке и гаснет — тем же кадром, что и
+            // сама лента.
+            origin = NSPoint(x: origin.x + (collapseTo.x - origin.x) * closure,
+                             y: origin.y + (collapseTo.y - origin.y) * closure)
+            opacity *= max(0, 1 - closure)
+            shadow *= max(0, 1 - closure)
         }
         let localOrigin = toLocal(origin)
-        if slot.isFullCard && slot.opacity > 0.999 {
+        if slot.isFullCard && opacity > 0.999 {
             item.placeInstant(origin: localOrigin)
         } else {
             item.placeBand(origin: localOrigin,
@@ -1230,8 +1252,8 @@ final class ThumbnailManager {
                            cardStartOffset: slot.cardStartOffset,
                            roundsStart: slot.roundsStart,
                            roundsEnd: slot.roundsEnd,
-                           opacity: slot.opacity,
-                           shadowFraction: slot.shadowFraction,
+                           opacity: opacity,
+                           shadowFraction: shadow,
                            stackOrder: slot.stackOrder,
                            vertical: TrayPosition.current.isVertical)
         }
