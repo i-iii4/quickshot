@@ -38,6 +38,8 @@ struct TrayScrollModelTests {
         detentHoldsAgainstSmallEscape()
         detentReleasesWithAJump()
         detentSkipsShortStrips()
+        flickProjectionMatchesApplesFormula()
+        flickSnapsOnlyWhenItLandsInTheZone()
         detentBackingOutOfTheZoneIsFree()
         detentSettleFinishesTheZone()
         print("TrayScrollModelTests: passed")
@@ -779,6 +781,60 @@ struct TrayScrollModelTests {
             click = step.click
         }
         expect(click == .release, "щелчок выхода умер после недоскролла")
+    }
+
+    // MARK: проекция броска (`TR-36`)
+
+    /// Проекция считается формулой Apple, а не подобранным числом.
+    private static func flickProjectionMatchesApplesFormula() {
+        let rate = TrayFlickProjection.decelerationRate
+        for velocity in [200.0, 500, 1000, 2000] {
+            let expected = (velocity / 1000) * rate / (1 - rate)
+            let actual = TrayFlickProjection.distance(velocity: velocity)
+            expect(abs(actual - expected) < 0.001,
+                   "проекция разошлась с формулой на \(velocity): \(actual)")
+        }
+        // Вдвое быстрее — вдвое дальше.
+        expect(abs(TrayFlickProjection.distance(velocity: 1000)
+                   - 2 * TrayFlickProjection.distance(velocity: 500)) < 0.001,
+               "проекция непропорциональна скорости")
+        // Стоящая лента никуда не проедет.
+        expect(TrayFlickProjection.distance(velocity: 0) == 0, "стоящая лента проехала")
+    }
+
+    /// Таблица срабатывания: бросок защёлкивает, только если лента
+    /// остановилась бы В зоне. Пролёт сквозь зону на скорости защёлкивать
+    /// нельзя — пользователь прокручивает мимо, а не собирает стопку.
+    private static func flickSnapsOnlyWhenItLandsInTheZone() {
+        var model = TrayScrollModel(contentLength: 600, viewportLength: 400,
+                                    offset: 0, lastCardLength: 100)
+        let zone = TrayDetentModel.effectiveZone(for: model)
+        let zoneStart = model.maximumOffset - zone
+
+        // Бросок, чья проекция попадает в зону, — защёлкиваем.
+        model.offset = zoneStart - 100
+        let intoZone = (100 + zone / 2) / (TrayFlickProjection.decelerationRate
+                                           / (1 - TrayFlickProjection.decelerationRate)) * 1000
+        expect(TrayFlickProjection.shouldSnap(model: model, velocity: intoZone),
+               "бросок в зону не защёлкнул")
+
+        // Слабое движение, не доносящее до зоны, — не защёлкиваем.
+        expect(!TrayFlickProjection.shouldSnap(model: model, velocity: intoZone / 4),
+               "слабое движение защёлкнуло")
+
+        // Пролёт сквозь зону на скорости — не защёлкиваем.
+        expect(!TrayFlickProjection.shouldSnap(model: model, velocity: intoZone * 8),
+               "пролёт сквозь зону защёлкнул")
+
+        // Бросок в обратную сторону защёлку не трогает.
+        expect(!TrayFlickProjection.shouldSnap(model: model, velocity: -intoZone),
+               "обратный бросок защёлкнул")
+
+        // Короткой ленте защёлка не положена вовсе.
+        let short = TrayScrollModel(contentLength: 130, viewportLength: 400,
+                                    offset: 0, lastCardLength: 100)
+        expect(!TrayFlickProjection.shouldSnap(model: short, velocity: intoZone),
+               "короткая лента защёлкнулась по броску")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

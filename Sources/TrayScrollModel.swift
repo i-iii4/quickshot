@@ -574,3 +574,42 @@ enum TrayBoundarySpring {
         return (v0 - w * (v0 + w * x0) * time) * exp(-w * time)
     }
 }
+
+/// Проекция броска (`TR-36`).
+///
+/// Где лента остановилась бы сама, если её отпустить с заданной скоростью.
+/// Формула Apple из доклада «Designing Fluid Interfaces» (WWDC 2018) — та же,
+/// по которой система считает докрутку инерции. Не подбирается.
+///
+/// Нужна защёлке: уверенный бросок к сбору должен защёлкивать ПО НАМЕРЕНИЮ
+/// жеста, а не по факту доезда до порога. Иначе бросок, не дотянувший
+/// чуть-чуть, читается как «не сработало» и требует второго движения.
+enum TrayFlickProjection {
+    /// Коэффициент замедления системной прокрутки.
+    static let decelerationRate: CGFloat = 0.998
+
+    /// Насколько лента проедет по инерции при скорости `velocity` (pt/с).
+    static func distance(velocity: CGFloat) -> CGFloat {
+        (velocity / 1000) * decelerationRate / (1 - decelerationRate)
+    }
+
+    /// Точка, где лента остановится сама.
+    static func endpoint(from offset: CGFloat, velocity: CGFloat) -> CGFloat {
+        offset + distance(velocity: velocity)
+    }
+
+    /// Защёлкивать ли по броску: спроецированная точка обязана лежать В зоне
+    /// защёлки, а не за ней. Пролёт СКВОЗЬ зону на скорости защёлкивать
+    /// нельзя — пользователь прокручивает ленту мимо, а не собирает стопку.
+    static func shouldSnap(model: TrayScrollModel, velocity: CGFloat) -> Bool {
+        guard TrayDetentModel.fits(model) else { return false }
+        // Бросок к сбору — положительная скорость; в другую сторону защёлка
+        // не срабатывает.
+        guard velocity > 0 else { return false }
+        let zone = TrayDetentModel.effectiveZone(for: model)
+        let zoneStart = model.maximumOffset - zone
+        // Уже в зоне и без броска — обычная осадка, не наш случай.
+        let endpoint = endpoint(from: model.offset, velocity: velocity)
+        return endpoint >= zoneStart && endpoint <= model.maximumOffset + zone
+    }
+}

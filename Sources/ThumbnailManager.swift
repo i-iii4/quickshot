@@ -893,13 +893,35 @@ final class ThumbnailManager {
             momentumHandedToSpring = true
             settleScrollAnimated()
         } else if event.phase == .ended || event.phase == .cancelled {
+            scrollGestureActive = false
+            // `TR-36`: уверенный бросок к сбору защёлкивает ПО НАМЕРЕНИЮ —
+            // по точке, где лента остановилась бы сама, а не по факту
+            // доезда. Иначе бросок, не дотянувший чуть-чуть, читается как
+            // «не сработало».
+            if !detent.engaged,
+               TrayFlickProjection.shouldSnap(model: scrollModel, velocity: scrollVelocity) {
+                snapByFlick()
+                return
+            }
             // Пальцы сняты, но следом может пойти инерция. Возврат из-за края
             // откладывается: запущенный сразу, он тут же отменялся первым же
             // событием инерции, которое снова тянуло ленту наружу — старт,
             // отмена, старт, и это читалось как дёрганье (приёмка 19.08.2026).
-            scrollGestureActive = false
             scheduleSettleAfterGesture()
         }
+    }
+
+    /// Защёлкивание по броску (`TR-36`): лента доводится до посадочного места
+    /// тем же перенацеливанием, что и обычный щелчок — прыжок поглощается
+    /// подачей, движение остаётся непрерывным. Последующая инерция
+    /// игнорируется: намерение уже прочитано.
+    private func snapByFlick() {
+        momentumHandedToSpring = true
+        writeModel(scrollModel.maximumOffset, absorbJump: true)
+        detent.sync(with: scrollModel)
+        performDetentClick(.snapIn, profile: .inertia)
+        applyScrollOffset()
+        debugTrayLog("защёлка по броску: скорость=\(Int(scrollVelocity)) pt/с")
     }
 
     /// Отложенный возврат: любое следующее событие жеста или инерции его
