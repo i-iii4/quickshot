@@ -3,11 +3,7 @@ import UniformTypeIdentifiers
 
 enum ThumbStyle {
     static let gap: CGFloat = 12                 // зазор между карточками
-    /// Зазор до края экрана меряется по ВНЕШНЕМУ краю шкатулки (`TR-30`):
-    /// подложка выступает за карточки на свой отступ, поэтому карточки
-    /// отодвинуты на сумму.
-    static let edgeGap: CGFloat = 15
-    static let margin: CGFloat = edgeGap + 8   // 8 — отступ подложки, TrayCaseView.padding
+    static let margin: CGFloat = 16              // от края карточки до края экрана (`TR-30`)
     static let minWidth: CGFloat = 120
     static let maxWidth: CGFloat = 640
     static let defaultWidth: CGFloat = 240
@@ -1157,19 +1153,20 @@ final class ThumbnailManager {
             contour = contour.union(item.hostView.frame)
         }
         guard !contour.isNull else { return }
-        let padding = TrayCaseView.padding
         casePanel.setCount(items.count)
         let panelSize = casePanel.fittingSize
-        let body = contour.insetBy(dx: -padding, dy: -padding)
-        // Панель — над карточками, на той же подложке.
-        let caseRect = NSRect(x: body.minX,
-                              y: body.minY,
-                              width: max(body.width, panelSize.width + padding * 2),
-                              height: body.height + panelSize.height + padding)
+        let side = TrayCaseView.sidePadding
+        let gap = TrayCaseView.panelGap
+        // Подложка отступает от карточек ТОЛЬКО по бокам; низ вровень с
+        // карточкой, верх — место под панель кнопок (`TR-30`).
+        let caseRect = NSRect(x: contour.minX - side,
+                              y: contour.minY,
+                              width: max(contour.width + side * 2, panelSize.width + side * 2),
+                              height: contour.height + gap + panelSize.height + gap)
         caseView.frame = caseRect
-        casePanel.frame = NSRect(x: caseRect.minX + padding,
-                                 y: caseRect.maxY - panelSize.height - padding,
-                                 width: caseRect.width - padding * 2,
+        casePanel.frame = NSRect(x: caseRect.minX + side,
+                                 y: caseRect.maxY - gap - panelSize.height,
+                                 width: caseRect.width - side * 2,
                                  height: panelSize.height)
         caseView.needsLayout = true
         if !caseVisible {
