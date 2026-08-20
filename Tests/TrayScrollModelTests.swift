@@ -38,6 +38,10 @@ struct TrayScrollModelTests {
         detentHoldsAgainstSmallEscape()
         detentReleasesWithAJump()
         detentSkipsShortStrips()
+        deckClosureIsMonotonic()
+        deckClosureIsContinuous()
+        deckClosureHitsItsBounds()
+        deckCoverFinishesTheNearTierFirst()
         flickProjectionMatchesApplesFormula()
         flickSnapsOnlyWhenItLandsInTheZone()
         detentBackingOutOfTheZoneIsFree()
@@ -845,6 +849,86 @@ struct TrayScrollModelTests {
                                     offset: 0, lastCardLength: 100)
         expect(!TrayFlickProjection.shouldSnap(model: short, velocity: intoZone),
                "короткая лента защёлкнулась по броску")
+    }
+
+    // MARK: закрытие колоды наезжанием (`TR-34`)
+
+    private static func deckStrip() -> TrayScrollModel {
+        TrayScrollModel(contentLength: 600, viewportLength: 400, offset: 0, lastCardLength: 100)
+    }
+
+    /// Критерий 1: при движении ленты к сбору перекрытие только растёт, при
+    /// обратном — только убывает.
+    private static func deckClosureIsMonotonic() {
+        let model = deckStrip()
+        let zone = TrayDetentModel.effectiveZone(for: model)
+        var previous: CGFloat = -1
+        for step in stride(from: model.maximumOffset - zone * 1.2,
+                           through: model.maximumOffset, by: 0.5) {
+            let closure = TrayDeckClosure.value(presented: step, model: model)
+            let shift = TrayDeckClosure.coverShift(closure)
+            expect(shift >= previous - 0.001,
+                   "перекрытие уменьшилось при движении к сбору: \(previous) → \(shift)")
+            previous = shift
+        }
+    }
+
+    /// Критерий 2: соседние положения ленты дают близкие величины —
+    /// разрывов нет.
+    private static func deckClosureIsContinuous() {
+        let model = deckStrip()
+        let zone = TrayDetentModel.effectiveZone(for: model)
+        var previous = TrayDeckClosure.coverShift(
+            TrayDeckClosure.value(presented: model.maximumOffset - zone * 1.2, model: model))
+        for step in stride(from: model.maximumOffset - zone * 1.2,
+                           through: model.maximumOffset, by: 0.5) {
+            let shift = TrayDeckClosure.coverShift(
+                TrayDeckClosure.value(presented: step, model: model))
+            expect(abs(shift - previous) < 2,
+                   "разрыв перекрытия на позиции \(step): скачок \(shift - previous)")
+            previous = shift
+        }
+    }
+
+    /// Критерий 3: на краю зоны перекрытия нет, у посадки ярусы закрыты
+    /// полностью, причём закрытие завершается РАНЬШЕ посадки.
+    private static func deckClosureHitsItsBounds() {
+        let model = deckStrip()
+        let zone = TrayDetentModel.effectiveZone(for: model)
+        let atZoneStart = TrayDeckClosure.value(presented: model.maximumOffset - zone, model: model)
+        expect(atZoneStart == 0, "на краю зоны уже есть перекрытие: \(atZoneStart)")
+
+        let atHome = TrayDeckClosure.value(presented: model.maximumOffset, model: model)
+        expect(atHome == 1, "у посадки колода не закрыта: \(atHome)")
+        expect(abs(TrayDeckClosure.coverShift(1) - TrayStripLayout.parkLevel) < 0.001,
+               "полное перекрытие не равно высоте ярусов: \(TrayDeckClosure.coverShift(1))")
+
+        // Закрытие завершается раньше посадки: за четверть зоны до неё уже
+        // единица.
+        let beforeHome = TrayDeckClosure.value(
+            presented: model.maximumOffset - zone * (1 - TrayDeckClosure.completionPoint),
+            model: model)
+        expect(beforeHome >= 0.999,
+               "перекрытие не успело завершиться до посадки: \(beforeHome)")
+
+        // Короткой ленте закрытие не положено.
+        let short = TrayScrollModel(contentLength: 130, viewportLength: 400,
+                                    offset: 0, lastCardLength: 100)
+        expect(TrayDeckClosure.value(presented: short.maximumOffset, model: short) == 0,
+               "короткая лента закрывает колоду")
+    }
+
+    /// Критерий 4: к середине хода закрыт ближний ярус, дальний ещё виден —
+    /// деление неравномерное, две трети пути на ближний.
+    private static func deckCoverFinishesTheNearTierFirst() {
+        let tier = TrayStripLayout.edgeLength
+        let atShare = TrayDeckClosure.coverShift(TrayDeckClosure.nearLayerShare)
+        expect(abs(atShare - tier) < 0.001,
+               "к концу своей доли крышка не накрыла ближний ярус: \(atShare)")
+
+        let half = TrayDeckClosure.coverShift(0.5)
+        expect(half < tier, "к середине хода накрыто больше ближнего яруса: \(half)")
+        expect(half > tier * 0.6, "к середине хода ближний ярус почти не накрыт: \(half)")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

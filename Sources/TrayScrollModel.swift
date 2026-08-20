@@ -635,3 +635,51 @@ enum TrayFlickProjection {
         return model.maximumOffset - model.offset <= zone * intentRange
     }
 }
+
+/// Закрытие колоды наезжанием (`TR-34`).
+///
+/// Верхняя карточка съезжает к краю на высоту ярусов и накрывает их собой.
+/// Ярусы не двигаются и не гаснут — они заслонены. Спецификация и
+/// обоснование выбора против втягивания — `SPEC_DECK_CLOSURE.md`.
+///
+/// ЧИСТАЯ ФУНКЦИЯ видимой позиции ленты: своего состояния, аниматоров и
+/// таймеров у закрытия нет. Отсюда по построению следуют непрерывность
+/// движения, работа до щелчка, возврат при отмене и смена направления без
+/// рестарта. Динамика наследуется от ленты, потому что видимая позиция уже
+/// проходит через пружину подачи.
+enum TrayDeckClosure {
+    /// Доля зоны натяжения, на которой перекрытие уже завершено. Последняя
+    /// четверть остаётся щелчку: сначала крышка дошла, потом щёлкнул замок.
+    /// Совпадение финала перекрытия с посадкой смазывает оба события.
+    static let completionPoint: CGFloat = 0.75
+
+    /// Доля хода крышки, отданная БЛИЖНЕМУ ярусу. Дальний мельче по глубине
+    /// и уже растворён, равное деление тратило бы половину пути на почти
+    /// незаметное изменение.
+    static let nearLayerShare: CGFloat = 2.0 / 3.0
+
+    /// Степень закрытия по видимой позиции ленты: ноль на краю зоны
+    /// натяжения, единица — за долю `completionPoint` до посадки.
+    static func value(presented: CGFloat, model: TrayScrollModel) -> CGFloat {
+        guard TrayDetentModel.fits(model) else { return 0 }
+        let zone = TrayDetentModel.effectiveZone(for: model)
+        let span = max(1, zone * completionPoint)
+        let travelled = presented - (model.maximumOffset - zone)
+        return min(1, max(0, travelled / span))
+    }
+
+    /// Сдвиг крышки в точках при заданной степени закрытия. Неравномерность
+    /// живёт в ГЕОМЕТРИИ: первую часть пути крышка идёт медленнее, накрывая
+    /// заметный ближний ярус, вторую — быстрее, добирая почти невидимый
+    /// дальний.
+    static func coverShift(_ closure: CGFloat) -> CGFloat {
+        let tier = TrayStripLayout.edgeLength
+        let c = min(1, max(0, closure))
+        if c <= nearLayerShare {
+            // Ближний ярус: две трети хода на один ярус.
+            return tier * (c / nearLayerShare)
+        }
+        // Дальний ярус: оставшаяся треть хода на второй ярус.
+        return tier + tier * ((c - nearLayerShare) / (1 - nearLayerShare))
+    }
+}
