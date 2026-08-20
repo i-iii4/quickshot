@@ -1148,21 +1148,21 @@ final class ThumbnailManager {
             }
             return
         }
-        var contour = CGRect.null
-        for item in items where !item.hostView.isHidden && item.hostView.alphaValue > 0.01 {
-            contour = contour.union(item.hostView.frame)
-        }
-        guard !contour.isNull else { return }
+        // Шкатулка строится по ВЕРХНЕЙ карточке и по её ВИДИМЫМ границам:
+        // рамка контейнера раздута полем под тень, а ярусы стопки в контур не
+        // входят — они прячутся под подложкой (`TR-30`).
+        guard let top = items.last(where: { !$0.hostView.isHidden }) else { return }
+        let contour = top.visibleCardFrame
+        guard contour.width > 1, contour.height > 1 else { return }
         casePanel.setCount(items.count)
         let panelSize = casePanel.fittingSize
         let side = TrayCaseView.sidePadding
         let gap = TrayCaseView.panelGap
-        // Подложка отступает от карточек ТОЛЬКО по бокам; низ вровень с
-        // карточкой, верх — место под панель кнопок (`TR-30`).
+        // 8 pt по периметру верхней карточки, сверху добавка под панель.
         let caseRect = NSRect(x: contour.minX - side,
-                              y: contour.minY,
+                              y: contour.minY - side,
                               width: max(contour.width + side * 2, panelSize.width + side * 2),
-                              height: contour.height + gap + panelSize.height + gap)
+                              height: side + contour.height + gap + panelSize.height + gap)
         caseView.frame = caseRect
         casePanel.frame = NSRect(x: caseRect.minX + side,
                                  y: caseRect.maxY - gap - panelSize.height,

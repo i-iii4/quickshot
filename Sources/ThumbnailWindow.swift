@@ -559,6 +559,14 @@ final class ThumbnailWindow {
     private var collectionOffset: NSPoint = .zero
 
     var hostView: NSView { container }
+
+    /// Видимые границы карточки в координатах хоста: рамка контейнера без
+    /// поля под тень и ресайз (`band`). Шкатулка (`TR-30`) строится по ней —
+    /// по рамке контейнера отступы выходили больше заданных и разными с
+    /// разных сторон.
+    var visibleCardFrame: NSRect {
+        container.frame.insetBy(dx: band, dy: band)
+    }
     var cardSize: NSSize { NSSize(width: cardWidth, height: cardHeight) }
     var layoutFrame: NSRect { container.frame }
 
