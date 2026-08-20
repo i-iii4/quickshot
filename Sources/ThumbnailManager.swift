@@ -70,7 +70,6 @@ final class ThumbnailManager {
     private var enteringTargets: [ObjectIdentifier: NSRect] = [:]
     private var collapsed = false
     private var anchorScreen: NSScreen?
-    private let hub = HubWindow()
 
     private let host: TrayHostPanel
     private let hostContent = TrayHostContentView()
@@ -1206,9 +1205,23 @@ final class ThumbnailManager {
         for (item, slot) in visible {
             place(item, at: slot)
         }
+        finishLayoutPass()
+    }
+
+    /// Общий хвост ЛЮБОГО прохода раскладки. Оба пути постановки карточек —
+    /// `layout` и `applyScrollOffset` — обязаны заканчиваться им, иначе
+    /// производные состояния расходятся с геометрией.
+    ///
+    /// Так и появлялись баги: `layout` не звал `updateCase`, поэтому при
+    /// ресайзе ширины, смене экрана и смене позиции трея шкатулка оставалась
+    /// от прежней геометрии; `applyScrollOffset` не звал
+    /// `refreshHostPointerRouting`, и зона приёма мыши отставала от карточек
+    /// (аудит 20.08.2026).
+    private func finishLayoutPass() {
         applyStackOrder()
         updateCase()
         refreshHoverUnderPointer()
+        refreshHostPointerRouting()
     }
 
     /// Шкатулка (`TR-30`): видима строго когда лента защёлкнута; контур —
@@ -1608,9 +1621,16 @@ final class ThumbnailManager {
         cancelCollapsedPeekDismiss()
         cancelHoverExit()
         activeDragPayloads.removeAll()
-        for item in items { closeAndRelease(item) }
+        enteringTargets.removeAll()
+        for item in items {
+            sessions.discard(item.artifact.id)
+            editedImages.discard(item.artifact.id)
+            stateStore.discard(for: item.artifact.id)
+            closeAndRelease(item)
+        }
         collectionModel.removeAll()
         itemByID.removeAll()
+        updateCase()
         host.orderOut(nil)
         refreshHostPointerRouting()
     }
@@ -1772,8 +1792,15 @@ final class ThumbnailManager {
             for item in cards { item.finishTrayTransition(collapsed: isCollapsed) }
             // Итоговый кадр разворота — из раскладки: кромки получают полосы
             // и перспективу, а не полные рамки.
-            if !isCollapsed { self.applyScrollOffset() }
-            self.refreshHostPointerRouting()
+            if !isCollapsed {
+                self.applyScrollOffset()
+            } else {
+                // Свёрнутый трей прячет карточки поштучно, хост не гаснет
+                // целиком — без этого подложка шкатулки и её панель команд
+                // оставались висеть на экране (аудит 20.08.2026).
+                self.updateCase()
+                self.refreshHostPointerRouting()
+            }
         })
     }
 
@@ -1824,8 +1851,7 @@ final class ThumbnailManager {
                 place(item, at: slot)
             }
         }
-        applyStackOrder()
-        refreshHostPointerRouting()
+        finishLayoutPass()
     }
 
 
