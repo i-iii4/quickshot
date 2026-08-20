@@ -226,7 +226,14 @@ enum TrayStripLayout {
 
         // Лента размечена от яруса парковки: при нулевом смещении первая
         // карточка стоит ровно на ярусе, зазоры не съедены упором.
-        var cursor: CGFloat = parkLevel
+        //
+        // При схлопывании колоды (`TR-34`) поток едет ВМЕСТЕ со стопкой:
+        // основание ленты опускается на ту же величину, на какую сходятся
+        // ярусы. Без этого карточка в момент парковки прыгала с позиции
+        // потока на схлопнутую — разрыв в 14 pt у каждой, и он читался как
+        // грязь у щелчка (приёмка 20.08.2026).
+        let collapse = 1 - min(1, max(0, deckClosure))
+        var cursor: CGFloat = parkLevel * collapse
         var raws: [CGFloat] = []
         for length in cardLengths {
             raws.append(cursor - offset)
@@ -238,7 +245,12 @@ enum TrayStripLayout {
 
         // Запаркованные у кнопки — префикс (низ доехал до яруса), у дальнего
         // края — суффикс (верх доехал до дальнего яруса).
-        let nearCount = (0..<count).lastIndex(where: { raws[$0] <= parkLevel }).map { $0 + 1 } ?? 0
+        // Порог парковки схлопывается ВМЕСТЕ с ярусами: иначе карточка
+        // считалась запаркованной по старому порогу, а ставилась уже по
+        // схлопнутому — прыжок ровно на высоту яруса в момент парковки
+        // (приёмка 20.08.2026).
+        let nearPark = parkLevel * collapse
+        let nearCount = (0..<count).lastIndex(where: { raws[$0] <= nearPark }).map { $0 + 1 } ?? 0
         let farStart = (0..<count).firstIndex(where: {
             top($0) >= farPark && $0 >= nearCount
         }) ?? count
@@ -248,7 +260,7 @@ enum TrayStripLayout {
         var nearPhase: CGFloat = 0
         if nearCount > 0, nearCount < count {
             let travel = max(1, cardLengths[nearCount - 1])
-            nearPhase = min(1, max(0, (parkLevel + travel - raws[nearCount]) / travel))
+            nearPhase = min(1, max(0, (nearPark + travel - raws[nearCount]) / travel))
         }
         var farPhase: CGFloat = 0
         if farStart < count, farStart > 0 {
@@ -283,9 +295,8 @@ enum TrayStripLayout {
             // растворяется на месте. Уход за виртуальную линию срезал её низ
             // прямой кромкой — та самая «квадратная обрезка нижней карточки».
             // Схлопывание: расстояния между слоями сходятся к нулю, вся
-            // стопка едет вниз вместе. Верхняя карточка накрывает ярусы не
-            // потому, что опустилась одна, а потому что колода сложилась.
-            let collapse = 1 - min(1, max(0, deckClosure))
+            // стопка едет вниз вместе — на ту же величину, что и основание
+            // ленты выше.
             let bottom = max(0, (parkLevel - e * CGFloat(depth) - e * nearPhase) * collapse)
             let cardTop = bottom + cardLengths[index] * scale
             let visibleFrom = bottom

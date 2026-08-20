@@ -43,6 +43,7 @@ struct TrayScrollModelTests {
         deckClosureHitsItsBounds()
         deckCoverFinishesTheNearTierFirst()
         deckCoverHasNoSpeedStep()
+        deckCollapseKeepsCardsContinuous()
         flickProjectionMatchesApplesFormula()
         flickSnapsOnlyWhenItLandsInTheZone()
         detentBackingOutOfTheZoneIsFree()
@@ -959,6 +960,41 @@ struct TrayScrollModelTests {
             previousSpeed = speed
         }
         expect(maxJump < 0.05, "скорость схлопывания меняется ступенькой: скачок \(maxJump)")
+    }
+
+    /// Схлопывание не имеет права рвать движение отдельной карточки: порог
+    /// парковки обязан схлопываться вместе с ярусами. Пока он оставался
+    /// прежним, карточка считалась запаркованной по старому порогу, а
+    /// ставилась по схлопнутому — прыжок ровно на высоту яруса в момент
+    /// парковки (приёмка 20.08.2026).
+    private static func deckCollapseKeepsCardsContinuous() {
+        let lengths: [CGFloat] = Array(repeating: 180, count: 4)
+        let gap: CGFloat = 12
+        let content = lengths.reduce(0, +) + gap * CGFloat(lengths.count - 1)
+        let model = TrayScrollModel(contentLength: content, viewportLength: 800,
+                                    offset: 0, lastCardLength: 180)
+        let zone = TrayDetentModel.effectiveZone(for: model)
+
+        var previous: [Int: CGFloat] = [:]
+        var maxJump: CGFloat = 0
+        for i in 0...300 {
+            let offset = model.maximumOffset - 150 + CGFloat(i) * 0.5
+            var probe = model
+            probe.offset = offset
+            let closure = TrayDeckClosure.collapse(presented: offset, model: probe)
+            let bands = TrayStripLayout.bands(cardLengths: lengths, gap: gap, offset: offset,
+                                              viewportLength: 800, deckClosure: closure)
+            for (index, band) in bands.enumerated() where !band.hidden {
+                if let was = previous[index] {
+                    maxJump = max(maxJump, abs(band.position - was))
+                }
+                previous[index] = band.position
+            }
+        }
+        _ = zone
+        // Шаг ленты 0.5 pt: карточка не имеет права смещаться существенно
+        // больше. Разрыв на границе парковки давал 14.8 pt.
+        expect(maxJump < 2, "карточка прыгает при схлопывании: \(maxJump) pt за 0.5 pt хода")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
