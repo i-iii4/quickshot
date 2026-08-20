@@ -574,10 +574,11 @@ final class ThumbnailManager {
                 continue
             }
             item.prepareReflow(from: oldFrame,
-                               to: thumbnailAxisLockedOrigin(candidate: toLocal(slot.origin),
-                                                             oldOuterFrame: oldFrame,
-                                                             resizeBand: ThumbStyle.resizeBand,
-                                                             vertical: TrayPosition.current.isVertical),
+                               to: thumbnailReflowOrigin(candidate: toLocal(slot.origin),
+                                                      oldOuterFrame: oldFrame,
+                                                      targetOuterSize: outerSize(of: item),
+                                                      resizeBand: ThumbStyle.resizeBand,
+                                                      vertical: TrayPosition.current.isVertical),
                                reduceMotion: reduceMotion)
             reflowing.append((item, oldFrame))
         }
@@ -730,10 +731,11 @@ final class ThumbnailManager {
                 }
                 item.prepareReflow(
                     from: oldFrame,
-                    to: thumbnailAxisLockedOrigin(candidate: toLocal(slot.origin),
-                                                  oldOuterFrame: oldFrame,
-                                                  resizeBand: ThumbStyle.resizeBand,
-                                                  vertical: TrayPosition.current.isVertical),
+                    to: thumbnailReflowOrigin(candidate: toLocal(slot.origin),
+                                                      oldOuterFrame: oldFrame,
+                                                      targetOuterSize: outerSize(of: item),
+                                                      resizeBand: ThumbStyle.resizeBand,
+                                                      vertical: TrayPosition.current.isVertical),
                     reduceMotion: reduceMotion)
                 reflowing.append((item, oldFrame))
             }
@@ -768,6 +770,13 @@ final class ThumbnailManager {
             for item in entering { item.finishCollectionMotion() }
             for item in animatedRemoved { self.closeAndRelease(item) }
             self.enteringTargets.removeAll()
+            // Итоговый кадр — ИЗ РАСКЛАДКИ, как и при вставке. Переезд держит
+            // координату поперёк оси по старой рамке
+            // (`thumbnailAxisLockedOrigin`), чтобы карточку не мотало вбок, —
+            // и без финального пересчёта этот перекос оставался навсегда:
+            // после каждого удаления карточки стояли всё кривее (приёмка
+            // 20.08.2026).
+            if !self.items.isEmpty { self.applyScrollOffset() }
             if self.items.isEmpty {
                 self.collapsed = false
                 self.trayHoverActive = false
@@ -1362,10 +1371,11 @@ final class ThumbnailManager {
             } else if let oldFrame = oldFrames[identifier] {
                 item.prepareReflow(
                     from: oldFrame,
-                    to: thumbnailAxisLockedOrigin(candidate: toLocal(slot.origin),
-                                                  oldOuterFrame: oldFrame,
-                                                  resizeBand: ThumbStyle.resizeBand,
-                                                  vertical: TrayPosition.current.isVertical),
+                    to: thumbnailReflowOrigin(candidate: toLocal(slot.origin),
+                                                      oldOuterFrame: oldFrame,
+                                                      targetOuterSize: outerSize(of: item),
+                                                      resizeBand: ThumbStyle.resizeBand,
+                                                      vertical: TrayPosition.current.isVertical),
                     reduceMotion: reduceMotion)
                 reflowing.append((item, oldFrame))
             } else {
@@ -1603,6 +1613,14 @@ final class ThumbnailManager {
         itemByID.removeAll()
         host.orderOut(nil)
         refreshHostPointerRouting()
+    }
+
+    /// Внешняя рамка полной карточки: сама карточка плюс поля под тень.
+    /// По ней переезд отличает карточку, выходящую из стопки (её поперечный
+    /// размер меняется), от той, что просто едет вдоль ленты.
+    private func outerSize(of item: ThumbnailWindow) -> NSSize {
+        NSSize(width: item.cardSize.width + 2 * ThumbStyle.resizeBand,
+               height: item.cardSize.height + 2 * ThumbStyle.resizeBand)
     }
 
     private func closeAndRelease(_ item: ThumbnailWindow) {

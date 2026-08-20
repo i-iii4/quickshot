@@ -77,6 +77,30 @@ func thumbnailAxisLockedOrigin(candidate: NSPoint,
         : NSPoint(x: candidate.x, y: oldOuterFrame.minY + resizeBand)
 }
 
+/// Куда едет карточка при переезде внутри ленты.
+///
+/// Обычно поперечная координата ЗАКРЕПЛЯЕТСЯ по старой рамке: карточка идёт
+/// строго вдоль ленты и не дрейфует вбок. Но карточка, ВЫХОДЯЩАЯ ИЗ СТОПКИ,
+/// меняет поперечный размер — в стопке она уменьшена перспективой, — и её
+/// поперечная координата обязана переехать вместе с ней. Закрепление держало
+/// такую карточку на старом месте: она вставала на половину съеденной
+/// перспективой ширины в стороне и там оставалась, потому что переезд —
+/// последнее, что её двигало. Каждое удаление выпускало из стопки новую
+/// карточку и добавляло новый перекос (приёмка 20.08.2026).
+func thumbnailReflowOrigin(candidate: NSPoint,
+                           oldOuterFrame: NSRect,
+                           targetOuterSize: NSSize,
+                           resizeBand: CGFloat,
+                           vertical: Bool) -> NSPoint {
+    let oldCross = vertical ? oldOuterFrame.width : oldOuterFrame.height
+    let targetCross = vertical ? targetOuterSize.width : targetOuterSize.height
+    guard abs(oldCross - targetCross) < 0.5 else { return candidate }
+    return thumbnailAxisLockedOrigin(candidate: candidate,
+                                     oldOuterFrame: oldOuterFrame,
+                                     resizeBand: resizeBand,
+                                     vertical: vertical)
+}
+
 /// One finite display-linked clock for a discrete collection transaction. Visual channels
 /// derive their own curves from this raw progress, avoiding compounded easing and idle tails.
 @MainActor

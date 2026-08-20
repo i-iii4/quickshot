@@ -214,6 +214,38 @@ struct ThumbnailMotionTests {
                                                    vertical: false)
         try require(horizontal.x == 128 && horizontal.y == 312,
                     "Horizontal reflow changed the orthogonal Y anchor")
+
+        // Переезд ВДОЛЬ ленты держит поперечную ось: карточка не дрейфует вбок.
+        let sameWidth = NSSize(width: old.width, height: old.height)
+        let held = thumbnailReflowOrigin(candidate: candidate,
+                                         oldOuterFrame: old,
+                                         targetOuterSize: sameWidth,
+                                         resizeBand: 12,
+                                         vertical: true)
+        try require(held.x == 112 && held.y == 120,
+                    "Reflow along the strip lost its cross-axis anchor")
+
+        // Карточка, ВЫХОДЯЩАЯ ИЗ СТОПКИ, меняет поперечный размер: перспектива
+        // больше не сжимает её. Такая обязана переехать и поперёк, иначе
+        // встанет в стороне и там останется — по перекосу на каждое удаление.
+        let grown = NSSize(width: old.width + 20, height: old.height)
+        let freed = thumbnailReflowOrigin(candidate: candidate,
+                                          oldOuterFrame: old,
+                                          targetOuterSize: grown,
+                                          resizeBand: 12,
+                                          vertical: true)
+        try require(freed.x == candidate.x && freed.y == candidate.y,
+                    "Card leaving the stack was pinned to its old cross-axis position")
+
+        // То же для горизонтальной ленты: там поперечная ось — Y.
+        let taller = NSSize(width: old.width, height: old.height + 20)
+        let freedH = thumbnailReflowOrigin(candidate: candidate,
+                                           oldOuterFrame: old,
+                                           targetOuterSize: taller,
+                                           resizeBand: 12,
+                                           vertical: false)
+        try require(freedH.x == candidate.x && freedH.y == candidate.y,
+                    "Horizontal card leaving the stack was pinned to its old Y")
     }
 
     private static func run(_ name: String, _ body: () throws -> Void) {
