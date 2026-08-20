@@ -1126,25 +1126,10 @@ final class ThumbnailManager {
             layout()
             return
         }
-        var (visible, hidden) = cardLayout(on: screen)
-        // `TR-34`: закрытая колода показывает только верхнюю карточку. Степень
-        // закрытия — ЧИСТАЯ ФУНКЦИЯ той же видимой позиции ленты, что двигает
-        // карточки: своей анимации и своего состояния у ярусов нет, поэтому
-        // пропущенных кадров быть не может по построению.
-        let closure = deckClosure()
-        var topSlot: ThumbnailLayoutSlot?
-        if closure > 0.001 { topSlot = visible.max(by: { $0.1.index < $1.1.index })?.1 }
-        if closure > 0.999, let topSlot {
-            for (item, slot) in visible where slot.index != topSlot.index { hidden.append(item) }
-            visible = visible.filter { $0.1.index == topSlot.index }
-        }
+        let (visible, hidden) = cardLayout(on: screen)
         for item in hidden { item.hide() }
-        let layers = max(1, visible.count - 1)
         for (item, slot) in visible {
-            let isTop = slot.index == topSlot?.index
-            place(item, at: slot,
-                  collapseTo: isTop ? nil : topSlot?.origin,
-                  closure: isTop ? 0 : layerClosure(closure, slot: slot, visible: visible, layers: layers))
+            place(item, at: slot)
         }
         applyStackOrder()
         updateCase()
@@ -1202,48 +1187,9 @@ final class ThumbnailManager {
     }
 
     /// Развёрнутая карточка встаёт целиком, слой стопки — полосой-кромкой.
-    /// Степень закрытия колоды (`TR-34`) по ВИДИМОЙ позиции ленты — той
-    /// самой, что двигает карточки (`offset` вместе с подачей защёлки).
-    /// Единица у посадочного места, ноль — начиная с края зоны напряжения.
-    private func deckClosure() -> CGFloat {
-        guard TrayDetentModel.fits(scrollModel) else { return 0 }
-        let presented = scrollModel.offset + detentDip
-        let span = max(1, TrayDetentModel.effectiveZone(for: scrollModel))
-        let distance = scrollModel.maximumOffset - presented
-        return min(1, max(0, 1 - distance / span))
-    }
-
-    /// Очередь слоёв (`TR-34`): ближний к верхней карточке трогается раньше
-    /// дальнего, окна одинаковой длины — скорость у всех одна, отличается
-    /// только старт.
-    private func layerClosure(_ closure: CGFloat,
-                              slot: ThumbnailLayoutSlot,
-                              visible: [(ThumbnailWindow, ThumbnailLayoutSlot)],
-                              layers: Int) -> CGFloat {
-        guard layers > 1 else { return closure }
-        let depth = CGFloat(max(0, visible.filter { $0.1.index > slot.index }.count - 1))
-        let stagger: CGFloat = 0.2
-        let start = depth / CGFloat(max(1, layers - 1)) * stagger
-        return min(1, max(0, (closure - start) / (1 - stagger)))
-    }
-
-    private func place(_ item: ThumbnailWindow,
-                       at slot: ThumbnailLayoutSlot,
-                       collapseTo: NSPoint? = nil,
-                       closure: CGFloat = 0) {
-        var origin = slot.origin
-        var opacity = slot.opacity
-        var shadow = slot.shadowFraction
-        if let collapseTo, closure > 0.001 {
-            // Ярус едет к верхней карточке и гаснет — тем же кадром, что и
-            // сама лента.
-            origin = NSPoint(x: origin.x + (collapseTo.x - origin.x) * closure,
-                             y: origin.y + (collapseTo.y - origin.y) * closure)
-            opacity *= max(0, 1 - closure)
-            shadow *= max(0, 1 - closure)
-        }
-        let localOrigin = toLocal(origin)
-        if slot.isFullCard && opacity > 0.999 {
+    private func place(_ item: ThumbnailWindow, at slot: ThumbnailLayoutSlot) {
+        let localOrigin = toLocal(slot.origin)
+        if slot.isFullCard && slot.opacity > 0.999 {
             item.placeInstant(origin: localOrigin)
         } else {
             item.placeBand(origin: localOrigin,
@@ -1252,8 +1198,8 @@ final class ThumbnailManager {
                            cardStartOffset: slot.cardStartOffset,
                            roundsStart: slot.roundsStart,
                            roundsEnd: slot.roundsEnd,
-                           opacity: opacity,
-                           shadowFraction: shadow,
+                           opacity: slot.opacity,
+                           shadowFraction: slot.shadowFraction,
                            stackOrder: slot.stackOrder,
                            vertical: TrayPosition.current.isVertical)
         }
