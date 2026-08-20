@@ -109,12 +109,6 @@ final class ThumbnailManager {
     /// каждом кадре, поэтому события жеста осадку не смазывают.
     /// Трекпад, ведущий текущий жест (`TR-29`): щелчок уходит именно в него.
     private var gestureDevice: UInt64?
-    /// Закрытие колоды (`TR-34`): 0 — ярусы видны, 1 — колода закрыта, видна
-    /// только верхняя карточка. Промежуточные значения — кадры анимации.
-    private var deckClosure: CGFloat = 0
-    private var deckClosed = false
-    private lazy var deckAnimator = CollectionProgressAnimator(hostView: hostContent)
-
     /// Шкатулка (`TR-30`): подложка под собранной стопкой и панель кнопок над
     /// ней. Видима строго когда лента защёлкнута.
     private let caseView = TrayCaseView(frame: .zero)
@@ -1133,73 +1127,19 @@ final class ThumbnailManager {
             return
         }
         var (visible, hidden) = cardLayout(on: screen)
-        // `TR-34`: колода закрывается после щелчка — ярусы уезжают ПОД верхнюю
-        // карточку с затуханием, а не исчезают кадром. Полностью закрытые
-        // слои уходят в скрытые.
-        setDeckClosed(detent.engaged)
-        var collapseTarget: NSPoint?
-        if deckClosure > 0.001, let top = visible.max(by: { $0.1.index < $1.1.index }) {
-            collapseTarget = top.1.origin
-            if deckClosure > 0.999 {
-                for (item, _) in visible where item !== top.0 { hidden.append(item) }
-                visible = [top]
-            }
+        // `TR-34`: после щелчка сбора видна только верхняя карточка — колода
+        // «закрыта», задние слои прячутся. До щелчка ярусы видны как обычно.
+        if detent.engaged, let top = visible.max(by: { $0.1.index < $1.1.index }) {
+            for (item, _) in visible where item !== top.0 { hidden.append(item) }
+            visible = [top]
         }
         for item in hidden { item.hide() }
         for (item, slot) in visible {
-            let isTop = slot.origin == collapseTarget
-            place(item, at: slot,
-                  collapseTo: isTop ? nil : collapseTarget,
-                  closure: isTop ? 0 : deckClosure)
+            place(item, at: slot)
         }
         applyStackOrder()
         updateCase()
         refreshHoverUnderPointer()
-    }
-
-    /// Закрытие и раскрытие колоды (`TR-34`). Критически задемпфированная
-    /// пружина, отклик 0.3 с — те же правила, что у остальной механики трея:
-    /// движение всегда от ТЕКУЩЕГО значения, поэтому переключение состояния на
-    /// полпути перенацеливает анимацию, а не рвёт её. При reduce motion —
-    /// короткое затухание без уезда.
-    private func setDeckClosed(_ closed: Bool) {
-        guard closed != deckClosed else { return }
-        deckClosed = closed
-        let from = deckClosure
-        let target: CGFloat = closed ? 1 : 0
-        deckAnimator.cancel()
-        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let duration: CGFloat = reduceMotion ? 0.2 : 0.42
-        let omega = 2 * CGFloat.pi / 0.3
-        deckAnimator.run(duration: duration, onFrame: { [weak self] progress in
-            guard let self else { return }
-            let t = progress * duration
-            let remaining = reduceMotion ? (1 - progress) : (1 + omega * t) * exp(-omega * t)
-            self.deckClosure = target + (from - target) * remaining
-            self.applyDeckFrame()
-        }, onDone: { [weak self] in
-            guard let self else { return }
-            self.deckClosure = target
-            self.applyDeckFrame()
-        })
-    }
-
-    /// Кадр анимации закрытия: перекладываем карточки, не трогая состояние
-    /// защёлки — иначе анимация запускала бы сама себя.
-    private func applyDeckFrame() {
-        guard let screen = anchorScreen ?? NSScreen.main, !cardsAreCollapsed else { return }
-        let (visible, hidden) = cardLayout(on: screen)
-        var collapseTarget: NSPoint?
-        if let top = visible.max(by: { $0.1.index < $1.1.index }) { collapseTarget = top.1.origin }
-        for item in hidden { item.hide() }
-        for (item, slot) in visible {
-            let isTop = slot.origin == collapseTarget
-            place(item, at: slot,
-                  collapseTo: isTop ? nil : collapseTarget,
-                  closure: isTop ? 0 : deckClosure)
-        }
-        applyStackOrder()
-        updateCase()
     }
 
     /// Шкатулка (`TR-30`): видима строго когда лента защёлкнута; контур —
@@ -1253,21 +1193,9 @@ final class ThumbnailManager {
     }
 
     /// Развёрнутая карточка встаёт целиком, слой стопки — полосой-кромкой.
-    private func place(_ item: ThumbnailWindow,
-                       at slot: ThumbnailLayoutSlot,
-                       collapseTo: NSPoint? = nil,
-                       closure: CGFloat = 0) {
-        var origin = slot.origin
-        var opacity = slot.opacity
-        if let collapseTo, closure > 0.001 {
-            // Ярус едет к позиции верхней карточки и гаснет: закрытие колоды
-            // читается как «слои ушли внутрь», а не как пропажа кадром.
-            origin = NSPoint(x: origin.x + (collapseTo.x - origin.x) * closure,
-                             y: origin.y + (collapseTo.y - origin.y) * closure)
-            opacity *= max(0, 1 - closure)
-        }
-        let localOrigin = toLocal(origin)
-        if slot.isFullCard && opacity > 0.999 {
+    private func place(_ item: ThumbnailWindow, at slot: ThumbnailLayoutSlot) {
+        let localOrigin = toLocal(slot.origin)
+        if slot.isFullCard && slot.opacity > 0.999 {
             item.placeInstant(origin: localOrigin)
         } else {
             item.placeBand(origin: localOrigin,
@@ -1276,8 +1204,8 @@ final class ThumbnailManager {
                            cardStartOffset: slot.cardStartOffset,
                            roundsStart: slot.roundsStart,
                            roundsEnd: slot.roundsEnd,
-                           opacity: opacity,
-                           shadowFraction: slot.shadowFraction * max(0, 1 - closure),
+                           opacity: slot.opacity,
+                           shadowFraction: slot.shadowFraction,
                            stackOrder: slot.stackOrder,
                            vertical: TrayPosition.current.isVertical)
         }
