@@ -953,6 +953,9 @@ final class ThumbnailManager {
             let alreadySeated = detent.engaged
             scrollModel.offset = detentTarget
             detent.sync(with: scrollModel)
+            // Возврат недожатого выхода: закрытие колоды доводится ТОЙ ЖЕ
+            // пружиной, что и позиция ленты, и всегда анимировано — раньше
+            // часть движения происходила одним кадром.
             updateDeck(engaged: detent.engaged, strain: detent.strain, animated: true)
             detentDip = presented - detentTarget
             if home, !alreadySeated {
@@ -1172,7 +1175,10 @@ final class ThumbnailManager {
     /// посадки, срыв, программный сбор.
     private func updateDeck(engaged: Bool, strain: CGFloat, animated: Bool) {
         let peek = min(1, max(0, strain / TrayDetentModel.escape))
-        let target: CGFloat = engaged ? 1 - peek : 0
+        // До щелчка ярус только ВЫГЛЯДЫВАЕТ: показываем долю пути, остальное
+        // отдаёт сам щелчок. Полное раскрытие по ходу пальца не оставляло
+        // щелчку никакого движения (приёмка 20.08.2026).
+        let target: CGFloat = engaged ? 1 - peek * Self.deckPeekLimit : 0
         if animated {
             animateDeck(to: target)
         } else {
@@ -1181,6 +1187,11 @@ final class ThumbnailManager {
             deckClosure = target
         }
     }
+
+    /// Какую долю раскрытия отдаём жесту до щелчка.
+    private static let deckPeekLimit: CGFloat = 0.35
+    /// Сдвиг очереди между соседними ярусами, доля общего пути.
+    private static let deckStagger: CGFloat = 0.2
 
     /// Разрыв состояния — доводим пружиной. Критическое демпфирование, отклик
     /// 0.3 с, движение всегда от ТЕКУЩЕГО значения: переключение на полпути
@@ -1235,10 +1246,11 @@ final class ThumbnailManager {
         // Глубина: 0 — ближайший к верхней карточке (у неё индекс больше).
         let depth = CGFloat(max(0, visible.filter { $0.1.index > slot.index }.count - 1))
         let span = CGFloat(max(1, layers - 1))
-        // Окно яруса: старт по глубине, длительность с перекрытием.
-        let stagger: CGFloat = 0.35 / span
-        let start = depth * stagger
-        let window = max(0.001, 1 - depth * stagger)
+        // Окна одинаковой длины, сдвинутые по глубине: слои идут с ОДНОЙ
+        // скоростью, просто трогаются по очереди. Разная длина окна давала
+        // разную скорость — движение читалось неровным.
+        let start = depth / span * Self.deckStagger
+        let window = 1 - Self.deckStagger
         return min(1, max(0, (deckClosure - start) / window))
     }
 
