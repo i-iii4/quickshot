@@ -1850,8 +1850,12 @@ final class ThumbnailManager {
                                          hubSize: geometry.hubSize,
                                          margin: geometry.margin,
                                          gap: ThumbStyle.gap,
-                                         offset: scrollModel.offset + detentDip,
-                                         menuBarInset: menuBarInset(on: screen))
+                                         offset: presentedOffset,
+                                         menuBarInset: menuBarInset(on: screen),
+                                         // `TR-34`: степень схлопывания колоды
+                                         // от той же видимой позиции.
+                                         deckClosure: TrayDeckClosure.collapse(
+                                             presented: presentedOffset, model: scrollModel))
         }
 
         let newest = newestViewportLayout(on: screen)
