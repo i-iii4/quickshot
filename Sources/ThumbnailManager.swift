@@ -827,7 +827,6 @@ final class ThumbnailManager {
         if hasPhases {
             // `TR-29`: дельты жеста идут через защёлку — у полного сбора лента
             // проходит точку напряжения и защёлкивается со щелчком.
-            let presented = scrollModel.offset + detentDip
             if TrayDetentModel.isNearDetent(scrollModel) { TrayHaptics.shared.arm() }
             // Растягивает резинку только палец: инерция упирается в край,
             // иначе после отпускания лента продолжает уезжать, а возврат
@@ -852,16 +851,15 @@ final class ThumbnailManager {
             }
             let before = scrollModel.offset
             let result = detent.apply(delta: delta, to: scrollModel, stretch: fingersDown)
-            scrollModel = result.model
+            // Щелчок ПЕРЕНАЦЕЛИВАЕТ движение: прыжок модели поглощается
+            // подачей, видимая позиция остаётся непрерывной. Сдвиг больше
+            // порога восприятия за один кадр запрещён (`TR-29`).
+            writeModel(result.model, absorbJump: result.click != nil)
             trackVelocity(movement: scrollModel.offset - before, at: event.timestamp)
             if let click = result.click {
-                // Прыжок модели ВСЕГДА поглощается подачей: сдвиг больше
-                // порога восприятия за один кадр запрещён (`TR-29`, аудит
-                // 19.08.2026 — «уезжает одним движением»). Под пальцем догон
-                // короткий и без перелёта: палец сохраняет контроль над
-                // моделью, затухает только разница. На инерции — длиннее и с
-                // лёгкой осадкой.
-                detentDip = presented - scrollModel.offset
+                // Под пальцем догон короткий и без перелёта: палец сохраняет
+                // контроль над моделью, затухает только разница. На инерции —
+                // длиннее и с лёгкой осадкой.
                 performDetentClick(click, profile: fingersDown ? .underFinger : .inertia)
             }
         } else {
@@ -869,14 +867,14 @@ final class ThumbnailManager {
             // Пружину границы колесо гасит — иначе позицию пишут двое сразу.
             scrollSettleAnimator.cancel()
             scrollSettleAnimating = false
-            scrollModel = scrollModel.scrolled(by: delta, rubberBand: false)
+            writeModel(scrollModel.scrolled(by: delta, rubberBand: false))
             detent.sync(with: scrollModel)
         }
 
         applyScrollOffset()
 
         if !hasPhases {
-            scrollModel = scrollModel.settled()
+            writeModel(scrollModel.settled())
             applyScrollOffset()
             return
         }
@@ -935,15 +933,14 @@ final class ThumbnailManager {
         // зоны. Движение — та же пружинная подача, что у щелчка в жесте: одно
         // непрерывное движение, никаких ease с осадкой вдогонку.
         if let detentTarget = detent.settleTarget(for: scrollModel) {
-            let presented = scrollModel.offset + detentDip
             let home = detentTarget >= scrollModel.maximumOffset - 0.5
             // Дотяжка недожатого выхода — не новое защёлкивание: щелчок
             // положен только на переходе состояния, иначе он звучал бы на
             // каждом коротком недоскролле (`TR-29`).
             let alreadySeated = detent.engaged
-            scrollModel.offset = detentTarget
+            // Дотяжка — перенацеливание: видимая позиция не прыгает.
+            writeModel(detentTarget, absorbJump: true)
             detent.sync(with: scrollModel)
-            detentDip = presented - detentTarget
             if home, !alreadySeated {
                 performDetentClick(.snapIn, profile: .inertia)
             } else {
@@ -954,7 +951,7 @@ final class ThumbnailManager {
         }
         let target = scrollModel.settled().offset
         guard abs(target - from) > 0.5 else {
-            scrollModel.offset = target
+            writePresented(target)
             detent.sync(with: scrollModel)
             applyScrollOffset()
             return
@@ -983,7 +980,7 @@ final class ThumbnailManager {
                                    onDone: @escaping () -> Void) {
         guard abs(displacement) > 0.5 || abs(velocity) > 1 else {
             scrollSettleAnimating = false
-            scrollModel.offset = boundary
+            writePresented(boundary)
             applyScrollOffset()
             onDone()
             return
@@ -995,12 +992,12 @@ final class ThumbnailManager {
             let x = TrayBoundarySpring.offset(displacement: displacement,
                                                   velocity: velocity,
                                                   time: progress * duration)
-            self.scrollModel.offset = boundary + x
+            self.writePresented(boundary + x)
             self.applyScrollOffset()
         }, onDone: { [weak self] in
             guard let self else { return }
             self.scrollSettleAnimating = false
-            self.scrollModel.offset = boundary
+            self.writePresented(boundary)
             self.applyScrollOffset()
             onDone()
         })
@@ -1021,7 +1018,7 @@ final class ThumbnailManager {
         debugTrayLog("click \(click == .snapIn ? "snapIn" : "release") offset=\(Int(scrollModel.offset)) dip=\(Int(detentDip)) profile=\(profile == .underFinger ? "палец" : "инерция")")
         performDetentHaptic(click)
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
-            detentDip = 0
+            writeDip(0)
             applyScrollOffset()
             return
         }
@@ -1040,7 +1037,7 @@ final class ThumbnailManager {
     private func runDetentSpring(profile: DipProfile) {
         let d0 = detentDip
         guard abs(d0) > 0.5 else {
-            detentDip = 0
+            writeDip(0)
             applyScrollOffset()
             return
         }
@@ -1057,12 +1054,12 @@ final class ThumbnailManager {
             detentDipAnimator.run(duration: duration, onFrame: { [weak self] progress in
                 guard let self else { return }
                 let t = progress * duration
-                self.detentDip = d0 * (1 + omega * t) * exp(-omega * t)
+                self.writeDip(d0 * (1 + omega * t) * exp(-omega * t))
                 self.applyScrollOffset()
             }, onDone: { [weak self] in
                 guard let self else { return }
                 self.detentDipAnimating = false
-                self.detentDip = 0
+                self.writeDip(0)
                 self.applyScrollOffset()
             })
         case .inertia:
@@ -1076,12 +1073,12 @@ final class ThumbnailManager {
                 let t = progress * duration
                 let decay = exp(-zeta * omega * t)
                 let phase = cos(omegaD * t) + (zeta * omega / omegaD) * sin(omegaD * t)
-                self.detentDip = d0 * decay * phase
+                self.writeDip(d0 * decay * phase)
                 self.applyScrollOffset()
             }, onDone: { [weak self] in
                 guard let self else { return }
                 self.detentDipAnimating = false
-                self.detentDip = 0
+                self.writeDip(0)
                 self.applyScrollOffset()
             })
         }
@@ -1121,6 +1118,41 @@ final class ThumbnailManager {
     /// Лёгкий кадр прокрутки: двигаются только карточки. Полная перекладка
     /// пересчитывает ширину каждой карточки, положение хаба и режимы ресайза —
     /// на каждое событие колеса это и давало рывки.
+    // MARK: единственная точка записи позиции ленты
+
+    /// Видимая позиция ленты — ЕДИНСТВЕННОЕ значение, от которого зависит
+    /// раскладка (`SPEC_SINGLE_SOURCE.md`). Читать модельную позицию мимо
+    /// неё в раскладке запрещено.
+    private var presentedOffset: CGFloat { scrollModel.offset + detentDip }
+
+    /// Записать МОДЕЛЬНУЮ позицию. `absorbJump` — сохранить видимую позицию
+    /// неизменной, переложив разницу в подачу: так механика перенацеливает
+    /// движение, а не рвёт его.
+    private func writeModel(_ value: CGFloat, absorbJump: Bool = false) {
+        let visible = presentedOffset
+        scrollModel.offset = value
+        detentDip = absorbJump ? visible - value : 0
+    }
+
+    /// Записать модель, полученную механикой целиком (жест, резинка).
+    private func writeModel(_ model: TrayScrollModel, absorbJump: Bool = false) {
+        let visible = presentedOffset
+        scrollModel = model
+        detentDip = absorbJump ? visible - scrollModel.offset : 0
+    }
+
+    /// Кадр пружины: видимая позиция ставится напрямую, подача обнуляется —
+    /// пружина и есть носитель движения на этом отрезке.
+    private func writePresented(_ value: CGFloat) {
+        scrollModel.offset = value
+        detentDip = 0
+    }
+
+    /// Кадр подачи: гасим разницу, модель не трогаем.
+    private func writeDip(_ value: CGFloat) {
+        detentDip = value
+    }
+
     private func applyScrollOffset() {
         guard let screen = anchorScreen ?? NSScreen.main, !cardsAreCollapsed else {
             layout()
@@ -1584,7 +1616,7 @@ final class ThumbnailManager {
         scrollGestureActive = false
         let from = scrollModel.offset
         guard abs(target - from) > 0.5 else {
-            scrollModel.offset = target
+            writePresented(target)
             detent.sync(with: scrollModel)
             applyScrollOffset()
             return
@@ -1593,12 +1625,12 @@ final class ThumbnailManager {
         scrollSettleAnimator.run(duration: 0.32, onFrame: { [weak self] progress in
             guard let self else { return }
             let eased = 1 - pow(1 - progress, 3)
-            self.scrollModel.offset = from + (target - from) * eased
+            self.writePresented(from + (target - from) * eased)
             self.applyScrollOffset()
         }, onDone: { [weak self] in
             guard let self else { return }
             self.scrollSettleAnimating = false
-            self.scrollModel.offset = target
+            self.writePresented(target)
             self.detent.sync(with: self.scrollModel)
             self.applyScrollOffset()
             // Кнопочный сбор садится своим ease: осадка вдогонку читалась бы
@@ -1775,21 +1807,21 @@ final class ThumbnailManager {
         // Пока идёт жест или пружинный возврат, смещение может законно жить за
         // границей — мгновенный clamp здесь и делал резинку невидимой.
         if scrollGestureActive || scrollSettleAnimating {
-            if !scrollModel.isScrollable { scrollModel.offset = 0 }
+            if !scrollModel.isScrollable { writeModel(0) }
             return
         }
         switch scrollIntent {
         case .stayCompressed:
             // `TR-5`: стопка была собрана — новый снимок молча ложится сверху,
             // лента остаётся полностью сжатой.
-            scrollModel.offset = scrollModel.maximumOffset
+            writeModel(scrollModel.maximumOffset)
         case .revealNewest:
             // `TR-5`: развёрнутая лента докручивается ровно до видимости
             // нового снимка; если он и так виден — не трогаем положение.
-            scrollModel.offset = max(min(scrollModel.offset, scrollModel.maximumOffset),
-                                     scrollModel.revealNewestOffset())
+            writeModel(max(min(scrollModel.offset, scrollModel.maximumOffset),
+                           scrollModel.revealNewestOffset()))
         case .none:
-            scrollModel = scrollModel.settled()
+            writeModel(scrollModel.settled())
         }
         scrollIntent = .none
         detent.sync(with: scrollModel)
