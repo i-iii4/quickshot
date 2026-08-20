@@ -1010,19 +1010,36 @@ struct TrayScrollModelTests {
     /// видимых слоёв падало с трёх до одного (приёмка 20.08.2026).
     private static func deckCurveEasesInAndClosesLinearly() {
         let step: CGFloat = 0.001
-        let startSpeed = (TrayDeckClosure.curve(step) - TrayDeckClosure.curve(0)) / step
-        let endSpeed = (TrayDeckClosure.curve(1) - TrayDeckClosure.curve(1 - step)) / step
-        let midSpeed = (TrayDeckClosure.curve(0.5 + step) - TrayDeckClosure.curve(0.5)) / step
+        let startSpeed = (TrayDeckClosure.tierCurve(step) - TrayDeckClosure.tierCurve(0)) / step
+        let endSpeed = (TrayDeckClosure.tierCurve(1) - TrayDeckClosure.tierCurve(1 - step)) / step
+        let midSpeed = (TrayDeckClosure.tierCurve(0.5 + step) - TrayDeckClosure.tierCurve(0.5)) / step
 
         expect(startSpeed < midSpeed * 0.05,
                "колода дёргается на входе в зону: скорость \(startSpeed) против \(midSpeed)")
         expect(endSpeed > midSpeed,
                "у посадки кривая замедляется и гасит слои раньше зазора: \(endSpeed)")
 
+        // Кривая ПОТОКА, наоборот, обязана гаснуть к посадке: сжатие даёт
+        // верхней карточке ход сверх движения ленты, и если он максимален
+        // у упора, карточка бьётся об него на полуторной скорости.
+        let flowStart = (TrayDeckClosure.flowCurve(step) - TrayDeckClosure.flowCurve(0)) / step
+        let flowEnd = (TrayDeckClosure.flowCurve(1) - TrayDeckClosure.flowCurve(1 - step)) / step
+        let flowMid = (TrayDeckClosure.flowCurve(0.5 + step) - TrayDeckClosure.flowCurve(0.5)) / step
+        expect(flowStart < flowMid * 0.05, "поток дёргается на входе в зону: \(flowStart)")
+        expect(flowEnd < flowMid * 0.05,
+               "поток бьётся об упор: скорость \(flowEnd) против \(flowMid)")
+
+        // В точках парковки обе кривые обязаны совпадать, иначе карточка
+        // прыгает при переходе из потока в стопку.
+        for edge in [CGFloat(0), 1] {
+            expect(abs(TrayDeckClosure.tierCurve(edge) - TrayDeckClosure.flowCurve(edge)) < 0.001,
+                   "кривые расходятся на краю зоны \(edge)")
+        }
+
         // Раскрытие линейно по остатку пути: доля, на которую колода
         // раскрыта, пропорциональна тому, сколько ленте осталось доехать.
-        let a = 1 - TrayDeckClosure.curve(1 - 0.02)
-        let b = 1 - TrayDeckClosure.curve(1 - 0.04)
+        let a = 1 - TrayDeckClosure.tierCurve(1 - 0.02)
+        let b = 1 - TrayDeckClosure.tierCurve(1 - 0.04)
         expect(abs(b / a - 2) < 0.15,
                "раскрытие не пропорционально остатку пути: \(b / a) вместо 2")
     }
@@ -1070,9 +1087,9 @@ struct TrayScrollModelTests {
             let offset = model.maximumOffset - 150 + CGFloat(i) * 0.5
             var probe = model
             probe.offset = offset
-            let closure = TrayDeckClosure.collapse(presented: offset, model: probe)
+            let progress = TrayDeckClosure.value(presented: offset, model: probe)
             let bands = TrayStripLayout.bands(cardLengths: lengths, gap: gap, offset: offset,
-                                              viewportLength: 800, deckClosure: closure)
+                                              viewportLength: 800, deckProgress: progress)
             for (index, band) in bands.enumerated() where !band.hidden {
                 if let was = previous[index] {
                     maxJump = max(maxJump, abs(band.position - was))

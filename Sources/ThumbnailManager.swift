@@ -1854,7 +1854,7 @@ final class ThumbnailManager {
                                          menuBarInset: menuBarInset(on: screen),
                                          // `TR-34`: степень схлопывания колоды
                                          // от той же видимой позиции.
-                                         deckClosure: TrayDeckClosure.collapse(
+                                         deckProgress: TrayDeckClosure.value(
                                              presented: presentedOffset, model: scrollModel))
         }
 
