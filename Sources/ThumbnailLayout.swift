@@ -175,7 +175,8 @@ func thumbnailScrollLayout(screenFrame: NSRect,
                            margin: CGFloat,
                            gap: CGFloat,
                            offset: CGFloat,
-                           menuBarInset: CGFloat = 0) -> ThumbnailLayoutResult {
+                           menuBarInset: CGFloat = 0,
+                           deckClosure: CGFloat = 0) -> ThumbnailLayoutResult {
     guard !cardHeights.isEmpty else { return .init(visible: [], hidden: []) }
 
     let lengths = edge.isVertical ? cardHeights : Array(repeating: cardWidth, count: cardHeights.count)
@@ -187,7 +188,8 @@ func thumbnailScrollLayout(screenFrame: NSRect,
     let bands = TrayStripLayout.bands(cardLengths: lengths,
                                       gap: gap,
                                       offset: offset,
-                                      viewportLength: max(1, viewportLength))
+                                      viewportLength: max(1, viewportLength),
+                                      deckClosure: deckClosure)
 
     var visible: [ThumbnailLayoutSlot] = []
     var hidden: [Int] = []

@@ -209,10 +209,16 @@ enum TrayStripLayout {
         max(0.65, 1 - depthScaleStep * depth)
     }
 
+    /// `deckClosure` — степень схлопывания колоды (`TR-34`): 0 — ярусы
+    /// разложены как обычно, 1 — вся стопка сошлась к базе и видна одна
+    /// верхняя карточка. Схлопывание живёт ЗДЕСЬ, в раскладке, поэтому
+    /// работает во всех местах одинаково; отдельного сдвига крышки, который
+    /// стирался при полной перекладке, больше нет.
     static func bands(cardLengths: [CGFloat],
                       gap: CGFloat,
                       offset: CGFloat,
-                      viewportLength: CGFloat) -> [TrayCardBand] {
+                      viewportLength: CGFloat,
+                      deckClosure: CGFloat = 0) -> [TrayCardBand] {
         guard !cardLengths.isEmpty else { return [] }
         let count = cardLengths.count
         let e = edgeLength
@@ -276,7 +282,11 @@ enum TrayStripLayout {
             // Нижний ярус упирается в базу и НЕ уезжает за неё: карточка
             // растворяется на месте. Уход за виртуальную линию срезал её низ
             // прямой кромкой — та самая «квадратная обрезка нижней карточки».
-            let bottom = max(0, parkLevel - e * CGFloat(depth) - e * nearPhase)
+            // Схлопывание: расстояния между слоями сходятся к нулю, вся
+            // стопка едет вниз вместе. Верхняя карточка накрывает ярусы не
+            // потому, что опустилась одна, а потому что колода сложилась.
+            let collapse = 1 - min(1, max(0, deckClosure))
+            let bottom = max(0, (parkLevel - e * CGFloat(depth) - e * nearPhase) * collapse)
             let cardTop = bottom + cardLengths[index] * scale
             let visibleFrom = bottom
             let visibleTo = min(cardTop, coverTop)
@@ -668,24 +678,17 @@ enum TrayDeckClosure {
         return min(1, max(0, travelled / span))
     }
 
-    /// Сдвиг крышки в точках при заданной степени закрытия.
-    ///
-    /// Неравномерность живёт в ГЕОМЕТРИИ: первую часть пути крышка идёт
-    /// медленнее, накрывая заметный ближний ярус, дальше ускоряется, добирая
-    /// почти невидимый дальний. Но скорость меняется ПЛАВНО: кусочно-линейная
-    /// версия удваивала её ступенькой на границе ярусов, и глаз читал рывок
-    /// ровно в этой точке (приёмка 20.08.2026).
-    ///
-    /// Кривая — степенная: `shift = parkLevel · c^p`. Показатель подобран так,
-    /// чтобы к доле `nearLayerShare` крышка накрывала ровно один ярус, то есть
-    /// половину полного хода. Первая производная непрерывна на всём пути.
-    static func coverShift(_ closure: CGFloat) -> CGFloat {
-        let c = min(1, max(0, closure))
-        return TrayStripLayout.parkLevel * pow(c, exponent)
-    }
-
-    /// `nearLayerShare^p = 0.5` — отсюда показатель кривой.
+    /// Показатель кривой закрытия: к доле `nearLayerShare` колода сходится
+    /// наполовину. Скорость меняется плавно, без ступеньки на границе ярусов
+    /// (приёмка 20.08.2026).
     static var exponent: CGFloat {
         log(0.5) / log(nearLayerShare)
+    }
+
+    /// Степень схлопывания для раскладки: та же величина, проведённая через
+    /// кривую — первую часть пути колода сходится медленнее, накрывая
+    /// заметный ближний ярус, дальше быстрее.
+    static func collapse(presented: CGFloat, model: TrayScrollModel) -> CGFloat {
+        pow(value(presented: presented, model: model), exponent)
     }
 }

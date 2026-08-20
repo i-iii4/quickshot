@@ -866,8 +866,7 @@ struct TrayScrollModelTests {
         var previous: CGFloat = -1
         for step in stride(from: model.maximumOffset - zone * 1.2,
                            through: model.maximumOffset, by: 0.5) {
-            let closure = TrayDeckClosure.value(presented: step, model: model)
-            let shift = TrayDeckClosure.coverShift(closure)
+            let shift = TrayDeckClosure.collapse(presented: step, model: model)
             expect(shift >= previous - 0.001,
                    "перекрытие уменьшилось при движении к сбору: \(previous) → \(shift)")
             previous = shift
@@ -879,13 +878,12 @@ struct TrayScrollModelTests {
     private static func deckClosureIsContinuous() {
         let model = deckStrip()
         let zone = TrayDetentModel.effectiveZone(for: model)
-        var previous = TrayDeckClosure.coverShift(
-            TrayDeckClosure.value(presented: model.maximumOffset - zone * 1.2, model: model))
+        var previous = TrayDeckClosure.collapse(
+            presented: model.maximumOffset - zone * 1.2, model: model)
         for step in stride(from: model.maximumOffset - zone * 1.2,
                            through: model.maximumOffset, by: 0.5) {
-            let shift = TrayDeckClosure.coverShift(
-                TrayDeckClosure.value(presented: step, model: model))
-            expect(abs(shift - previous) < 2,
+            let shift = TrayDeckClosure.collapse(presented: step, model: model)
+            expect(abs(shift - previous) < 0.1,
                    "разрыв перекрытия на позиции \(step): скачок \(shift - previous)")
             previous = shift
         }
@@ -901,8 +899,8 @@ struct TrayScrollModelTests {
 
         let atHome = TrayDeckClosure.value(presented: model.maximumOffset, model: model)
         expect(atHome == 1, "у посадки колода не закрыта: \(atHome)")
-        expect(abs(TrayDeckClosure.coverShift(1) - TrayStripLayout.parkLevel) < 0.001,
-               "полное перекрытие не равно высоте ярусов: \(TrayDeckClosure.coverShift(1))")
+        expect(abs(TrayDeckClosure.collapse(presented: model.maximumOffset, model: model) - 1) < 0.001,
+               "у посадки колода не схлопнута полностью")
 
         // Закрытие завершается раньше посадки: за четверть зоны до неё уже
         // единица.
@@ -919,37 +917,48 @@ struct TrayScrollModelTests {
                "короткая лента закрывает колоду")
     }
 
-    /// Критерий 4: к середине хода закрыт ближний ярус, дальний ещё виден —
-    /// деление неравномерное, две трети пути на ближний.
+    /// Критерий 4: к двум третям хода колода сходится наполовину — ближний
+    /// ярус уже накрыт, дальний ещё нет. Деление неравномерное: дальний
+    /// мельче и уже растворён, равное тратило бы половину пути на почти
+    /// незаметное изменение.
     private static func deckCoverFinishesTheNearTierFirst() {
-        let tier = TrayStripLayout.edgeLength
-        let atShare = TrayDeckClosure.coverShift(TrayDeckClosure.nearLayerShare)
-        expect(abs(atShare - tier) < 0.001,
-               "к концу своей доли крышка не накрыла ближний ярус: \(atShare)")
+        let model = deckStrip()
+        let zone = TrayDetentModel.effectiveZone(for: model)
+        let span = zone * TrayDeckClosure.completionPoint
+        let atShare = TrayDeckClosure.collapse(
+            presented: model.maximumOffset - zone + span * TrayDeckClosure.nearLayerShare,
+            model: model)
+        expect(abs(atShare - 0.5) < 0.001,
+               "к своей доле хода колода сошлась не наполовину: \(atShare)")
 
-        let half = TrayDeckClosure.coverShift(0.5)
-        expect(half < tier, "к середине хода накрыто больше ближнего яруса: \(half)")
-        expect(half > tier * 0.6, "к середине хода ближний ярус почти не накрыт: \(half)")
+        let half = TrayDeckClosure.collapse(
+            presented: model.maximumOffset - zone + span * 0.5, model: model)
+        expect(half < 0.5, "к середине хода схлопнуто больше половины: \(half)")
+        expect(half > 0.25, "к середине хода колода почти не сошлась: \(half)")
     }
 
-    /// Скорость крышки меняется ПЛАВНО: кусочно-линейная версия удваивала её
-    /// ступенькой на границе ярусов, и глаз читал рывок ровно в этой точке.
-    /// Проверяем непрерывность первой производной по всему ходу.
+    /// Скорость схлопывания меняется ПЛАВНО: кусочно-линейное деление
+    /// удваивало её ступенькой на границе ярусов, и глаз читал рывок ровно в
+    /// этой точке. Проверяем непрерывность первой производной.
     private static func deckCoverHasNoSpeedStep() {
-        let step: CGFloat = 0.01
+        let model = deckStrip()
+        let zone = TrayDetentModel.effectiveZone(for: model)
+        let span = zone * TrayDeckClosure.completionPoint
+        let step: CGFloat = 0.005
         var previousSpeed: CGFloat?
         var maxJump: CGFloat = 0
         for c in stride(from: 0.0, through: 1.0 - step, by: step) {
-            let speed = (TrayDeckClosure.coverShift(c + step)
-                         - TrayDeckClosure.coverShift(c)) / step
+            let here = TrayDeckClosure.collapse(
+                presented: model.maximumOffset - zone + span * c, model: model)
+            let next = TrayDeckClosure.collapse(
+                presented: model.maximumOffset - zone + span * (c + step), model: model)
+            let speed = (next - here) / step
             if let previousSpeed {
                 maxJump = max(maxJump, abs(speed - previousSpeed))
             }
             previousSpeed = speed
         }
-        // Соседние шаги отличаются на доли точки; ступенька дала бы разрыв
-        // порядка удвоения скорости.
-        expect(maxJump < 1.0, "скорость крышки меняется ступенькой: скачок \(maxJump)")
+        expect(maxJump < 0.05, "скорость схлопывания меняется ступенькой: скачок \(maxJump)")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

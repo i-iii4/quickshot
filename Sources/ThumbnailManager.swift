@@ -1160,15 +1160,12 @@ final class ThumbnailManager {
             return
         }
         let (visible, hidden) = cardLayout(on: screen)
-        // `TR-34`: колода закрывается наезжанием — верхняя карточка съезжает к
-        // краю и накрывает ярусы собой. Степень закрытия считается от ВИДИМОЙ
-        // позиции (`presentedOffset`), поэтому наследует динамику ленты.
-        let closure = TrayDeckClosure.value(presented: presentedOffset, model: scrollModel)
-        let coverShift = TrayDeckClosure.coverShift(closure)
-        let topIndex = visible.max(by: { $0.1.index < $1.1.index })?.1.index
+        // `TR-34`: колода схлопывается в самой раскладке — отдельного сдвига
+        // здесь нет, поэтому закрытие живёт во всех местах раскладки, а не
+        // только в кадре прокрутки.
         for item in hidden { item.hide() }
         for (item, slot) in visible {
-            place(item, at: slot, coverShift: slot.index == topIndex ? coverShift : 0)
+            place(item, at: slot)
         }
         applyStackOrder()
         updateCase()
@@ -1226,20 +1223,8 @@ final class ThumbnailManager {
     }
 
     /// Развёрнутая карточка встаёт целиком, слой стопки — полосой-кромкой.
-    private func place(_ item: ThumbnailWindow,
-                       at slot: ThumbnailLayoutSlot,
-                       coverShift: CGFloat = 0) {
-        var origin = slot.origin
-        if coverShift > 0.001 {
-            // Крышка съезжает К КРАЮ: направление зависит от того, у какого
-            // края стоит трей.
-            switch TrayPosition.current {
-            case .left, .right: origin.y -= coverShift
-            case .bottom: origin.x += coverShift
-            case .top: origin.y += coverShift
-            }
-        }
-        let localOrigin = toLocal(origin)
+    private func place(_ item: ThumbnailWindow, at slot: ThumbnailLayoutSlot) {
+        let localOrigin = toLocal(slot.origin)
         if slot.isFullCard && slot.opacity > 0.999 {
             item.placeInstant(origin: localOrigin)
         } else {
