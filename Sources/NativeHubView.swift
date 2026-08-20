@@ -2667,6 +2667,10 @@ final class NativeCasePanelView: NSView {
         nativeView.renderNow()
     }
 
+    /// Трей живёт в неактивном окне-панели: без этого первый клик уходил бы
+    /// в активацию окна, а кнопка срабатывала бы лишь со второго.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     /// Мышь ловится только кнопками: остальная площадь панели принадлежит
     /// подложке шкатулки.
     override func hitTest(_ point: NSPoint) -> NSView? {

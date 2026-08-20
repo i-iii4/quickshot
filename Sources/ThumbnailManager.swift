@@ -259,12 +259,18 @@ final class ThumbnailManager {
 
     /// Видимая геометрия острова в координатах хоста: раскрытый хаб и каждая
     /// показанная карточка. Зазоры между ними замыкает `TrayHover.bridge`.
-    private func trayIslandRects() -> [NSRect] {
+    private func currentIslandRects() -> [NSRect] {
         var rects: [NSRect] = []
         for item in items where !item.hostView.isHidden && item.hostView.alphaValue > 0.01 {
             rects.append(contentsOf: item.interactiveFramesInHost)
         }
-        return rects
+        // Шкатулка — часть острова, обоснование в `trayIslandRects`.
+        let live = { (view: NSView) -> NSRect? in
+            !view.isHidden && view.alphaValue > 0.01 ? view.frame : nil
+        }
+        return trayIslandRects(cardRects: rects,
+                               caseRect: live(caseView),
+                               panelRect: live(casePanel))
     }
 
     /// Указатель над содержимым трея? Ответ решает, принимает ли полноэкранный
@@ -273,7 +279,7 @@ final class ThumbnailManager {
     /// этом замкнуты — проход между командами и карточками не роняет окно.
     private func mouseOverTray() -> Bool {
         trayHoverRegionContains(toLocal(NSEvent.mouseLocation),
-                                rects: trayIslandRects(),
+                                rects: currentIslandRects(),
                                 shield: 0,
                                 bridge: TrayHover.bridge)
     }
@@ -282,7 +288,7 @@ final class ThumbnailManager {
     /// большему порогу, чем вход: этот ответ удерживает раскрытый трей.
     private func mouseInsideHoverIsland() -> Bool {
         let inside = trayPointerRemainsInside(toLocal(NSEvent.mouseLocation),
-                                              rects: trayIslandRects(),
+                                              rects: currentIslandRects(),
                                               wasInside: pointerInsideHoverIsland)
         pointerInsideHoverIsland = inside
         return inside
@@ -506,12 +512,20 @@ final class ThumbnailManager {
         collectionAnimator.run(duration: duration,
                                onFrame: { [weak self] progress in
             onFrame(progress)
+            // Шкатулка обязана следовать за составом ленты КАЖДЫЙ кадр: её
+            // контур строится по видимым карточкам, а счётчик — по их числу.
+            // Раньше `updateCase` звала только прокрутка, поэтому после
+            // удаления подложка оставалась прежнего размера, карточка стояла
+            // в ней со сбитыми отступами и упиралась в край, а счётчик
+            // показывал старое число (приёмка 20.08.2026).
+            self?.updateCase()
             self?.refreshHostPointerRouting()
         },
                                onDone: { [weak self] in
             guard let self else { return }
             self.collectionCompletion = nil
             completion()
+            self.updateCase()
             self.refreshHostPointerRouting()
         })
     }
@@ -524,6 +538,7 @@ final class ThumbnailManager {
         collectionCompletion = nil
         collectionAnimator.cancel()
         completion()
+        updateCase()
         refreshHostPointerRouting()
     }
 

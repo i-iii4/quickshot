@@ -18,7 +18,36 @@ struct TrayHoverRegionTests {
         distantElementsStayDisconnected()
         hysteresisSeparatesEntryFromExit()
         emptyTrayIsNeverInside()
+        caseAndPanelBelongToTheIsland()
         print("TrayHoverRegionTests: passed")
+    }
+
+    /// Шкатулка входит в остров, и указатель над её панелью считается
+    /// находящимся над треем. Иначе полноэкранный хост выключает приём мыши,
+    /// стоит указателю сойти с карточки, и кнопки шкатулки мертвы.
+    private static func caseAndPanelBelongToTheIsland() {
+        let card = NSRect(x: 100, y: 100, width: 200, height: 150)
+        // Подложка: поле 8 pt по периметру, сверху добавка под панель команд.
+        let caseRect = NSRect(x: 92, y: 92, width: 216, height: 200)
+        let panel = NSRect(x: 100, y: 268, width: 120, height: 28)
+
+        let bare = trayIslandRects(cardRects: [card], caseRect: nil, panelRect: nil)
+        expect(!trayHoverRegionContains(NSPoint(x: 160, y: 280), rects: bare,
+                                        shield: 0, bridge: TrayHover.bridge),
+               "панель попала в остров без своей рамки — тест ничего не проверяет")
+
+        let full = trayIslandRects(cardRects: [card], caseRect: caseRect, panelRect: panel)
+        expect(trayHoverRegionContains(NSPoint(x: 160, y: 280), rects: full,
+                                       shield: 0, bridge: TrayHover.bridge),
+               "указатель над панелью команд не считается над треем")
+        expect(trayHoverRegionContains(NSPoint(x: 96, y: 150), rects: full,
+                                       shield: 0, bridge: TrayHover.bridge),
+               "поле подложки не считается частью трея")
+
+        // Скрытая шкатулка остров не раздувает: клик рядом со свёрнутым треем
+        // обязан уходить в приложение под ним.
+        let hidden = trayIslandRects(cardRects: [card], caseRect: nil, panelRect: nil)
+        expect(hidden.count == 1, "скрытая шкатулка всё равно попала в остров")
     }
 
     /// Путь указателя от хаба вверх к карточкам не должен ни в одной точке

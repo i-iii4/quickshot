@@ -89,3 +89,18 @@ func trayPointerRemainsInside(_ point: NSPoint,
                             shield: wasInside ? shield + exitHysteresis : shield,
                             bridge: bridge)
 }
+
+/// Состав интерактивного острова трея: рамки карточек плюс шкатулка.
+///
+/// Подложка шкатулки и панель её команд лежат ВНЕ рамок карточек — поле 8 pt
+/// по периметру и ряд кнопок сверху. Без них полноэкранный хост объявляет
+/// себя прозрачным для мыши, стоит указателю сойти с карточки, и кнопки
+/// шкатулки не нажимаются вовсе (приёмка 20.08.2026).
+func trayIslandRects(cardRects: [NSRect],
+                     caseRect: NSRect?,
+                     panelRect: NSRect?) -> [NSRect] {
+    var rects = cardRects
+    if let caseRect, caseRect.width > 1, caseRect.height > 1 { rects.append(caseRect) }
+    if let panelRect, panelRect.width > 1, panelRect.height > 1 { rects.append(panelRect) }
+    return rects
+}
