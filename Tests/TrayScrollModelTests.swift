@@ -594,12 +594,8 @@ struct TrayScrollModelTests {
             }
         }
         expect(click == .release, "побег не дал щелчка")
-        // `TR-34`: срыв снимает зацеп НА МЕСТЕ, без телепорта — иначе всё
-        // раскрытие колоды сжимается в 120 мс подачи и читается скачком.
-        expect(offsetAtClick < model.maximumOffset - 0.5,
-               "лента после срыва не страгивалась: \(offsetAtClick)")
-        expect(offsetAtClick > model.maximumOffset - TrayDetentModel.zone,
-               "срыв телепортировал ленту: \(offsetAtClick)")
+        expect(abs(offsetAtClick - (model.maximumOffset - TrayDetentModel.zone)) < 0.001,
+               "прыжок не к началу зоны: \(offsetAtClick)")
         expect(!detent.engaged, "защёлка не отпустила")
     }
 

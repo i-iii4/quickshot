@@ -503,13 +503,10 @@ struct TrayDetentModel: Equatable {
         }
         strain += -delta
         if strain >= Self.escape {
-            // Вырвалась: зацеп снимается НА МЕСТЕ, без телепорта. Прежний
-            // прыжок на всю зону (36 pt) поглощался подачей за 120 мс, и в эти
-            // 120 мс сжималось всё раскрытие колоды — читалось как резкий
-            // скачок (приёмка 20.08.2026). Теперь после срыва лента просто
-            // перестаёт сопротивляться и идёт за пальцем один к одному.
+            // Вырвалась: накопленное напряжение выпускается одним прыжком.
             engaged = false
             strain = 0
+            next.offset = maxOffset - Self.effectiveZone(for: next)
             return (next, .release)
         }
         next.offset = maxOffset - strain / Self.holdTension
