@@ -1065,46 +1065,25 @@ final class ThumbnailManager {
         }
         detentDipAnimator.cancel()
         detentDipAnimating = true
-        switch profile {
-        case .underFinger:
-            // Аддитивный догон по скиллу: модель прыгнула мгновенно, глаз
-            // видит непрерывное движение — разница затухает за ~120 мс,
-            // критическое демпфирование, без перелёта. Палец при этом ведёт
-            // модель, догон только складывается сверху.
-            let duration: CGFloat = 0.12
-            let omega: CGFloat = 6 / duration
-            detentDipAnimator.run(duration: duration, onFrame: { [weak self] progress in
-                guard let self else { return }
-                let t = progress * duration
-                self.writeDip(d0 * (1 + omega * t) * exp(-omega * t))
-                self.applyScrollOffset()
-            }, onDone: { [weak self] in
-                guard let self else { return }
-                self.detentDipAnimating = false
-                self.writeDip(0)
-                self.applyScrollOffset()
-            })
-        case .inertia:
-            // Недодемпфированная подача с одним перелётом ~16% — осадка.
-            let duration: CGFloat = 0.34
-            let zeta: CGFloat = 0.5
-            let omega = 6 / (zeta * duration)
-            let omegaD = omega * (1 - zeta * zeta).squareRoot()
-            detentDipAnimator.run(duration: duration, onFrame: { [weak self] progress in
-                guard let self else { return }
-                let t = progress * duration
-                let decay = exp(-zeta * omega * t)
-                let phase = cos(omegaD * t) + (zeta * omega / omegaD) * sin(omegaD * t)
-                self.writeDip(d0 * decay * phase)
-                self.applyScrollOffset()
-            }, onDone: { [weak self] in
-                guard let self else { return }
-                self.detentDipAnimating = false
-                self.writeDip(0)
-                self.applyScrollOffset()
-            })
-        }
+        // Один характер подачи независимо от того, сняты ли пальцы: разные
+        // длительность и демпфирование делали один и тот же щелчок разным на
+        // ощупь (анализ 20.08.2026). Критическое демпфирование, без перелёта;
+        // под пальцем чуть короче, чтобы не спорить с прямым управлением.
+        let duration: CGFloat = profile == .underFinger ? 0.16 : 0.22
+        let omega: CGFloat = 6 / duration
+        detentDipAnimator.run(duration: duration, onFrame: { [weak self] progress in
+            guard let self else { return }
+            let t = progress * duration
+            self.writeDip(d0 * (1 + omega * t) * exp(-omega * t))
+            self.applyScrollOffset()
+        }, onDone: { [weak self] in
+            guard let self else { return }
+            self.detentDipAnimating = false
+            self.writeDip(0)
+            self.applyScrollOffset()
+        })
     }
+
 
     nonisolated private static let trayLogEnabled =
         ProcessInfo.processInfo.environment["QUICKSHOT_LOG_TRAY"] == "1"

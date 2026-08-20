@@ -822,9 +822,19 @@ struct TrayScrollModelTests {
         expect(!TrayFlickProjection.shouldSnap(model: model, velocity: intoZone / 4),
                "слабое движение защёлкнуло")
 
-        // Пролёт сквозь зону на скорости — не защёлкиваем.
-        expect(!TrayFlickProjection.shouldSnap(model: model, velocity: intoZone * 8),
-               "пролёт сквозь зону защёлкнул")
+        // Сильный бросок с близкой позиции защёлкивает: зона стоит в КОНЦЕ
+        // хода, пролететь сквозь неё некуда — лента упирается в край и всё
+        // равно окажется собранной.
+        expect(TrayFlickProjection.shouldSnap(model: model, velocity: intoZone * 8),
+               "сильный бросок к концу хода не защёлкнул")
+
+        // А вот бросок с дальнего конца ленты — это прокрутка, а не сбор.
+        var far = model
+        far.offset = 0
+        expect(far.maximumOffset - far.offset > zone * TrayFlickProjection.intentRange,
+               "тестовая лента слишком коротка для проверки дальнего броска")
+        expect(!TrayFlickProjection.shouldSnap(model: far, velocity: intoZone * 8),
+               "бросок с дальнего конца защёлкнул")
 
         // Бросок в обратную сторону защёлку не трогает.
         expect(!TrayFlickProjection.shouldSnap(model: model, velocity: -intoZone),
