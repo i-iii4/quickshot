@@ -1772,6 +1772,7 @@ final class ThumbnailManager {
         scrollModel.contentLength = content
         scrollModel.viewportLength = max(1, viewport)
         scrollModel.lastCardLength = lengths.last ?? 0
+        scrollModel.firstCardLength = lengths.first ?? 0
         // Пока идёт жест или пружинный возврат, смещение может законно жить за
         // границей — мгновенный clamp здесь и делал резинку невидимой.
         if scrollGestureActive || scrollSettleAnimating {
