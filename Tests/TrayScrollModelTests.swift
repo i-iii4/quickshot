@@ -920,18 +920,23 @@ struct TrayScrollModelTests {
                "короткая лента закрывает колоду")
     }
 
-    /// Критерий 4: отклик мгновенный, приход мягкий. В начале колода
-    /// сходится быстро — «потянул и сразу видно»; в точке закрытия скорость
-    /// падает до нуля, поэтому колода закрывается, а не обрывается.
+    /// Критерий 4: кривая гладкая с ОБОИХ концов — скорость нулевая и на
+    /// входе в зону, и в точке закрытия, максимум в середине хода.
+    /// Односторонние кривые дают удар на той границе, где скорость
+    /// ненулевая: степенная вставала колом в конце, обратная дёргала колоду
+    /// на входе (аудит 20.08.2026).
     private static func deckCoverFinishesTheNearTierFirst() {
-        let start = TrayDeckClosure.curve(0.1)
-        expect(start > 0.15, "в начале хода колода почти не реагирует: \(start)")
-
         let step: CGFloat = 0.001
-        let endSpeed = (TrayDeckClosure.curve(1) - TrayDeckClosure.curve(1 - step)) / step
         let startSpeed = (TrayDeckClosure.curve(step) - TrayDeckClosure.curve(0)) / step
-        expect(endSpeed < startSpeed * 0.1,
-               "движение обрывается вместо мягкого прихода: скорость в конце \(endSpeed)")
+        let endSpeed = (TrayDeckClosure.curve(1) - TrayDeckClosure.curve(1 - step)) / step
+        let midSpeed = (TrayDeckClosure.curve(0.5 + step) - TrayDeckClosure.curve(0.5)) / step
+
+        expect(startSpeed < midSpeed * 0.05,
+               "колода дёргается на входе в зону: скорость \(startSpeed) против \(midSpeed)")
+        expect(endSpeed < midSpeed * 0.05,
+               "колода обрывается в конце: скорость \(endSpeed) против \(midSpeed)")
+        expect(abs(TrayDeckClosure.curve(0.5) - 0.5) < 0.001,
+               "кривая несимметрична в середине: \(TrayDeckClosure.curve(0.5))")
         expect(abs(TrayDeckClosure.curve(1) - 1) < 0.001, "колода не закрывается полностью")
     }
 
