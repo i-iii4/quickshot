@@ -823,26 +823,46 @@ final class ThumbnailManager {
         thumbnailCollectionOffset(vertical: axisIsVertical)
     }
 
+    /// Колода собрана: лента доехала до упора и стоит там.
+    private var deckIsGathered: Bool {
+        scrollModel.offset >= scrollModel.maximumOffset - 0.5
+    }
+
     /// Отпускает ось, когда колода снова собрана (`TR-38`): следующий жест
     /// снова свободен выбрать, вверх раскрывать или влево. Пока жест или
     /// пружина живы, ось держится — сброс на ходу сменил бы систему
     /// координат под пальцем.
     private func releaseOpenAxisIfGathered() {
-        guard openAxis != nil, !scrollGestureActive, !scrollSettleAnimating else { return }
-        guard scrollModel.offset >= scrollModel.maximumOffset - 0.5 else { return }
+        // Условие ровно одно: пальца на трекпаде нет и колода собрана.
+        // Прежде сюда входила и проверка на пружину возврата — из-за неё ось
+        // держалась дольше нужного, и следующий жест уходил по СТАРОЙ оси:
+        // чтобы открыть в другую сторону, приходилось дёргать несколько раз
+        // (приёмка 20.08.2026). Пружина щелчка двигает подачу, а не ось, и
+        // смене направления не мешает.
+        guard openAxis != nil, !scrollGestureActive else { return }
+        guard deckIsGathered else { return }
         openAxis = nil
         axisPickupX = 0
         axisPickupY = 0
     }
 
-    /// Копит ход пальца и выбирает ось раскрытия (`TR-38`). Возвращает
-    /// `true`, когда ось уже выбрана и событие можно обрабатывать обычным
-    /// путём, и `false`, пока порог не пройден.
+    /// Итог попытки выбрать ось раскрытия (`TR-38`).
+    enum AxisPick {
+        /// Порог не пройден: лента не двигается, ход копится.
+        case pending
+        /// Ось выбрана. `catchUp` — ход, накопленный до порога: его нужно
+        /// отдать ленте, иначе первые точки движения пропадают и жест
+        /// читается как залипший.
+        case ready(catchUp: CGFloat?)
+    }
+
+    /// Выбирает ось раскрытия по ходу пальца.
     ///
-    /// До порога лента НЕ двигается: иначе первые точки движения уводили бы
-    /// её по случайной оси. После выбора ось держится до конца жеста —
-    /// смена оси на ходу читается как срыв, а не как управление.
-    private func pickOpenAxis(with event: NSEvent) -> Bool {
+    /// Ось меняется ТОЛЬКО из собранного состояния. Раскрытая лента
+    /// продолжает жить по своей оси до самого возврата — смена системы
+    /// координат под раскрытой лентой давала прыжки, случайные щелчки и
+    /// переходы в чужие состояния (приёмка 20.08.2026).
+    private func pickOpenAxis(with event: NSEvent) -> AxisPick {
         if event.phase == .began {
             axisPickupX = 0
             axisPickupY = 0
@@ -851,21 +871,48 @@ final class ThumbnailManager {
         axisPickupY += event.scrollingDeltaY
         guard let vertical = trayAxisPick(accumulatedX: axisPickupX,
                                           accumulatedY: axisPickupY,
-                                          threshold: Self.axisPickThreshold) else { return false }
+                                          threshold: Self.axisPickThreshold) else { return .pending }
+
         let base = ThumbnailLayoutEdge(rawValue: TrayPosition.current.rawValue) ?? .right
         let chosen = vertical
             ? (base.isVertical ? base : (alternateEdge ?? base))
             : (base.isVertical ? (alternateEdge ?? base) : base)
+        let catchUp = vertical ? axisPickupY : axisPickupX
         guard chosen != activeEdge else {
             openAxis = chosen
-            return true
+            return .ready(catchUp: catchUp)
         }
-        openAxis = chosen
-        // Смена оси меняет систему координат ленты: собранная колода в обеих
-        // стоит в одном углу, поэтому пересчёт незаметен, но раскладка обязана
-        // пройти заново, иначе карточки останутся в координатах прежней оси.
-        layout()
-        return true
+        switchAxis(to: chosen)
+        return .ready(catchUp: catchUp)
+    }
+
+    /// Переводит лету на другую ось. Вызывается только при собранной колоде:
+    /// там обе оси дают одну и ту же картинку, поэтому переход невидим.
+    ///
+    /// Лента НЕ переносит смещение из прежней системы координат — длины ленты
+    /// по осям разные, и старое смещение оказывалось посреди новой ленты:
+    /// колода выглядела раскрытой, защёлка щёлкала сама собой, карточки
+    /// прыгали. Вместо переноса лента встаёт в собранное состояние НОВОЙ оси
+    /// (`scrollIntent = .stayCompressed`), то есть остаётся ровно тем, чем
+    /// была, — собранной колодой в том же углу.
+    private func switchAxis(to edge: ThumbnailLayoutEdge) {
+        openAxis = edge
+        writeDip(0)
+        scrollVelocity = 0
+        if let screen = anchorScreen ?? NSScreen.main {
+            // Размеры ленты пересчитываются СРАЗУ: обычная синхронизация
+            // модели выходит рано, пока жив жест, и лента осталась бы со
+            // смещением в координатах прежней оси.
+            let metrics = stripMetrics(on: screen)
+            applyStripMetrics(content: metrics.content, viewport: metrics.viewport, last: metrics.last)
+        }
+        writeModel(scrollModel.maximumOffset)
+        scrollIntent = .stayCompressed
+        detent.sync(with: scrollModel)
+        // Лёгкий путь раскладки: `layout` гасит коллекционные анимации и
+        // пересинхронизирует прогресс трея, а посреди жеста это читается как
+        // прыжок.
+        applyScrollOffset()
     }
 
     /// Scrolls the finite tray viewport. A newly captured
@@ -878,11 +925,17 @@ final class ThumbnailManager {
         // `TR-38`: ось раскрытия выбирает ЖЕСТ. Пока колода собрана и ось не
         // выбрана, лента не двигается — копится ход пальца, и по нему
         // решается, вверх раскрывать или влево.
-        if openAxis == nil, alternateEdge != nil, pickOpenAxis(with: event) == false { return }
+        var catchUpDelta: CGFloat?
+        if openAxis == nil, alternateEdge != nil, deckIsGathered {
+            switch pickOpenAxis(with: event) {
+            case .pending: return
+            case .ready(let catchUp): catchUpDelta = catchUp
+            }
+        }
         let vertical = axisIsVertical
-        let raw = vertical
+        let raw = catchUpDelta ?? (vertical
             ? event.scrollingDeltaY
-            : (abs(event.scrollingDeltaX) > 0.01 ? event.scrollingDeltaX : event.scrollingDeltaY)
+            : (abs(event.scrollingDeltaX) > 0.01 ? event.scrollingDeltaX : event.scrollingDeltaY))
         // Колесо мыши шлёт дельту в строках, а не в точках: один щелчок — это
         // единица, и лента ползла на пиксель за щелчок.
         let delta = event.hasPreciseScrollingDeltas ? raw : raw * Self.wheelLineHeight
@@ -1952,6 +2005,29 @@ final class ThumbnailManager {
     /// Длина ленты и окна просмотра для модели прокрутки. Модель отвечает на
     /// вопрос «есть ли куда скроллить и насколько перетянуто», раскладку
     /// по-прежнему считает `ThumbnailLayout`.
+    /// Размеры ленты по АКТИВНОЙ оси. Отделены от политики посадки: при
+    /// смене оси размеры обязаны обновиться немедленно, даже посреди жеста,
+    /// иначе лента живёт в координатах прежней оси.
+    private func stripMetrics(on screen: NSScreen) -> (content: CGFloat, viewport: CGFloat, last: CGFloat) {
+        let vertical = axisIsVertical
+        let gap = ThumbStyle.gap
+        let lengths = items.map { vertical ? $0.cardSize.height : $0.cardSize.width }
+        let content = lengths.reduce(0, +) + gap * CGFloat(max(0, lengths.count - 1))
+        let geometry = viewportGeometry(on: screen)
+        let viewport = thumbnailTrayViewportLength(screenFrame: screen.frame,
+                                                   edge: geometry.edge,
+                                                   hubSize: geometry.hubSize,
+                                                   margin: geometry.margin,
+                                                   menuBarInset: menuBarInset(on: screen))
+        return (content, viewport, lengths.last ?? 0)
+    }
+
+    private func applyStripMetrics(content: CGFloat, viewport: CGFloat, last: CGFloat) {
+        scrollModel.contentLength = content
+        scrollModel.viewportLength = max(1, viewport)
+        scrollModel.lastCardLength = last
+    }
+
     private func syncScrollModel(on screen: NSScreen) {
         let vertical = axisIsVertical
         let gap = ThumbStyle.gap
@@ -1963,9 +2039,7 @@ final class ThumbnailManager {
                                                    hubSize: geometry.hubSize,
                                                    margin: geometry.margin,
                                                    menuBarInset: menuBarInset(on: screen))
-        scrollModel.contentLength = content
-        scrollModel.viewportLength = max(1, viewport)
-        scrollModel.lastCardLength = lengths.last ?? 0
+        applyStripMetrics(content: content, viewport: viewport, last: lengths.last ?? 0)
         // Пока идёт жест или пружинный возврат, смещение может законно жить за
         // границей — мгновенный clamp здесь и делал резинку невидимой.
         if scrollGestureActive || scrollSettleAnimating {
