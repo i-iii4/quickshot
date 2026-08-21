@@ -506,7 +506,12 @@ final class ThumbnailManager {
         // его сожжёт промежуточный layout ещё со старой длиной ленты.
         // Сжатие — намеренное состояние: без реального хода (`maximumOffset`
         // нулевой у нетронутой короткой ленты) снимок раскладывается открыто.
-        let wasCompressed = scrollModel.maximumOffset > 0.5
+        //
+        // Лента из ОДНОГО снимка — исключение: хода у неё нет, но она есть
+        // собранная колода из одного элемента, а не раскрытая (`TR-39`).
+        // Считая её раскрытой, второй снимок раскладывал ленту открыто, и
+        // она поднималась на резерв под ярусы — 14 pt (приёмка 21.08.2026).
+        let wasCompressed = scrollModel.maximumOffset > 0.5 || items.count == 1
             && scrollModel.offset >= scrollModel.maximumOffset - 1
         finishCollectionMotion()
         finishTrayMotion()

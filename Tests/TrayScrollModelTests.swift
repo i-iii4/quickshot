@@ -992,11 +992,24 @@ struct TrayScrollModelTests {
             presented: model.maximumOffset - completionDistance, model: model)
         expect(atCompletion >= 0.999, "колода не сложилась к своей точке: \(atCompletion)")
 
-        // Короткой ленте закрытие не положено.
+        // Короткая лента: защёлки нет, но схлопывание есть — пропорционально
+        // ходу. Прежде оно не работало вовсе, и ярусы торчали даже у доехавшей
+        // до упора ленты, не как у обычной (приёмка 21.08.2026).
         let short = TrayScrollModel(contentLength: 130, viewportLength: 400,
                                     offset: 0, lastCardLength: 100)
-        expect(TrayDeckClosure.value(presented: short.maximumOffset, model: short) == 0,
-               "короткая лента закрывает колоду")
+        expect(TrayDeckClosure.value(presented: 0, model: short) == 0,
+               "короткая лента схлопнута в раскрытом положении")
+        expect(abs(TrayDeckClosure.value(presented: short.maximumOffset, model: short) - 1) < 0.001,
+               "короткая лента не схлопывается у упора")
+        expect(abs(TrayDeckClosure.value(presented: short.maximumOffset / 2, model: short) - 0.5) < 0.001,
+               "короткая лента схлопывается не пропорционально ходу")
+
+        // Лента, которой некуда двигаться, ВСЕГДА собрана: один снимок — это
+        // собранная колода, а не раскрытая (`TR-39`).
+        let lone = TrayScrollModel(contentLength: 100, viewportLength: 400,
+                                   offset: 0, lastCardLength: 100)
+        expect(abs(TrayDeckClosure.value(presented: 0, model: lone) - 1) < 0.001,
+               "лента из одного снимка считается раскрытой")
     }
 
     /// Критерий 4: кривая гладкая на ВХОДЕ в зону и ЛИНЕЙНА у посадки.

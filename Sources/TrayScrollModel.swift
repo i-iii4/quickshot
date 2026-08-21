@@ -239,12 +239,13 @@ enum TrayStripLayout {
         let progress = min(1, max(0, deckProgress))
         let collapse = 1 - TrayDeckClosure.flowCurve(progress)
         let tierCollapse = 1 - TrayDeckClosure.tierCurve(progress)
-        // Резерв под ярусы стопки нужен, только когда стопке есть из чего
-        // сложиться. У единственной карточки ярусов нет, и резерв поднимал
-        // её на `parkLevel` выше того места, где та же карточка стоит
-        // верхней в стопке: удаление предпоследнего снимка давало прыжок на
-        // 14 pt (приёмка 21.08.2026).
-        let park = count > 1 ? parkLevel : 0
+        // Резерв под ярусы стопки БЕЗУСЛОВЕН и от числа карточек не зависит.
+        // Ступенчатый резерв (ноль при одной карточке, `parkLevel` при
+        // остальных) не убирал скачок, а переносил его из точки удаления в
+        // точку добавления: второй снимок поднимал всю ленту на 14 pt
+        // (приёмка 21.08.2026). Разницу между «одна карточка» и «стопка»
+        // задаёт СХЛОПЫВАНИЕ, а не резерв.
+        let park = parkLevel
         var cursor: CGFloat = park * collapse
         var raws: [CGFloat] = []
         for length in cardLengths {
@@ -746,7 +747,18 @@ enum TrayDeckClosure {
     /// Степень закрытия по видимой позиции ленты: ноль на краю зоны
     /// натяжения, единица — за долю `completionPoint` до посадки.
     static func value(presented: CGFloat, model: TrayScrollModel) -> CGFloat {
-        guard TrayDetentModel.fits(model) else { return 0 }
+        let maxOffset = model.maximumOffset
+        // Лента, которой некуда двигаться, ВСЕГДА собрана. Один снимок — это
+        // собранная колода из одного элемента, а не раскрытая: разложить её
+        // нельзя. Прежде такая лента считалась раскрытой, ей отводился резерв
+        // под ярусы, и она стояла на 14 pt выше собранной стопки — второй
+        // снимок ронял всю ленту на эту величину (приёмка 21.08.2026).
+        guard maxOffset > 0.5 else { return 1 }
+        // Короткая лента: ход есть, а защёлки нет. Схлопывание идёт
+        // пропорционально ходу — непрерывно и без порогов.
+        guard TrayDetentModel.fits(model) else {
+            return min(1, max(0, presented / maxOffset))
+        }
         let zone = TrayDetentModel.effectiveZone(for: model)
         let span = max(1, zone * completionPoint)
         let travelled = presented - (model.maximumOffset - zone)
