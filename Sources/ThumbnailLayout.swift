@@ -10,8 +10,7 @@ struct ThumbnailLayoutSlot: Equatable {
     let index: Int
     /// Начало видимой полосы карточки в глобальных координатах, при полной
     /// ширине поперёк оси ленты: сужение по глубине карточка применяет сама.
-    /// Изменяемо: вторая ступень (`TR-41`) сдвигает последнюю карточку.
-    var origin: NSPoint
+    let origin: NSPoint
     var opacity: CGFloat = 1
     /// Порядок наложения: больше — ближе к зрителю. Слои стопки обязаны лежать
     /// ЗА карточками ленты, иначе самый прозрачный слой рисуется поверх всех.
@@ -36,17 +35,6 @@ struct ThumbnailLayoutSlot: Equatable {
 struct ThumbnailLayoutResult: Equatable {
     let visible: [ThumbnailLayoutSlot]
     let hidden: [Int]
-}
-
-/// Состояние второй ступени (`TR-41`) для раскладки: как смещена, уменьшена и
-/// растворена ПОСЛЕДНЯЯ карточка ленты. Покой — всё по умолчанию.
-struct TrayStowState: Equatable {
-    /// Сдвиг вдоль оси В СТОРОНУ УПОРА, положительный.
-    var shift: CGFloat = 0
-    var scale: CGFloat = 1
-    var opacity: CGFloat = 1
-    static let idle = TrayStowState()
-    var isIdle: Bool { shift < 0.001 && scale > 0.999 && opacity > 0.999 }
 }
 
 struct ThumbnailViewportResult: Equatable {
@@ -134,29 +122,6 @@ func thumbnailLayout(screenFrame: NSRect,
     return .init(visible: visible, hidden: hidden)
 }
 
-/// Накладывает вторую ступень (`TR-41`) на последнюю карточку ленты.
-///
-/// Ступень трогает ТОЛЬКО её: сдвиг в сторону упора, масштаб и прозрачность.
-/// Остальные слоты остаются как есть — стопка под убираемой карточкой стоит
-/// на месте, иначе убирание читалось бы как продолжение сбора, а не как
-/// отдельное действие.
-private func applyingStow(_ stow: TrayStowState,
-                          to visible: [ThumbnailLayoutSlot],
-                          edge: ThumbnailLayoutEdge) -> [ThumbnailLayoutSlot] {
-    guard !stow.isIdle, let last = visible.indices.max(by: { visible[$0].index < visible[$1].index })
-    else { return visible }
-    var slots = visible
-    var slot = slots[last]
-    // Сдвиг «в упор»: для ленты у правого края это вниз, у нижнего — вправо.
-    slot.origin = edge.isVertical
-        ? NSPoint(x: slot.origin.x, y: slot.origin.y - stow.shift)
-        : NSPoint(x: slot.origin.x + stow.shift, y: slot.origin.y)
-    slot.scale *= stow.scale
-    slot.opacity *= stow.opacity
-    slots[last] = slot
-    return slots
-}
-
 /// Finds the earliest viewport that still contains the newest screenshot. This
 /// preserves the largest possible amount of recent context while guaranteeing
 /// that an appended screenshot never disappears into silent overflow.
@@ -211,8 +176,7 @@ func thumbnailScrollLayout(screenFrame: NSRect,
                            gap: CGFloat,
                            offset: CGFloat,
                            menuBarInset: CGFloat = 0,
-                           deckProgress: CGFloat = 0,
-                           stow: TrayStowState = .idle) -> ThumbnailLayoutResult {
+                           deckProgress: CGFloat = 0) -> ThumbnailLayoutResult {
     guard !cardHeights.isEmpty else { return .init(visible: [], hidden: []) }
 
     let lengths = edge.isVertical ? cardHeights : Array(repeating: cardWidth, count: cardHeights.count)
@@ -273,7 +237,7 @@ func thumbnailScrollLayout(screenFrame: NSRect,
                              shadowFraction: band.shadowFraction,
                              isFullCard: band.isFullCard))
     }
-    return .init(visible: applyingStow(stow, to: visible, edge: edge), hidden: hidden)
+    return .init(visible: visible, hidden: hidden)
 }
 
 /// Длина окна просмотра ленты. Снизу лента начинается почти от кнопки
