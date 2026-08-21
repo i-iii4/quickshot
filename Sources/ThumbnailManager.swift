@@ -833,27 +833,17 @@ final class ThumbnailManager {
     /// пружина живы, ось держится — сброс на ходу сменил бы систему
     /// координат под пальцем.
     private func releaseOpenAxisIfGathered() {
-        // Условие ровно одно: пальца на трекпаде нет и колода собрана.
-        // Прежде сюда входила и проверка на пружину возврата — из-за неё ось
-        // держалась дольше нужного, и следующий жест уходил по СТАРОЙ оси:
-        // чтобы открыть в другую сторону, приходилось дёргать несколько раз
-        // (приёмка 20.08.2026). Пружина щелчка двигает подачу, а не ось, и
-        // смене направления не мешает.
+        // Ось живёт до полной остановки ленты. Отпускать её раньше нельзя:
+        // как только ось сброшена, лента считается по базовому краю, и
+        // недолетевшие события инерции пересчитываются по ЧУЖОЙ оси —
+        // догон ломался на первом же раскрытии (приёмка 20.08.2026).
+        // Поэтому метод зовут только точки полной остановки, а не каждая
+        // раскладка.
         guard openAxis != nil, !scrollGestureActive else { return }
         guard deckIsGathered else { return }
         openAxis = nil
         axisPickupX = 0
         axisPickupY = 0
-    }
-
-    /// Итог попытки выбрать ось раскрытия (`TR-38`).
-    enum AxisPick {
-        /// Порог не пройден: лента не двигается, ход копится.
-        case pending
-        /// Ось выбрана. `catchUp` — ход, накопленный до порога: его нужно
-        /// отдать ленте, иначе первые точки движения пропадают и жест
-        /// читается как залипший.
-        case ready(catchUp: CGFloat?)
     }
 
     /// Выбирает ось раскрытия по ходу пальца.
@@ -862,7 +852,7 @@ final class ThumbnailManager {
     /// продолжает жить по своей оси до самого возврата — смена системы
     /// координат под раскрытой лентой давала прыжки, случайные щелчки и
     /// переходы в чужие состояния (приёмка 20.08.2026).
-    private func pickOpenAxis(with event: NSEvent) -> AxisPick {
+    private func pickOpenAxis(with event: NSEvent) -> Bool {
         if event.phase == .began {
             axisPickupX = 0
             axisPickupY = 0
@@ -871,19 +861,22 @@ final class ThumbnailManager {
         axisPickupY += event.scrollingDeltaY
         guard let vertical = trayAxisPick(accumulatedX: axisPickupX,
                                           accumulatedY: axisPickupY,
-                                          threshold: Self.axisPickThreshold) else { return .pending }
+                                          threshold: Self.axisPickThreshold) else { return false }
 
         let base = ThumbnailLayoutEdge(rawValue: TrayPosition.current.rawValue) ?? .right
         let chosen = vertical
             ? (base.isVertical ? base : (alternateEdge ?? base))
             : (base.isVertical ? (alternateEdge ?? base) : base)
-        let catchUp = vertical ? axisPickupY : axisPickupX
+        // История скорости начинается с момента выбора: до порога лента
+        // стояла, и старые отсчёты к её движению отношения не имеют.
+        scrollVelocity = 0
+        lastScrollTimestamp = event.timestamp
         guard chosen != activeEdge else {
             openAxis = chosen
-            return .ready(catchUp: catchUp)
+            return true
         }
         switchAxis(to: chosen)
-        return .ready(catchUp: catchUp)
+        return true
     }
 
     /// Переводит лету на другую ось. Вызывается только при собранной колоде:
@@ -925,17 +918,21 @@ final class ThumbnailManager {
         // `TR-38`: ось раскрытия выбирает ЖЕСТ. Пока колода собрана и ось не
         // выбрана, лента не двигается — копится ход пальца, и по нему
         // решается, вверх раскрывать или влево.
-        var catchUpDelta: CGFloat?
-        if openAxis == nil, alternateEdge != nil, deckIsGathered {
-            switch pickOpenAxis(with: event) {
-            case .pending: return
-            case .ready(let catchUp): catchUpDelta = catchUp
-            }
-        }
+        // Ось выбирает ПАЛЕЦ. Инерция оси не выбирает: события догона летят
+        // уже после отрыва, и хвост предыдущего жеста уводил ленту в
+        // направление, которого пользователь не показывал (приёмка
+        // 20.08.2026).
+        if openAxis == nil, alternateEdge != nil, deckIsGathered, event.momentumPhase == [],
+           !pickOpenAxis(with: event) { return }
         let vertical = axisIsVertical
-        let raw = catchUpDelta ?? (vertical
+        // Ход, накопленный до выбора оси, лента НЕ наверстывает. Порог —
+        // мёртвая зона распознавания направления, как у системных жестов:
+        // после него движение идёт с текущей точки. Наверстывание давало
+        // скачок на старте и завышало оценку скорости, отчего ломались
+        // проекция броска и подача (приёмка 20.08.2026).
+        let raw = vertical
             ? event.scrollingDeltaY
-            : (abs(event.scrollingDeltaX) > 0.01 ? event.scrollingDeltaX : event.scrollingDeltaY))
+            : (abs(event.scrollingDeltaX) > 0.01 ? event.scrollingDeltaX : event.scrollingDeltaY)
         // Колесо мыши шлёт дельту в строках, а не в точках: один щелчок — это
         // единица, и лента ползла на пиксель за щелчок.
         let delta = event.hasPreciseScrollingDeltas ? raw : raw * Self.wheelLineHeight
@@ -1053,6 +1050,7 @@ final class ThumbnailManager {
             // Инерция кончилась — жест завершён окончательно.
             scrollGestureActive = false
             settleScrollAnimated()
+            releaseOpenAxisIfGathered()
         } else if (event.phase == .ended || event.phase == .cancelled),
                   abs(scrollModel.overshoot) > 0.5 {
             // Отпустили за краем: пружина возврата стартует со скоростью
@@ -1140,6 +1138,7 @@ final class ThumbnailManager {
                 runDetentSpring(profile: .inertia)
             }
             applyScrollOffset()
+            releaseOpenAxisIfGathered()
             return
         }
         let target = scrollModel.settled().offset
@@ -1147,6 +1146,7 @@ final class ThumbnailManager {
             writePresented(target)
             detent.sync(with: scrollModel)
             applyScrollOffset()
+            releaseOpenAxisIfGathered()
             return
         }
         // Возврат — пружина с параметрами Apple для перемещения объектов:
@@ -1176,6 +1176,7 @@ final class ThumbnailManager {
             writePresented(boundary)
             applyScrollOffset()
             onDone()
+            releaseOpenAxisIfGathered()
             return
         }
         scrollSettleAnimating = true
@@ -1193,6 +1194,7 @@ final class ThumbnailManager {
             self.writePresented(boundary)
             self.applyScrollOffset()
             onDone()
+            self.releaseOpenAxisIfGathered()
         })
     }
 
@@ -1351,7 +1353,6 @@ final class ThumbnailManager {
     /// `refreshHostPointerRouting`, и зона приёма мыши отставала от карточек
     /// (аудит 20.08.2026).
     private func finishLayoutPass() {
-        releaseOpenAxisIfGathered()
         applyStackOrder()
         updateCase()
         refreshHoverUnderPointer()
