@@ -1792,6 +1792,14 @@ final class ThumbnailManager {
     // MARK: ресайз (общая ширина, сохраняется между сессиями)
 
     func updateWidthLive(_ w: CGFloat) {
+        // Ресайз сохраняет СОСТОЯНИЕ ленты, а не абсолютное смещение. Крупнее
+        // карточки — длиннее лента: у трёх карточек +20 pt ширины дают +30 pt
+        // хода. Смещение оставалось прежним, оказывалось посреди новой ленты,
+        // и собранная колода разваливалась от малейшей подтяжки за край
+        // (приёмка 21.08.2026). Доля раскрытия при этом переносится целиком:
+        // собранная остаётся собранной, раскрытая — раскрытой на ту же долю.
+        let previousOffset = scrollModel.offset
+        let previousMaximum = scrollModel.maximumOffset
         preferredCardWidth = min(ThumbStyle.maxWidth, max(ThumbStyle.minWidth, w))
         if let screen = anchorScreen ?? NSScreen.main {
             updateClampedCardWidth(on: screen)
@@ -1800,6 +1808,16 @@ final class ThumbnailManager {
         }
         let h = anchorHeight
         for t in items { t.applyWidth(cardWidth, screenHeight: h) }
+        if let screen = anchorScreen ?? NSScreen.main {
+            // Размеры ленты обновляются ДО раскладки: иначе доля считалась бы
+            // от старой длины.
+            let metrics = stripMetrics(on: screen)
+            applyStripMetrics(content: metrics.content, viewport: metrics.viewport, last: metrics.last)
+            writeModel(trayOffsetPreservingShare(offset: previousOffset,
+                                                 maximum: previousMaximum,
+                                                 newMaximum: scrollModel.maximumOffset))
+            detent.sync(with: scrollModel)
+        }
         layout()
     }
 

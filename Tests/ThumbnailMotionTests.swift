@@ -260,6 +260,17 @@ struct ThumbnailMotionTests {
         // Ровная диагональ достаётся вертикали: она основная.
         try require(trayAxisPick(accumulatedX: 12, accumulatedY: 12, threshold: 10) == true,
                     "A clean diagonal did not fall back to the vertical axis")
+
+        // `TR-40`: ресайз переносит долю раскрытия, а не смещение.
+        try require(trayOffsetPreservingShare(offset: 316, maximum: 316, newMaximum: 406) == 406,
+                    "Resizing broke a gathered deck apart")
+        try require(trayOffsetPreservingShare(offset: 0, maximum: 316, newMaximum: 406) == 0,
+                    "Resizing gathered an open strip")
+        try require(abs(trayOffsetPreservingShare(offset: 158, maximum: 316, newMaximum: 406) - 203) < 0.001,
+                    "Resizing lost the share of a half-open strip")
+        // Лента без хода собрана: доля единица, и после ресайза она собрана.
+        try require(trayOffsetPreservingShare(offset: 0, maximum: 0, newMaximum: 120) == 120,
+                    "A strip with no travel opened up after a resize")
     }
 
     private static func run(_ name: String, _ body: () throws -> Void) {
