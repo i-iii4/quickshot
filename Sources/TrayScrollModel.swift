@@ -239,7 +239,13 @@ enum TrayStripLayout {
         let progress = min(1, max(0, deckProgress))
         let collapse = 1 - TrayDeckClosure.flowCurve(progress)
         let tierCollapse = 1 - TrayDeckClosure.tierCurve(progress)
-        var cursor: CGFloat = parkLevel * collapse
+        // Резерв под ярусы стопки нужен, только когда стопке есть из чего
+        // сложиться. У единственной карточки ярусов нет, и резерв поднимал
+        // её на `parkLevel` выше того места, где та же карточка стоит
+        // верхней в стопке: удаление предпоследнего снимка давало прыжок на
+        // 14 pt (приёмка 21.08.2026).
+        let park = count > 1 ? parkLevel : 0
+        var cursor: CGFloat = park * collapse
         var raws: [CGFloat] = []
         for length in cardLengths {
             raws.append(cursor - offset)
@@ -255,7 +261,7 @@ enum TrayStripLayout {
         // считалась запаркованной по старому порогу, а ставилась уже по
         // схлопнутому — прыжок ровно на высоту яруса в момент парковки
         // (приёмка 20.08.2026).
-        let nearPark = parkLevel * collapse
+        let nearPark = park * collapse
         let nearCount = (0..<count).lastIndex(where: { raws[$0] <= nearPark }).map { $0 + 1 } ?? 0
         let farStart = (0..<count).firstIndex(where: {
             top($0) >= farPark && $0 >= nearCount
@@ -303,7 +309,7 @@ enum TrayStripLayout {
             // Схлопывание: расстояния между слоями сходятся к нулю, вся
             // стопка едет вниз вместе — на ту же величину, что и основание
             // ленты выше.
-            let bottom = max(0, (parkLevel - e * CGFloat(depth) - e * nearPhase) * tierCollapse)
+            let bottom = max(0, (park - e * CGFloat(depth) - e * nearPhase) * tierCollapse)
             let cardTop = bottom + cardLengths[index] * scale
             let visibleFrom = bottom
             let visibleTo = min(cardTop, coverTop)

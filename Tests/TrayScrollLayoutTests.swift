@@ -24,11 +24,49 @@ struct TrayScrollLayoutTests {
         trailingStackStaysOnScreen()
         deeperLayersGoBehind()
         visibleFrameFollowsTheSlot()
+        loneCardStandsWhereTheStackTopStands()
         print("TrayScrollLayoutTests: passed")
     }
 
     /// Смещение обязано двигать координаты, иначе прокрутка существует только
     /// в модели.
+    /// Единственная карточка стоит РОВНО ТАМ ЖЕ, где верхняя карточка
+    /// стопки. Резерв под ярусы поднимал её на `parkLevel` выше, и удаление
+    /// предпоследнего снимка давало прыжок на 14 pt: одиночный снимок и
+    /// снимок в стопке жили по разным правилам (приёмка 21.08.2026).
+    private static func loneCardStandsWhereTheStackTopStands() {
+        let screen = NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let cardW: CGFloat = 200, cardH: CGFloat = 150, gap: CGFloat = 8, margin: CGFloat = 16
+
+        func topOfGatheredStrip(count: Int) -> CGFloat {
+            let heights = Array(repeating: cardH, count: count)
+            let content = heights.reduce(0, +) + gap * CGFloat(max(0, count - 1))
+            var model = TrayScrollModel(
+                contentLength: content,
+                viewportLength: thumbnailTrayViewportLength(screenFrame: screen, edge: .right,
+                                                            hubSize: .zero, margin: margin,
+                                                            menuBarInset: 24),
+                offset: 0, lastCardLength: cardH)
+            model.offset = model.maximumOffset
+            let layout = thumbnailScrollLayout(
+                screenFrame: screen, edge: .right, cardWidth: cardW, cardHeights: heights,
+                hubSize: .zero, margin: margin, gap: gap, offset: model.offset,
+                menuBarInset: 24,
+                deckProgress: TrayDeckClosure.value(presented: model.offset, model: model))
+            let top = layout.visible.max(by: { $0.index < $1.index })!
+            return thumbnailVisibleFrame(slot: top,
+                                         cardSize: NSSize(width: cardW, height: cardH),
+                                         vertical: true).minY
+        }
+
+        let three = topOfGatheredStrip(count: 3)
+        let two = topOfGatheredStrip(count: 2)
+        let one = topOfGatheredStrip(count: 1)
+        expect(abs(three - two) < 0.001, "верх стопки зависит от её глубины: \(three) против \(two)")
+        expect(abs(two - one) < 0.001,
+               "одиночная карточка встала не там, где верх стопки: \(one) против \(two)")
+    }
+
     /// Целевая рамка карточки по слоту — та же геометрия, что кладёт сама
     /// карточка. По ней контур шкатулки берёт МЕСТО влетающей карточки:
     /// по живой рамке шкатулку уводило вбок вслед за влётом.
