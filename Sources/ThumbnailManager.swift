@@ -108,6 +108,16 @@ final class ThumbnailManager {
 
     private let host: TrayHostPanel
     private let hostContent = TrayHostContentView()
+    /// Слой, в котором живут ТОЛЬКО карточки (`TR-41`). Нужен второй ступени:
+    /// она гасит колоду как ЕДИНЫЙ предмет — прозрачностью и масштабом слоя,
+    /// не трогая ни одну карточку по отдельности.
+    ///
+    /// Трогать карточки нельзя: их опорная рамка — начало отсчёта для
+    /// переезда при удалении, вставки, разворота трея и возврата после
+    /// анимаций. Первая реализация подменяла её, и каждый следующий расчёт
+    /// стартовал от испорченного значения — карточки разлетелись по экрану
+    /// (откат 21.08.2026).
+    private let cardsLayer = TrayHostContentView()
     private lazy var trayAnimator = TrayProgressAnimator(hostView: hostContent)
     private lazy var collectionAnimator = CollectionProgressAnimator(hostView: hostContent)
     private var trayProgress: CGFloat = 0
@@ -210,6 +220,9 @@ final class ThumbnailManager {
         casePanel.onCopyAll = { [weak self] in self?.copyAll() }
         casePanel.onSaveAll = { [weak self] in self?.saveAllAs() }
         hostContent.addSubview(caseView)
+        // Порядок наложения: подложка, карточки, панель команд поверх всех.
+        hostContent.addSubview(cardsLayer)
+        cardsLayer.wantsLayer = true
         hostContent.addSubview(casePanel)
         // Хаб-виджет упразднён (`TR-30`): панель кнопок живёт в шкатулке.
 
@@ -428,9 +441,16 @@ final class ThumbnailManager {
 
     /// Подогнать хост под экран привязки: занимает весь frame экрана, координаты сабвью —
     /// это глобальные минус origin экрана.
+    /// Слой карточек занимает весь хост: координаты карточек от этого не
+    /// меняются, и `toLocal` продолжает работать как прежде.
+    private func syncCardsLayerFrame() {
+        if cardsLayer.frame != hostContent.bounds { cardsLayer.frame = hostContent.bounds }
+    }
+
     private func ensureHost(on screen: NSScreen) {
         anchorScreen = screen
         if host.frame != screen.frame { host.setFrame(screen.frame, display: true) }
+        syncCardsLayerFrame()
     }
 
     /// Глобальная точка экрана → координаты хоста.
@@ -534,7 +554,7 @@ final class ThumbnailManager {
         collectionModel.insert(id: artifact.id, sequence: artifact.sequence)
         itemByID[artifact.id] = t
         scrollIntent = wasCompressed ? .stayCompressed : .revealNewest
-        hostContent.addSubview(t.hostView, positioned: .below, relativeTo: casePanel)  // новейшая поверх старых, под панелью шкатулки
+        cardsLayer.addSubview(t.hostView)  // новейшая поверх старых; панель шкатулки лежит выше всего слоя
         for it in items { it.applyWidth(cardWidth, screenHeight: screen.frame.height) }
         showHost()
         cardsAreCollapsed ? presentCollapsedCapture(t, on: screen)
@@ -1359,6 +1379,7 @@ final class ThumbnailManager {
     /// `refreshHostPointerRouting`, и зона приёма мыши отставала от карточек
     /// (аудит 20.08.2026).
     private func finishLayoutPass() {
+        syncCardsLayerFrame()
         applyStackOrder()
         updateCase()
         refreshHoverUnderPointer()
@@ -1447,7 +1468,7 @@ final class ThumbnailManager {
         let ordered = items.sorted { $0.stackOrder < $1.stackOrder }
         guard ordered.map(ObjectIdentifier.init) != stackOrderApplied else { return }
         for item in ordered {
-            hostContent.addSubview(item.hostView, positioned: .below, relativeTo: casePanel)
+            cardsLayer.addSubview(item.hostView)
         }
         stackOrderApplied = ordered.map(ObjectIdentifier.init)
     }
