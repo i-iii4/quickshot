@@ -107,6 +107,10 @@ final class ThumbnailManager {
     /// начало пришлось на собранную колоду: одним движением нельзя и
     /// собрать колоду, и убрать карточку (`TR-41`).
     private var stowGestureOpen = false
+    /// Жест ИЗРАСХОДОВАН срабатыванием ступени: остаток его хода лентой не
+    /// принимается. Иначе одно движение и возвращало карточку, и раскрывало
+    /// колоду, хотя заказчик требовал разделения (приёмка 21.08.2026).
+    private var stowGestureSpent = false
     /// Масштаб, на котором натяжение оставило карточку в момент срыва:
     /// схлопывание продолжает с него, а не с единицы.
     private var stowScaleAtFire: CGFloat = 1
@@ -988,8 +992,12 @@ final class ThumbnailManager {
             // собранную колоду. Жест, который сам довёл ленту до упора, до
             // ступени не дотягивается — убирание требует отдельного,
             // осознанного движения.
-            stowGestureOpen = !stowAnimating
-                && ((deckIsGathered && detent.engaged) || stowProgress > 0.9999)
+            // Условие — СОБРАННОСТЬ, а не защёлка. У ленты из одного снимка
+            // хода нет, защёлке не за что цепляться, и она не встаёт — а
+            // убрать последний снимок нужно именно тогда (приёмка
+            // 21.08.2026).
+            stowGestureOpen = !stowAnimating && (deckIsGathered || stowProgress > 0.9999)
+            stowGestureSpent = false
             // Новый жест — новая история скорости.
             scrollVelocity = 0
             lastScrollTimestamp = event.timestamp
@@ -1043,6 +1051,9 @@ final class ThumbnailManager {
         // второй ступени, а не растягивает ленту за край. Ход обратно —
         // отпускает напряжение и, когда оно исчерпано, возвращает управление
         // ленте.
+        // Израсходованный жест ленте хода не отдаёт: сработавшая ступень
+        // завершает движение, продолжение требует нового жеста.
+        if stowGestureSpent, fingersDown { return }
         if stowGestureOpen, fingersDown {
             // Направление, копящее напряжение: у карточки на месте это ход В
             // УПОР, у убранной — обратный. Ход в другую сторону отпускает
@@ -1140,6 +1151,7 @@ final class ThumbnailManager {
         } else if event.phase == .ended || event.phase == .cancelled {
             scrollGestureActive = false
             stowGestureOpen = false
+            stowGestureSpent = false
             if stowStrain > 0.0001, stowProgress < 0.0001 {
                 // Не дотянул до порога — напряжение снимается пружиной, без
                 // щелчка: ничего не произошло.
@@ -1198,6 +1210,7 @@ final class ThumbnailManager {
         stowScaleAtFire = TrayStow.scale(strain: stowStrain)
         stowStrain = 0
         stowGestureOpen = false
+        stowGestureSpent = true
         performDetentClick(.snapIn, profile: .underFinger)
         animateStow(to: 1, velocity: velocity)
     }
@@ -1207,6 +1220,7 @@ final class ThumbnailManager {
         guard stowProgress > 0.9999, !stowAnimating else { return }
         stowStrain = 0
         stowGestureOpen = false
+        stowGestureSpent = true
         performDetentClick(.release, profile: .underFinger)
         animateStow(to: 0, velocity: velocity)
     }
@@ -1572,8 +1586,18 @@ final class ThumbnailManager {
     /// Развёрнутая карточка встаёт целиком, слой стопки — полосой-кромкой.
     private func place(_ item: ThumbnailWindow, at slot: ThumbnailLayoutSlot) {
         let localOrigin = toLocal(slot.origin)
-        if slot.isFullCard && slot.opacity > 0.999 {
+        // Масштаб проверяется наравне с прозрачностью: вторая ступень
+        // уменьшает карточку, оставляя её полной, и без этой проверки
+        // натяжение не отображалось вовсе — карточка вставала в натуральную
+        // величину (приёмка 21.08.2026).
+        if slot.isFullCard && slot.opacity > 0.999 && slot.scale > 0.999 {
             item.placeInstant(origin: localOrigin)
+        } else if slot.insetSteps < 0.001, slot.isFullCard,
+                  slot.length >= (axisIsVertical ? item.cardHeight : item.cardWidth) * slot.scale - 0.5 {
+            // Целая карточка, уменьшенная второй ступенью (`TR-41`): не полоса
+            // стопки. Признак — содержимое видно целиком и длина полосы равна
+            // полной длине карточки, изменились только масштаб и прозрачность.
+            item.placeScaled(origin: localOrigin, scale: slot.scale, opacity: slot.opacity)
         } else {
             item.placeBand(origin: localOrigin,
                            length: slot.length,

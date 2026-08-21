@@ -784,6 +784,41 @@ final class ThumbnailWindow {
         container.isHidden = false
     }
 
+    /// Целая карточка, УМЕНЬШЕННАЯ и приглушённая (`TR-41`): вторая ступень
+    /// уводит последний снимок вглубь, а не превращает его в полосу стопки.
+    ///
+    /// Отличие от `placeBand` принципиальное. Полоса — это срез карточки, у
+    /// неё нет ни кнопок, ни собственной тени. Здесь карточка остаётся
+    /// карточкой: всё на месте, просто меньше и прозрачнее. Без этого
+    /// кнопки пропадали от первого же движения пальца — масштаб уходил ниже
+    /// единицы, и карточка сваливалась на путь полосы (приёмка 21.08.2026).
+    ///
+    /// Масштаб задаётся РАМКОЙ, как и у полосы: у layer-backed вью AppKit
+    /// сам ведёт геометрию слоя, и своя трансформация ломает отрисовку.
+    /// Уменьшение идёт вокруг ЦЕНТРА карточки — предмет удаляется от
+    /// зрителя, а не съезжает в угол.
+    func placeScaled(origin: NSPoint, scale: CGFloat, opacity: CGFloat) {
+        stackDepth = 0
+        isSliceBand = false
+        let full = outerRect(cardOrigin: origin)
+        let k = max(0.01, min(1, scale))
+        let size = NSSize(width: full.width * k, height: full.height * k)
+        let frame = NSRect(x: full.midX - size.width / 2,
+                           y: full.midY - size.height / 2,
+                           width: size.width, height: size.height)
+        restingFrame = frame
+        container.frame = frame
+        let iw = max(0, frame.width - 2 * band * k)
+        let ih = max(0, frame.height - 2 * band * k)
+        view.frame = NSRect(x: band * k, y: band * k, width: iw, height: ih)
+        view.layoutContents()
+        applyVisualState(VisualState(translationX: 0, translationY: 0,
+                                     alpha: opacity,
+                                     shadowOpacity: TrayAnim.restingShadowOpacity * opacity))
+        container.interactionsEnabled = opacity > 0.5
+        container.isHidden = opacity <= 0.001
+    }
+
     /// Полоса карточки в стопке (`TR-23`…`TR-26`): видимая часть ЦЕЛОЙ
     /// карточки в масштабе её глубины. Размер задаётся РАМКОЙ, а не
     /// трансформацией слоя: у layer-backed вью AppKit сам ведёт геометрию слоя,
