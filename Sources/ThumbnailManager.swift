@@ -61,9 +61,7 @@ final class ThumbnailManager {
     private var itemByID: [UUID: ThumbnailWindow] = [:]
     /// Край, у которого лежит стопка и вдоль которого раскрывается лента.
     /// Пока ось не выбрана — берётся из позиции трея.
-    private var activeEdge: ThumbnailLayoutEdge {
-        openAxis ?? ThumbnailLayoutEdge(rawValue: TrayPosition.current.rawValue) ?? .right
-    }
+    private var activeEdge: ThumbnailLayoutEdge { openAxis }
 
     /// Вторая ось для текущей позиции трея, или `nil`, если её нет.
     /// Пара обязана выходить из ОДНОГО угла, иначе выбор оси двигал бы
@@ -88,10 +86,16 @@ final class ThumbnailManager {
     /// места, и контур по её живой рамке уводил шкатулку вбок (приёмка
     /// 20.08.2026).
     private var enteringTargets: [ObjectIdentifier: NSRect] = [:]
-    /// Ось, вдоль которой сейчас раскрыта колода (`TR-38`). `nil` — колода
-    /// собрана и ось ещё не выбрана: в собранном состоянии обе оси дают
-    /// одну и ту же геометрию, поэтому выбор незаметен.
-    private var openAxis: ThumbnailLayoutEdge?
+    /// Ось, вдоль которой раскрывается колода (`TR-38`). ВСЕГДА определена:
+    /// понятия «ось отпущена» нет. Отпускание было бы событием, обязанным
+    /// пересчитать модель, — и оба дефекта 20.08.2026 родились именно там:
+    /// в одну сторону пересчёт оказался лишним, в другую его не хватало.
+    /// Право сменить ось выражается СОСТОЯНИЕМ ленты, а не фазой жеста.
+    private lazy var openAxis: ThumbnailLayoutEdge =
+        ThumbnailLayoutEdge(rawValue: TrayPosition.current.rawValue) ?? .right
+    /// Была ли колода собрана на прошлом событии прокрутки: по переходу в
+    /// собранное состояние счёт направления начинается заново.
+    private var wasGathered = true
     /// Ход пальца, накопленный до выбора оси.
     private var axisPickupX: CGFloat = 0
     private var axisPickupY: CGFloat = 0
@@ -828,36 +832,6 @@ final class ThumbnailManager {
         scrollModel.offset >= scrollModel.maximumOffset - 0.5
     }
 
-    /// Отпускает ось, когда колода снова собрана (`TR-38`): следующий жест
-    /// снова свободен выбрать, вверх раскрывать или влево. Пока жест или
-    /// пружина живы, ось держится — сброс на ходу сменил бы систему
-    /// координат под пальцем.
-    private func releaseOpenAxisIfGathered() {
-        // Ось живёт до полной остановки ленты. Отпускать её раньше нельзя:
-        // как только ось сброшена, лента считается по базовому краю, и
-        // недолетевшие события инерции пересчитываются по ЧУЖОЙ оси —
-        // догон ломался на первом же раскрытии (приёмка 20.08.2026).
-        // Поэтому метод зовут только точки полной остановки, а не каждая
-        // раскладка.
-        guard openAxis != nil, !scrollGestureActive else { return }
-        guard deckIsGathered else { return }
-        openAxis = nil
-        axisPickupX = 0
-        axisPickupY = 0
-        // Возврат на базовую ось — такая же смена системы координат, как уход
-        // с неё, и требует того же пересчёта. Без него длина ленты, окно и
-        // смещение оставались в координатах прежней оси: следующий проход
-        // пересчитывал размеры и зажимал смещение, и лента съезжала на
-        // разницу длин — по горизонтали лента длиннее (приёмка 20.08.2026).
-        guard let screen = anchorScreen ?? NSScreen.main else { return }
-        let metrics = stripMetrics(on: screen)
-        applyStripMetrics(content: metrics.content, viewport: metrics.viewport, last: metrics.last)
-        writeModel(scrollModel.maximumOffset)
-        writeDip(0)
-        detent.sync(with: scrollModel)
-        applyScrollOffset()
-    }
-
     /// Выбирает ось раскрытия по ходу пальца.
     ///
     /// Ось меняется ТОЛЬКО из собранного состояния. Раскрытая лента
@@ -871,39 +845,45 @@ final class ThumbnailManager {
         }
         axisPickupX += event.scrollingDeltaX
         axisPickupY += event.scrollingDeltaY
+
+        // Движение ВДОЛЬ текущей оси не ждёт порога: это не заявка на смену
+        // направления, а обычная работа с лентой, и задерживать её нельзя —
+        // иначе первые точки хода в упор съедались бы и резинка начиналась с
+        // опозданием.
+        let along = activeEdge.isVertical ? abs(axisPickupY) : abs(axisPickupX)
+        let across = activeEdge.isVertical ? abs(axisPickupX) : abs(axisPickupY)
+        guard across > along else { return true }
+
+        // Заявка на смену: ждём порога, пока направление не станет явным.
         guard let vertical = trayAxisPick(accumulatedX: axisPickupX,
                                           accumulatedY: axisPickupY,
                                           threshold: Self.axisPickThreshold) else { return false }
-
         let base = ThumbnailLayoutEdge(rawValue: TrayPosition.current.rawValue) ?? .right
         let chosen = vertical
             ? (base.isVertical ? base : (alternateEdge ?? base))
             : (base.isVertical ? (alternateEdge ?? base) : base)
-        // История скорости начинается с момента выбора: до порога лента
-        // стояла, и старые отсчёты к её движению отношения не имеют.
-        scrollVelocity = 0
-        lastScrollTimestamp = event.timestamp
-        guard chosen != activeEdge else {
-            openAxis = chosen
-            return true
-        }
+        guard chosen != activeEdge else { return true }
         switchAxis(to: chosen)
         return true
     }
 
-    /// Переводит лету на другую ось. Вызывается только при собранной колоде:
+    /// Переводит ленту на другую ось. Вызывается только при собранной колоде:
     /// там обе оси дают одну и ту же картинку, поэтому переход невидим.
     ///
     /// Лента НЕ переносит смещение из прежней системы координат — длины ленты
     /// по осям разные, и старое смещение оказывалось посреди новой ленты:
     /// колода выглядела раскрытой, защёлка щёлкала сама собой, карточки
-    /// прыгали. Вместо переноса лента встаёт в собранное состояние НОВОЙ оси
-    /// (`scrollIntent = .stayCompressed`), то есть остаётся ровно тем, чем
-    /// была, — собранной колодой в том же углу.
+    /// прыгали. Вместо переноса лента встаёт в собранное состояние НОВОЙ
+    /// оси, то есть остаётся ровно тем, чем была, — собранной колодой в том
+    /// же углу.
     private func switchAxis(to edge: ThumbnailLayoutEdge) {
         openAxis = edge
         writeDip(0)
+        // История скорости начинается с момента смены: прежние отсчёты сняты
+        // с движения по другой оси. Обнулять её на каждом событии нельзя —
+        // так ломается оценка скорости, а с ней проекция броска.
         scrollVelocity = 0
+        lastScrollTimestamp = ProcessInfo.processInfo.systemUptime
         if let screen = anchorScreen ?? NSScreen.main {
             // Размеры ленты пересчитываются СРАЗУ: обычная синхронизация
             // модели выходит рано, пока жив жест, и лента осталась бы со
@@ -939,7 +919,16 @@ final class ThumbnailManager {
         // уже после отрыва, и хвост предыдущего жеста уводил ленту в
         // направление, которого пользователь не показывал (приёмка
         // 20.08.2026).
-        if openAxis == nil, alternateEdge != nil, deckIsGathered, event.momentumPhase == [],
+        let gathered = deckIsGathered
+        defer { wasGathered = gathered }
+        if gathered, !wasGathered {
+            // Колода только что собралась: направление считаем с этой точки,
+            // иначе в счётчике остаётся ход, которым её и собирали, и он
+            // перевешивает новое направление (приёмка 21.08.2026).
+            axisPickupX = 0
+            axisPickupY = 0
+        }
+        if alternateEdge != nil, gathered, event.momentumPhase == [],
            !pickOpenAxis(with: event) { return }
         let vertical = axisIsVertical
         // Ход, накопленный до выбора оси, лента НЕ наверстывает. Порог —
@@ -1067,7 +1056,6 @@ final class ThumbnailManager {
             // Инерция кончилась — жест завершён окончательно.
             scrollGestureActive = false
             settleScrollAnimated()
-            releaseOpenAxisIfGathered()
         } else if (event.phase == .ended || event.phase == .cancelled),
                   abs(scrollModel.overshoot) > 0.5 {
             // Отпустили за краем: пружина возврата стартует со скоростью
@@ -1155,7 +1143,6 @@ final class ThumbnailManager {
                 runDetentSpring(profile: .inertia)
             }
             applyScrollOffset()
-            releaseOpenAxisIfGathered()
             return
         }
         let target = scrollModel.settled().offset
@@ -1163,7 +1150,6 @@ final class ThumbnailManager {
             writePresented(target)
             detent.sync(with: scrollModel)
             applyScrollOffset()
-            releaseOpenAxisIfGathered()
             return
         }
         // Возврат — пружина с параметрами Apple для перемещения объектов:
@@ -1193,7 +1179,6 @@ final class ThumbnailManager {
             writePresented(boundary)
             applyScrollOffset()
             onDone()
-            releaseOpenAxisIfGathered()
             return
         }
         scrollSettleAnimating = true
@@ -1211,7 +1196,6 @@ final class ThumbnailManager {
             self.writePresented(boundary)
             self.applyScrollOffset()
             onDone()
-            self.releaseOpenAxisIfGathered()
         })
     }
 
@@ -1881,7 +1865,6 @@ final class ThumbnailManager {
         collapsedPeekItem = nil
         trayHoverActive = false
         collapsed = true
-        openAxis = nil
         runTrayTransition(to: 1, on: screen)
     }
 
