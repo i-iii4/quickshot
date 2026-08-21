@@ -844,6 +844,18 @@ final class ThumbnailManager {
         openAxis = nil
         axisPickupX = 0
         axisPickupY = 0
+        // Возврат на базовую ось — такая же смена системы координат, как уход
+        // с неё, и требует того же пересчёта. Без него длина ленты, окно и
+        // смещение оставались в координатах прежней оси: следующий проход
+        // пересчитывал размеры и зажимал смещение, и лента съезжала на
+        // разницу длин — по горизонтали лента длиннее (приёмка 20.08.2026).
+        guard let screen = anchorScreen ?? NSScreen.main else { return }
+        let metrics = stripMetrics(on: screen)
+        applyStripMetrics(content: metrics.content, viewport: metrics.viewport, last: metrics.last)
+        writeModel(scrollModel.maximumOffset)
+        writeDip(0)
+        detent.sync(with: scrollModel)
+        applyScrollOffset()
     }
 
     /// Выбирает ось раскрытия по ходу пальца.
@@ -900,7 +912,12 @@ final class ThumbnailManager {
             applyStripMetrics(content: metrics.content, viewport: metrics.viewport, last: metrics.last)
         }
         writeModel(scrollModel.maximumOffset)
-        scrollIntent = .stayCompressed
+        // Интента «оставаться собранной» здесь БЫТЬ НЕ ДОЛЖНО. Пока жив
+        // жест, синхронизация модели выходит рано и интент не тратится, а
+        // первый же полный проход после отрыва пальца читает его и
+        // схлопывает ленту обратно: раскрытие по новой оси не держалось
+        // (приёмка 20.08.2026). Собранное состояние выставлено строкой выше,
+        // явно и один раз.
         detent.sync(with: scrollModel)
         // Лёгкий путь раскладки: `layout` гасит коллекционные анимации и
         // пересинхронизирует прогресс трея, а посреди жеста это читается как
