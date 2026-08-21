@@ -218,6 +218,14 @@ fullscreen behavior remain explicit runtime release checks.
    that moves the strip by one point is a defect.
 9. A scroll frame only moves cards. Card widths, hub position and resize modes
    belong to layout changes, not to every scroll event.
+9a. Resizing preserves the strip's STATE, not its raw offset. Card aspect is
+   fixed, so a wider card is also taller and the whole strip grows: for three
+   cards, +20 pt of width adds +30 pt of travel. Carrying the old offset over
+   left a gathered deck short of its own end, so it fell open at the first
+   nudge of the resize handle. The share of openness is carried instead - a
+   gathered deck stays gathered and grows together with its case, an open
+   strip stays open by the same share, and a strip with no travel counts as
+   gathered.
 10. Exactly one card shows its hover buttons: the one under the pointer. Cards
    that leave the pointer during a scroll never receive `mouseExited`, so the
    hover owner is reassigned after every scroll frame.
