@@ -43,6 +43,7 @@ struct TrayScrollModelTests {
         deckClosureHitsItsBounds()
         detentHoldRevealsTheTiers()
         deckSqueezesEveryGapAlike()
+        stowTensionBuildsWithoutADeadZone()
         deckCurveEasesInAndClosesLinearly()
         deckCoverHasNoSpeedStep()
         deckCollapseKeepsCardsContinuous()
@@ -921,6 +922,61 @@ struct TrayScrollModelTests {
         expect(low > 0.08, "промежутки стопки схлопываются раньше зазора: \(low)")
         expect(high / max(low, 0.0001) < 2.5,
                "сжатие неравномерно: отношение гуляет от \(low) до \(high)")
+    }
+
+    /// Натяжение второй ступени (`TR-41`): карточка чуть пружинит, копится
+    /// напряжение, за порогом срабатывает.
+    ///
+    /// Главное, что сторожит тест, — отсутствие МЁРТВОЙ ЗОНЫ. Формула
+    /// сопротивления Apple на таком коротком ходу вырождается: первая
+    /// четверть забирает почти весь сдвиг, дальше глаз не видит прогресса,
+    /// и срабатывание читается взрывом.
+    private static func stowTensionBuildsWithoutADeadZone() {
+        let full = TrayStow.threshold
+        expect(TrayStow.shift(strain: 0) == 0, "покой уже сдвинут")
+        expect(abs(TrayStow.shift(strain: full) - TrayStow.maxShift) < 0.001,
+               "полный ход даёт не свой сдвиг: \(TrayStow.shift(strain: full))")
+
+        // Убывание есть: первая четверть хода даёт больше последней.
+        let q1 = TrayStow.shift(strain: full * 0.25)
+        let q4 = TrayStow.shift(strain: full) - TrayStow.shift(strain: full * 0.75)
+        expect(q1 > q4, "сдвиг растёт равномерно — связь читается свободной")
+
+        // Но мёртвой зоны нет: последняя четверть даёт заметную долю.
+        expect(q4 / TrayStow.maxShift > 0.1,
+               "к концу хода прогресс не виден: \(q4 / TrayStow.maxShift)")
+        expect(q1 / TrayStow.maxShift < 0.5,
+               "первая четверть забирает половину хода: \(q1 / TrayStow.maxShift)")
+
+        // Монотонность по всему ходу.
+        var previous: CGFloat = -1
+        var strain: CGFloat = 0
+        while strain <= full {
+            let value = TrayStow.shift(strain: strain)
+            expect(value >= previous - 0.0001, "сдвиг не монотонен при \(strain)")
+            previous = value
+            strain += 2
+        }
+
+        // Масштаб идёт вместе со сдвигом и приходит в свою точку.
+        expect(TrayStow.scale(strain: 0) == 1, "покой уже уменьшен")
+        expect(abs(TrayStow.scale(strain: full) - TrayStow.tensionScale) < 0.001,
+               "масштаб натяжения не дошёл: \(TrayStow.scale(strain: full))")
+
+        // Порог: только полный ход или намерение броска.
+        expect(!TrayStow.fires(strain: full - 1, velocity: 0), "сработало раньше порога")
+        expect(TrayStow.fires(strain: full, velocity: 0), "полный ход не сработал")
+        expect(TrayStow.fires(strain: full * 0.4, velocity: 2000),
+               "уверенный бросок не засчитан по намерению")
+        expect(!TrayStow.fires(strain: full * 0.4, velocity: 50),
+               "вялое движение засчитано как бросок")
+
+        // Схлопывание: прозрачность гаснет, масштаб уходит вглубь.
+        expect(TrayStow.stowedOpacity(progress: 0) == 1, "начало схлопывания уже прозрачно")
+        expect(TrayStow.stowedOpacity(progress: 1) == 0, "конец схлопывания не прозрачен")
+        expect(abs(TrayStow.stowedScale(progress: 1, fromScale: TrayStow.tensionScale)
+                   - TrayStow.stowedScale) < 0.001,
+               "масштаб убранной карточки не дошёл до своей точки")
     }
 
     /// Подтягивание до щелчка ПРИОТКРЫВАЕТ ярусы соразмерно ходу, а

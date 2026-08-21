@@ -96,6 +96,36 @@ final class ThumbnailManager {
     /// Была ли колода собрана на прошлом событии прокрутки: по переходу в
     /// собранное состояние счёт направления начинается заново.
     private var wasGathered = true
+
+    // MARK: вторая ступень — убирание последней карточки (`TR-41`)
+
+    /// Накопленное напряжение второй ступени, pt хода пальца.
+    private var stowStrain: CGFloat = 0
+    /// Прогресс схлопывания: 0 — карточка на месте, 1 — убрана.
+    private var stowProgress: CGFloat = 0
+    /// Открыта ли ступень текущему жесту. Открывается ТОЛЬКО жесту, чьё
+    /// начало пришлось на собранную колоду: одним движением нельзя и
+    /// собрать колоду, и убрать карточку (`TR-41`).
+    private var stowGestureOpen = false
+    /// Масштаб, на котором натяжение оставило карточку в момент срыва:
+    /// схлопывание продолжает с него, а не с единицы.
+    private var stowScaleAtFire: CGFloat = 1
+    private var stowAnimating = false
+    private lazy var stowAnimator = CollectionProgressAnimator(hostView: hostContent)
+
+    /// Геометрия ступени для раскладки.
+    private var stowState: TrayStowState {
+        if stowProgress > 0.0001 || stowAnimating {
+            return TrayStowState(shift: TrayStow.maxShift,
+                                 scale: TrayStow.stowedScale(progress: stowProgress,
+                                                             fromScale: stowScaleAtFire),
+                                 opacity: TrayStow.stowedOpacity(progress: stowProgress))
+        }
+        guard stowStrain > 0.0001 else { return .idle }
+        return TrayStowState(shift: TrayStow.shift(strain: stowStrain),
+                             scale: TrayStow.scale(strain: stowStrain),
+                             opacity: 1)
+    }
     /// Ход пальца, накопленный до выбора оси.
     private var axisPickupX: CGFloat = 0
     private var axisPickupY: CGFloat = 0
@@ -954,6 +984,12 @@ final class ThumbnailManager {
         let fingersDown = event.phase != []
 
         if event.phase == .began {
+            // `TR-41`: ступень открыта только жесту, чьё НАЧАЛО пришлось на
+            // собранную колоду. Жест, который сам довёл ленту до упора, до
+            // ступени не дотягивается — убирание требует отдельного,
+            // осознанного движения.
+            stowGestureOpen = !stowAnimating
+                && ((deckIsGathered && detent.engaged) || stowProgress > 0.9999)
             // Новый жест — новая история скорости.
             scrollVelocity = 0
             lastScrollTimestamp = event.timestamp
@@ -1003,6 +1039,36 @@ final class ThumbnailManager {
         // хабу. Обратный знак разворачивал ленту против жеста. Жест никогда не
         // прячет и не показывает трей — это делает только клик по кнопке;
         // перетягивание за край лишь пружинит и возвращается.
+        // `TR-41`: пока ступень открыта, ход пальца В УПОР копит напряжение
+        // второй ступени, а не растягивает ленту за край. Ход обратно —
+        // отпускает напряжение и, когда оно исчерпано, возвращает управление
+        // ленте.
+        if stowGestureOpen, fingersDown {
+            // Направление, копящее напряжение: у карточки на месте это ход В
+            // УПОР, у убранной — обратный. Ход в другую сторону отпускает
+            // напряжение и, когда оно исчерпано, возвращает управление ленте.
+            let stowed = stowProgress > 0.9999
+            let loading = stowed ? -delta : delta
+            if loading > 0 {
+                stowStrain += loading
+                if TrayStow.fires(strain: stowStrain, velocity: scrollVelocity) {
+                    stowed ? recallStow(velocity: scrollVelocity)
+                           : fireStow(velocity: scrollVelocity)
+                } else {
+                    applyScrollOffset()
+                }
+                trackVelocity(movement: delta, at: event.timestamp)
+                return
+            }
+            if stowStrain > 0.0001 {
+                stowStrain = max(0, stowStrain - abs(loading))
+                applyScrollOffset()
+                trackVelocity(movement: delta, at: event.timestamp)
+                return
+            }
+            // Убранная карточка ленте ход не отдаёт: за ней ничего нет.
+            if stowed { return }
+        }
         if hasPhases {
             // `TR-29`: дельты жеста идут через защёлку — у полного сбора лента
             // проходит точку напряжения и защёлкивается со щелчком.
@@ -1073,6 +1139,13 @@ final class ThumbnailManager {
             settleScrollAnimated()
         } else if event.phase == .ended || event.phase == .cancelled {
             scrollGestureActive = false
+            stowGestureOpen = false
+            if stowStrain > 0.0001, stowProgress < 0.0001 {
+                // Не дотянул до порога — напряжение снимается пружиной, без
+                // щелчка: ничего не произошло.
+                releaseStowTension()
+                return
+            }
             // `TR-36`: уверенный бросок к сбору защёлкивает ПО НАМЕРЕНИЮ —
             // по точке, где лента остановилась бы сама, а не по факту
             // доезда. Иначе бросок, не дотянувший чуть-чуть, читается как
@@ -1112,6 +1185,74 @@ final class ThumbnailManager {
             guard let self, self.settleGeneration == generation else { return }
             self.settleScrollAnimated()
         }
+    }
+
+    /// Срабатывание второй ступени (`TR-41`): щелчок и схлопывание карточки.
+    ///
+    /// После срабатывания карточка уходит уже СВОЕЙ анимацией, не привязанной
+    /// к пальцу: палец сделал своё дело, дальше работает механизм. Пружина
+    /// стартует со скоростью жеста — без передачи скорости на месте срыва
+    /// виден шов между жестом и анимацией.
+    private func fireStow(velocity: CGFloat) {
+        guard stowProgress < 0.0001, !stowAnimating else { return }
+        stowScaleAtFire = TrayStow.scale(strain: stowStrain)
+        stowStrain = 0
+        stowGestureOpen = false
+        performDetentClick(.snapIn, profile: .underFinger)
+        animateStow(to: 1, velocity: velocity)
+    }
+
+    /// Возврат убранной карточки: то же самое зеркально.
+    private func recallStow(velocity: CGFloat) {
+        guard stowProgress > 0.9999, !stowAnimating else { return }
+        stowStrain = 0
+        stowGestureOpen = false
+        performDetentClick(.release, profile: .underFinger)
+        animateStow(to: 0, velocity: velocity)
+    }
+
+    /// Пружина схлопывания. Демпфирование без перелёта, отклик медленнее
+    /// схлопывания колоды: убирание — отдельное событие, а не продолжение
+    /// сбора.
+    private func animateStow(to target: CGFloat, velocity: CGFloat) {
+        let from = stowProgress
+        guard abs(target - from) > 0.0001 else { return }
+        stowAnimating = true
+        let duration = TrayStowAnim.response
+        // Скорость жеста переводится в долю прогресса за секунду: ход порога
+        // соответствует полному прогрессу.
+        let relative = min(4, abs(velocity) / max(1, TrayStow.threshold))
+        stowAnimator.run(duration: duration, onFrame: { [weak self] progress in
+            guard let self else { return }
+            let eased = TrayStowAnim.curve(progress, initialVelocity: relative)
+            self.stowProgress = from + (target - from) * eased
+            self.applyScrollOffset()
+        }, onDone: { [weak self] in
+            guard let self else { return }
+            self.stowProgress = target
+            self.stowAnimating = false
+            self.applyScrollOffset()
+        })
+    }
+
+    /// Снятие напряжения, когда порог не пройден: пружина от текущего
+    /// значения, без щелчка — ничего не произошло. Прерываема: касание во
+    /// время возврата перехватывает движение с текущей точки.
+    private func releaseStowTension() {
+        let from = stowStrain
+        guard from > 0.0001 else { return }
+        stowAnimating = true
+        let duration = TrayStowAnim.releaseResponse
+        stowAnimator.run(duration: duration, onFrame: { [weak self] progress in
+            guard let self else { return }
+            self.stowStrain = from * (1 - TrayStowAnim.curve(progress, initialVelocity: 0))
+            self.applyScrollOffset()
+        }, onDone: { [weak self] in
+            guard let self else { return }
+            self.stowStrain = 0
+            self.stowAnimating = false
+            self.applyScrollOffset()
+        })
     }
 
     /// Оценка скорости ленты по событиям, pt/с. Сглаживание убирает выброс от
@@ -1382,10 +1523,21 @@ final class ThumbnailManager {
         // В контур входит и самый нижний ярус стопки — 8 pt отсчитываются от
         // него (`TR-30`).
         var contour = CGRect.null
+        let stowedItem = stowProgress > 0.9999 ? items.last : nil
         for item in items where !item.hostView.isHidden {
+            // Убранная карточка (`TR-41`) из контура выходит: шкатулка
+            // сжимается до панели команд. Пока она уходит, контур следует за
+            // её живой рамкой — карточка уменьшается, и рамка вместе с ней.
+            if item === stowedItem { continue }
             // Влетающая карточка входит в контур своим МЕСТОМ, а не текущим
             // положением: иначе шкатулка гонится за ней от края экрана.
             contour = contour.union(enteringTargets[ObjectIdentifier(item)] ?? item.visibleCardFrame)
+        }
+        if contour.isNull, let panelAnchor = items.last?.visibleCardFrame {
+            // Осталась одна убранная карточка: шкатулке нужен якорь, иначе
+            // ей не от чего считать своё место. Берём вырожденную рамку у
+            // основания — по ней встанет панель, и только она.
+            contour = CGRect(x: panelAnchor.minX, y: panelAnchor.minY, width: panelAnchor.width, height: 1)
         }
         guard !contour.isNull, contour.width > 1, contour.height > 1 else { return }
         casePanel.setCount(items.count)
@@ -2111,7 +2263,8 @@ final class ThumbnailManager {
                                          // `TR-34`: степень схлопывания колоды
                                          // от той же видимой позиции.
                                          deckProgress: TrayDeckClosure.value(
-                                             presented: presentedOffset, model: scrollModel))
+                                             presented: presentedOffset, model: scrollModel),
+                                         stow: stowState)
         }
 
         let newest = newestViewportLayout(on: screen)
