@@ -318,6 +318,7 @@ xcrun swiftc \
   -strict-concurrency=complete \
   -warnings-as-errors \
   Sources/TrayScrollModel.swift \
+  Sources/TrayStowGate.swift \
   Tests/TrayScrollModelTests.swift \
   -o "$TRAY_SCROLL_OUT"
 
@@ -622,6 +623,7 @@ xcrun swiftc \
   Sources/AnnotationEditor.swift \
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
+  Sources/TrayStowGate.swift \
   Sources/ThumbnailManager.swift \
   Sources/TrayCaseView.swift \
   Sources/TrayHaptics.swift \
@@ -752,6 +754,7 @@ xcrun swiftc \
   Sources/MotionCurves.swift \
   Sources/ThumbnailMotion.swift \
   Sources/TrayScrollModel.swift \
+  Sources/TrayStowGate.swift \
   Tests/ThumbnailMotionTests.swift \
   -o "$THUMBNAIL_MOTION_OUT"
 
@@ -808,6 +811,7 @@ xcrun swiftc \
   Sources/AnnotationEditor.swift \
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
+  Sources/TrayStowGate.swift \
   Sources/ThumbnailManager.swift \
   Sources/TrayCaseView.swift \
   Sources/TrayHaptics.swift \
@@ -896,6 +900,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/AnnotationEditor.swift \
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
+  Sources/TrayStowGate.swift \
   Sources/ThumbnailManager.swift \
   Sources/TrayCaseView.swift \
   Sources/TrayHaptics.swift \
@@ -983,6 +988,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/AnnotationEditor.swift \
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
+  Sources/TrayStowGate.swift \
   Sources/ThumbnailManager.swift \
   Sources/TrayCaseView.swift \
   Sources/TrayHaptics.swift \

@@ -106,16 +106,15 @@ final class ThumbnailManager {
     /// Открыт ли текущему жесту ход ЗА упор — на ступень убирания (`TR-41`).
     /// Разделение фаз выражено пределом хода для конкретного жеста, а не
     /// вторым состоянием: два независимых состояния некому согласовывать.
-    private var stowGestureOpen = false
-    /// Напряжение второй ступени: сырой ход пальца за упором. Живёт ТОЛЬКО
-    /// внутри жеста и всегда отображается в координату ленты — источник для
-    /// раскладки по-прежнему один. Ровно так же устроена защёлка сбора.
-    private var stowStrain: CGFloat = 0
-    private var stowSettling = false
-    private lazy var stowSettleAnimator = CollectionProgressAnimator(hostView: hostContent)
+    /// Ступень убирания (`TR-41`): состояние и все решения о нём живут ВНУТРИ
+    /// структуры. У менеджера своих полей ступени нет — именно они шесть раз
+    /// оставались необнулёнными и роняли ленту в залипание.
+    private var deckStep = TrayStowGate()
     /// Контур колоды, запомненный до убирания: по его основанию встаёт
     /// полоска третьей фазы, когда видимых карточек не осталось.
-    private var stowedBase: CGRect?
+    private var caseBaseline: CGRect?
+    private var stepSettling = false
+    private lazy var stepAnimator = CollectionProgressAnimator(hostView: hostContent)
 
     private var collapsed = false
     private var anchorScreen: NSScreen?
@@ -934,7 +933,7 @@ final class ThumbnailManager {
         // `TR-41`: в третьей фазе горизонтальный ход не делает НИЧЕГО — ни
         // возврата колоды, ни раскрытия ленты, ни смены оси. Убирание живёт
         // на вертикальной оси, и выход из него тоже только вертикальный.
-        if scrollModel.isStowed, !stowSettling {
+        if scrollModel.isStowed, !stepSettling {
             let horizontal = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
             if horizontal || !axisIsVertical { return }
         }
@@ -978,10 +977,6 @@ final class ThumbnailManager {
             // `TR-41`: ступень открыта жесту, чьё НАЧАЛО пришлось на собранную
             // колоду или на убранную. Условие — собранность, а не защёлка: у
             // ленты из одного снимка хода нет, и защёлка не встаёт.
-            // Ступень открыта жесту, чьё НАЧАЛО пришлось на собранную колоду
-            // или на убранную: одним движением через две фазы не пройти.
-            stowGestureOpen = axisIsVertical
-                && (deckIsGathered || scrollModel.isStowed)
             // Новый жест — новая история скорости.
             scrollVelocity = 0
             lastScrollTimestamp = event.timestamp
@@ -996,7 +991,14 @@ final class ThumbnailManager {
         // событие глушило саму пружину (`TR-13`). Так же ведёт себя системный
         // скролл: после передачи границе затухание не применяется.
         if momentumHandedToSpring, event.momentumPhase != [] {
-            if event.momentumPhase == .ended { momentumHandedToSpring = false }
+            if event.momentumPhase != [] {
+            let carried = deckStep.handle(TrayStowGate.Input(
+                kind: .momentum, delta: delta, velocity: scrollVelocity,
+                verticalAxis: axisIsVertical,
+                deckGathered: scrollModel.offset >= scrollModel.maximumOffset - 0.5))
+            if case .ignore = carried { return }
+        }
+        if event.momentumPhase == .ended { momentumHandedToSpring = false }
             return
         }
         if hasPhases {
@@ -1057,50 +1059,41 @@ final class ThumbnailManager {
                 return
             }
             let before = scrollModel.offset
-            // `TR-41`: у упора ход пальца копит НАПРЯЖЕНИЕ, а не ведёт ленту.
-            // Колода чуть пружинит — 8 pt на весь ход, — и только щелчок за
-            // порогом уводит её на ступень.
-            if stowGestureOpen, fingersDown, !scrollModel.stowed,
-               scrollModel.offset >= scrollModel.maximumOffset - 0.5 {
-                if delta > 0 {
-                    if stowStrain > TrayStow.threshold * 0.5 { TrayHaptics.shared.arm() }
-                    stowStrain += delta
-                    if TrayStow.fires(strain: stowStrain, velocity: scrollVelocity) {
-                        fireStow(velocity: scrollVelocity)
-                    } else {
-                        writeModel(scrollModel.maximumOffset + TrayStow.shift(strain: stowStrain))
-                        applyScrollOffset()
-                    }
-                    trackVelocity(movement: delta, at: event.timestamp)
-                    return
-                }
-                if stowStrain > 0.0001 {
-                    stowStrain = max(0, stowStrain + delta)
-                    writeModel(scrollModel.maximumOffset + TrayStow.shift(strain: stowStrain))
-                    applyScrollOffset()
-                    trackVelocity(movement: delta, at: event.timestamp)
-                    return
-                }
-            }
-            // Обратный ход из третьей фазы — то же зеркально.
-            if stowGestureOpen, fingersDown, scrollModel.stowed {
-                if delta < 0 {
-                    if stowStrain > TrayStow.threshold * 0.5 { TrayHaptics.shared.arm() }
-                    stowStrain += -delta
-                    if TrayStow.fires(strain: stowStrain, velocity: scrollVelocity) {
-                        recallStow(velocity: scrollVelocity)
-                    } else {
-                        writeModel(scrollModel.stowedMaximumOffset - TrayStow.shift(strain: stowStrain))
-                        applyScrollOffset()
-                    }
-                    trackVelocity(movement: delta, at: event.timestamp)
-                    return
-                }
-                // Убранной колоде за упором двигаться некуда.
+            // `TR-41`: решение принимает СТРУКТУРА ступени. Здесь только
+            // передача события и применение ответа — своих веток и флагов у
+            // обработчика нет.
+            let outcome = deckStep.handle(TrayStowGate.Input(
+                kind: .changed, delta: delta, velocity: scrollVelocity,
+                verticalAxis: axisIsVertical,
+                deckGathered: scrollModel.offset >= scrollModel.maximumOffset - 0.5))
+            switch outcome {
+            case .ignore:
+                trackVelocity(movement: 0, at: event.timestamp)
                 return
+            case .tension(let shift):
+                if deckStep.strain > TrayStow.threshold * 0.5 { TrayHaptics.shared.arm() }
+                let anchor = deckStep.stowed ? scrollModel.stowedMaximumOffset
+                                             : scrollModel.maximumOffset
+                writeModel(deckStep.stowed ? anchor - shift : anchor + shift)
+                applyScrollOffset()
+                trackVelocity(movement: delta, at: event.timestamp)
+                return
+            case .fire(let velocity):
+                scrollModel.stowed = true
+                performDetentHaptic(.snapIn)
+                animateStep(to: scrollModel.stowedMaximumOffset, velocity: velocity)
+                return
+            case .recall(let velocity):
+                scrollModel.stowed = false
+                performDetentHaptic(.release)
+                animateStep(to: scrollModel.maximumOffset, velocity: velocity)
+                return
+            case .release:
+                animateStep(to: scrollModel.phaseLimit, velocity: 0)
+                return
+            case .pass:
+                break
             }
-            // Резинка — за пределом ТЕКУЩЕЙ ФАЗЫ. Без разрешения жест дальше
-            // предела не уводит, растяжение фазу не меняет.
             let result = detent.apply(delta: delta, to: scrollModel, stretch: fingersDown,
                                       limit: scrollModel.phaseLimit)
             // Щелчок ПЕРЕНАЦЕЛИВАЕТ движение: прыжок модели поглощается
@@ -1146,12 +1139,16 @@ final class ThumbnailManager {
             settleScrollAnimated()
         } else if event.phase == .ended || event.phase == .cancelled {
             scrollGestureActive = false
-            stowGestureOpen = false
-            if stowStrain > 0.0001 {
-                // Порог не пройден — напряжение снимается пружиной, без щелчка.
-                releaseStowStrain()
+            // Конец жеста тоже идёт ЧЕРЕЗ структуру: обнулять снаружи нечего.
+            let ending = deckStep.handle(TrayStowGate.Input(
+                kind: event.phase == .cancelled ? TrayStowGate.Kind.cancelled : .ended,
+                verticalAxis: axisIsVertical,
+                deckGathered: scrollModel.offset >= scrollModel.maximumOffset - 0.5))
+            if case .release = ending {
+                animateStep(to: scrollModel.phaseLimit, velocity: 0)
                 return
             }
+            if case .ignore = ending { return }
             // `TR-36`: уверенный бросок к сбору защёлкивает ПО НАМЕРЕНИЮ —
             // по точке, где лента остановилась бы сама, а не по факту
             // доезда. Иначе бросок, не дотянувший чуть-чуть, читается как
@@ -1193,66 +1190,30 @@ final class ThumbnailManager {
         }
     }
 
-    /// Срабатывание ступени (`TR-41`): щелчок и уход колоды на ступень.
-    ///
-    /// После срабатывания колода идёт СВОЕЙ анимацией, не привязанной к
-    /// пальцу: палец сделал своё дело. Пружина стартует со скоростью жеста —
-    /// без передачи скорости на месте срыва виден шов.
-    private func fireStow(velocity: CGFloat) {
-        stowStrain = 0
-        stowGestureOpen = false
-        performStowClick(.snapIn)
-        // Фаза и координата меняются ОДНИМ действием: разойтись им негде.
-        scrollModel.stowed = true
-        animateStow(to: scrollModel.stowedMaximumOffset, velocity: velocity)
-    }
-
-    /// Возврат колоды: то же зеркально.
-    private func recallStow(velocity: CGFloat) {
-        stowStrain = 0
-        stowGestureOpen = false
-        performStowClick(.release)
-        scrollModel.stowed = false
-        animateStow(to: scrollModel.maximumOffset, velocity: velocity)
-    }
-
-    /// Щелчок ступени: тактильный импульс и визуальная отдача на одном кадре.
-    /// Отдача СВОЯ — подача ленты здесь не работает, ступень её не двигает.
-    private func performStowClick(_ click: TrayDetentModel.Click) {
-        performDetentHaptic(click)
-    }
-
-    /// Пружина ступени: без перелёта, отклик медленнее схлопывания колоды —
-    /// убирание отдельное событие, а не продолжение сбора.
-    private func animateStow(to target: CGFloat, velocity: CGFloat) {
+    /// Пружина ступени (`TR-41`): уводит ленту к пределу фазы. Без перелёта,
+    /// отклик медленнее схлопывания колоды — убирание отдельное событие, а не
+    /// продолжение сбора. Начальная скорость наследуется от жеста, иначе на
+    /// месте срыва виден шов.
+    private func animateStep(to target: CGFloat, velocity: CGFloat) {
         let from = scrollModel.offset
         guard abs(target - from) > 0.5 else {
             writeModel(target)
             applyScrollOffset()
             return
         }
-        stowSettling = true
+        stepSettling = true
         let relative = min(4, abs(velocity) / max(1, TrayStow.threshold))
-        stowSettleAnimator.run(duration: TrayStowAnim.response, onFrame: { [weak self] progress in
+        stepAnimator.run(duration: TrayStowAnim.response, onFrame: { [weak self] progress in
             guard let self else { return }
             let eased = TrayStowAnim.curve(progress, initialVelocity: relative)
             self.writeModel(from + (target - from) * eased)
             self.applyScrollOffset()
         }, onDone: { [weak self] in
             guard let self else { return }
-            self.stowSettling = false
+            self.stepSettling = false
             self.writeModel(target)
             self.applyScrollOffset()
         })
-    }
-
-    /// Снятие напряжения, когда порог не пройден: пружиной, без щелчка.
-    private func releaseStowStrain() {
-        guard stowStrain > 0.0001 else { return }
-        let target = scrollModel.isStowed ? scrollModel.stowedMaximumOffset
-                                          : scrollModel.maximumOffset
-        stowStrain = 0
-        animateStow(to: target, velocity: 0)
     }
 
     /// Оценка скорости ленты по событиям, pt/с. Сглаживание убирает выброс от
@@ -1500,6 +1461,12 @@ final class ThumbnailManager {
     /// `refreshHostPointerRouting`, и зона приёма мыши отставала от карточек
     /// (аудит 20.08.2026).
     private func finishLayoutPass() {
+        // Снимков не осталось — ступени нечего держать, иначе следующая
+        // колода появилась бы уже убранной.
+        if items.isEmpty, deckStep.stowed || deckStep.strain > 0 {
+            deckStep.reset()
+            scrollModel.stowed = false
+        }
         applyStackOrder()
         updateCase()
         refreshHoverUnderPointer()
@@ -1533,7 +1500,7 @@ final class ThumbnailManager {
         // стягивается к основанию, — поэтому контуру достаточно вырожденной
         // высоты у самого основания.
         if contour.isNull || contour.height <= 1 {
-            guard scrollModel.stowProgress > 0.0001, let base = stowedBase else { return }
+            guard scrollModel.stowProgress > 0.0001, let base = caseBaseline else { return }
             // Ширина в третьей фазе — по ПАНЕЛИ: карточек нет, и обнимать
             // нечего, кроме ряда команд. Полоска встаёт правым краем там же,
             // где стояла шкатулка, — по горизонтали ничего не скачет.
@@ -1541,7 +1508,7 @@ final class ThumbnailManager {
             contour = CGRect(x: base.maxX - panelWidth, y: base.minY,
                              width: panelWidth, height: 1)
         } else if scrollModel.stowProgress < 0.0001 {
-            stowedBase = contour
+            caseBaseline = contour
         }
         guard !contour.isNull, contour.width > 1 else { return }
         casePanel.setCount(items.count)
@@ -2229,6 +2196,7 @@ final class ThumbnailManager {
         // `TR-41`: третью фазу новый снимок НЕ прерывает. Фаза дискретна и
         // живёт в модели, поэтому достаточно вернуть ленту к пределу фазы —
         // он уже учитывает убранность.
+        scrollModel.stowed = deckStep.stowed
         if scrollModel.stowed {
             writeModel(scrollModel.phaseLimit)
             scrollIntent = .none

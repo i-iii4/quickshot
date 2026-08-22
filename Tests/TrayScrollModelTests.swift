@@ -31,6 +31,7 @@ struct TrayScrollModelTests {
         boundarySpringBouncesProportionallyToSpeed()
         stowTensionBuildsWithoutADeadZone()
         stowClickAndSpringAreShaped()
+        stowGateSurvivesEverySequence()
         boundarySpringReturnsWithoutOscillation()
         boundarySpringStaysStillWithoutInput()
         bounceHandoffFiresOnlyAtRealEdges()
@@ -112,6 +113,149 @@ struct TrayScrollModelTests {
         let underTension = TrayStripLayout.stowed(strip, progress: tensionProgress)[0]
         expect(underTension.opacity > 0.9,
                "прозрачность падает уже в натяжении: \(underTension.opacity)")
+    }
+
+    /// `TR-41`: ПЕРЕБОР последовательностей событий через ступень.
+    ///
+    /// Шесть реализаций подряд разваливались не на отдельных положениях, а в
+    /// динамике: жест оборвался, флаг остался, следующее событие пришло не в
+    /// том порядке. Статические замеры этого не видят вовсе. Здесь
+    /// перебираются все осмысленные последовательности, и на каждом шаге
+    /// проверяются инварианты.
+    private static func stowGateSurvivesEverySequence() {
+        typealias Gate = TrayStowGate
+        let kinds: [Gate.Kind] = [.began, .changed, .ended, .cancelled, .momentum]
+        let deltas: [CGFloat] = [-200, -40, -1, 0, 1, 40, 200]
+        let axes = [true, false]
+        let gathered = [true, false]
+
+        // Перебор троек событий покрывает и обрывы, и порядок, которого я не
+        // предусмотрел: конец без начала, инерция без отпускания, отмена
+        // посреди натяжения.
+        var checked = 0
+        for k1 in kinds {
+            for k2 in kinds {
+                for k3 in kinds {
+                    for delta in deltas {
+                        for vertical in axes {
+                            for isGathered in gathered {
+                                var gate = Gate()
+                                var previousStowed = gate.stowed
+                                for kind in [k1, k2, k3] {
+                                    let input = Gate.Input(kind: kind, delta: delta,
+                                                           velocity: 0, verticalAxis: vertical,
+                                                           deckGathered: isGathered)
+                                    let outcome = gate.handle(input)
+
+                                    // Фаза меняется ТОЛЬКО вместе со щелчком.
+                                    let clicked: Bool
+                                    switch outcome {
+                                    case .fire, .recall: clicked = true
+                                    default: clicked = false
+                                    }
+                                    if gate.stowed != previousStowed {
+                                        expect(clicked,
+                                               "фаза сменилась без щелчка на \(kind), дельта \(delta)")
+                                    }
+                                    if !clicked {
+                                        expect(gate.stowed == previousStowed,
+                                               "щелчка не было, а фаза изменилась")
+                                    }
+                                    previousStowed = gate.stowed
+
+                                    // Горизонтальный ход в убранной фазе не
+                                    // делает ничего.
+                                    if gate.stowed, !vertical, kind == .changed {
+                                        expect(outcome == .ignore,
+                                               "горизонталь в убранной фазе что-то сделала: \(outcome)")
+                                    }
+
+                                    // После конца жеста напряжение не остаётся
+                                    // ни при одной форме обрыва.
+                                    if kind == .ended || kind == .cancelled {
+                                        expect(gate.strain == 0,
+                                               "напряжение пережило конец жеста: \(gate.strain)")
+                                        expect(!gate.permitted,
+                                               "разрешение пережило конец жеста")
+                                    }
+                                    checked += 1
+                                }
+
+                                // Любая последовательность кончается устойчиво:
+                                // повторный конец жеста ничего не меняет.
+                                let settledGate = gate
+                                var repeated = gate
+                                _ = repeated.handle(Gate.Input(kind: .ended, delta: 0, velocity: 0,
+                                                               verticalAxis: vertical,
+                                                               deckGathered: isGathered))
+                                _ = repeated.handle(Gate.Input(kind: .ended, delta: 0, velocity: 0,
+                                                               verticalAxis: vertical,
+                                                               deckGathered: isGathered))
+                                expect(repeated.stowed == settledGate.stowed,
+                                       "повторный конец жеста сменил фазу")
+                                expect(repeated.strain == 0, "повторный конец оставил напряжение")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        expect(checked > 1000, "перебор оказался слишком узким: \(checked) шагов")
+
+        // Детерминированность: одна последовательность — один результат.
+        func run(_ script: [Gate.Input]) -> Gate {
+            var gate = Gate()
+            for input in script { _ = gate.handle(input) }
+            return gate
+        }
+        let script: [Gate.Input] = [
+            .init(kind: .began, deckGathered: true),
+            .init(kind: .changed, delta: 60, deckGathered: true),
+            .init(kind: .changed, delta: 60, deckGathered: true),
+            .init(kind: .ended),
+        ]
+        expect(run(script) == run(script), "одна последовательность дала разные результаты")
+
+        // Из собранной фазы в убранную — только через щелчок, и он приходит
+        // ровно на пороге.
+        var gate = Gate()
+        _ = gate.handle(.init(kind: .began, deckGathered: true))
+        var fired = false
+        var travelled: CGFloat = 0
+        while travelled < TrayStow.threshold - 1 {
+            let outcome = gate.handle(.init(kind: .changed, delta: 1, deckGathered: true))
+            travelled += 1
+            if case .fire = outcome { fired = true }
+        }
+        expect(!fired, "щелчок раньше порога: на \(travelled) pt")
+        expect(!gate.stowed, "фаза сменилась раньше порога")
+        let last = gate.handle(.init(kind: .changed, delta: 2, deckGathered: true))
+        if case .fire = last { fired = true }
+        expect(fired, "щелчок не пришёл на пороге")
+        expect(gate.stowed, "фаза не сменилась после щелчка")
+
+        // Инерция ступень не двигает.
+        var afterFire = gate
+        let momentum = afterFire.handle(.init(kind: .momentum, delta: 200, deckGathered: true))
+        expect(momentum == .ignore, "инерция после щелчка ушла в ленту: \(momentum)")
+        expect(afterFire.stowed, "инерция сменила фазу")
+
+        // Обрыв посреди натяжения не оставляет следов.
+        var broken = Gate()
+        _ = broken.handle(.init(kind: .began, deckGathered: true))
+        _ = broken.handle(.init(kind: .changed, delta: 80, deckGathered: true))
+        expect(broken.strain > 0, "натяжение не накопилось")
+        _ = broken.handle(.init(kind: .cancelled))
+        expect(broken.strain == 0 && !broken.permitted && !broken.stowed,
+               "обрыв оставил ступень в промежуточном состоянии")
+
+        // Сброс состава ленты возвращает ступень в исходное.
+        var populated = Gate()
+        _ = populated.handle(.init(kind: .began, deckGathered: true))
+        _ = populated.handle(.init(kind: .changed, delta: 200, deckGathered: true))
+        populated.reset()
+        expect(!populated.stowed && populated.strain == 0 && !populated.permitted,
+               "сброс не вернул ступень в исходное")
     }
 
     private static func stowTensionBuildsWithoutADeadZone() {
