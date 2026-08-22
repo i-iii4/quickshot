@@ -1582,19 +1582,23 @@ final class ThumbnailManager {
             // положением: иначе шкатулка гонится за ней от края экрана.
             contour = contour.union(enteringTargets[ObjectIdentifier(item)] ?? item.visibleCardFrame)
         }
-        // `TR-41`, третья фаза: видимых карточек нет, остаётся полоска с
-        // командами. Низ шкатулки неподвижен по построению — колода
-        // стягивается к основанию, — поэтому контуру достаточно вырожденной
-        // высоты у самого основания.
-        if contour.isNull || contour.height <= 1 {
-            guard scrollModel.stowProgress > 0.0001, let base = caseBaseline else { return }
-            // Ширина в третьей фазе — по ПАНЕЛИ: карточек нет, и обнимать
-            // нечего, кроме ряда команд. Полоска встаёт правым краем там же,
-            // где стояла шкатулка, — по горизонтали ничего не скачет.
+        // `TR-41`, третья фаза: колода уходит, остаётся полоска с командами.
+        //
+        // Контур сводится к панели ПЛАВНО, по прогрессу убирания. Прежде он
+        // строился по карточкам до самого их исчезновения, а карточка
+        // уменьшается лишь до 0.85 — в момент, когда она пропадала, ширина
+        // скакала к панели примерно на 96 pt, а высота срывалась за один
+        // кадр (аудит 22.08.2026).
+        let stowing = scrollModel.stowProgress
+        if stowing > 0.0001 {
             let panelWidth = max(1, casePanel.fittingSize.width)
-            contour = CGRect(x: base.maxX - panelWidth, y: base.minY,
-                             width: panelWidth, height: 1)
-        } else if scrollModel.stowProgress < 0.0001 {
+            let base = contour.isNull ? (caseBaseline ?? contour) : contour
+            guard !base.isNull, base.width > 1 else { return }
+            let width = base.width + (panelWidth - base.width) * stowing
+            let height = max(1, base.height * (1 - stowing))
+            contour = CGRect(x: base.maxX - width, y: base.minY,
+                             width: width, height: height)
+        } else if !contour.isNull, contour.height > 1 {
             caseBaseline = contour
         }
         guard !contour.isNull, contour.width > 1 else { return }
@@ -2349,7 +2353,8 @@ final class ThumbnailManager {
                                          // от той же видимой позиции.
                                          deckProgress: TrayDeckClosure.value(
                                              presented: presentedOffset, model: scrollModel),
-                                         stow: scrollModel.stowProgress)
+                                         stow: scrollModel.stowProgress,
+                                         stowShift: TrayStow.shift(strain: deckStep.strain))
         }
 
         let newest = newestViewportLayout(on: screen)

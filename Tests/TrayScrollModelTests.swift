@@ -326,9 +326,15 @@ struct TrayScrollModelTests {
         // намерению при вдвое меньшем ходе.
         expect(!TrayStow.fires(strain: full - 1, velocity: 0), "сработало раньше порога")
         expect(TrayStow.fires(strain: full, velocity: 0), "полный ход не сработал")
-        expect(TrayStow.fires(strain: full * 0.5, velocity: 2000),
-               "уверенный бросок не засчитан по намерению")
-        expect(!TrayStow.fires(strain: full * 0.5, velocity: 50),
+        // Бросок засчитывается ПО НАМЕРЕНИЮ — только при отпускании.
+        // Проекция описывает путь после отрыва пальца; прежде она
+        // складывалась с напряжением на каждом событии движения, и щелчок
+        // срабатывал уже на 12 pt хода вместо 112 (аудит 22.08.2026).
+        expect(TrayStow.fires(strain: full * 0.5, velocity: 2000, releasing: true),
+               "уверенный бросок не засчитан по намерению при отпускании")
+        expect(!TrayStow.fires(strain: full * 0.5, velocity: 2000),
+               "бросок засчитан по ходу движения, а не при отпускании")
+        expect(!TrayStow.fires(strain: full * 0.5, velocity: 50, releasing: true),
                "вялое движение засчитано как бросок")
     }
 

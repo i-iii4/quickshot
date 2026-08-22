@@ -287,7 +287,8 @@ enum TrayStripLayout {
                       offset: CGFloat,
                       viewportLength: CGFloat,
                       deckProgress: CGFloat = 0,
-                      stow: CGFloat = 0) -> [TrayCardBand] {
+                      stow: CGFloat = 0,
+                      stowShift: CGFloat = 0) -> [TrayCardBand] {
         guard !cardLengths.isEmpty else { return [] }
         let count = cardLengths.count
         let e = edgeLength
@@ -425,7 +426,7 @@ enum TrayStripLayout {
             coverBottom = max(coverBottom, visibleFrom)
         }
 
-        return stowed(bands, progress: stow)
+        return stowed(bands, progress: stow, shift: stowShift)
     }
 
     /// Убирание колоды (`TR-41`) как ЧАСТЬ РАСКЛАДКИ.
@@ -443,15 +444,21 @@ enum TrayStripLayout {
     /// Почему здесь, а не поверх раскладки: в трее один источник истины —
     /// постановка карточек, контур шкатулки, попадание мыши и анимации
     /// читают её результат. Наложение поверх невидимо всем троим.
-    static func stowed(_ bands: [TrayCardBand], progress: CGFloat) -> [TrayCardBand] {
+    static func stowed(_ bands: [TrayCardBand],
+                       progress: CGFloat,
+                       shift: CGFloat = 0) -> [TrayCardBand] {
         let p = min(1, max(0, progress))
-        guard p > 0.0001 else { return bands }
+        guard p > 0.0001 || shift > 0.0001 else { return bands }
         let scale = 1 - (1 - TrayStow.stowedScale) * p
         let fade = 1 - p
         return bands.map { band in
             guard !band.hidden else { return band }
             var next = band
-            next.position = band.position * scale
+            // Натяжение — СОБСТВЕННЫЙ канал: колода пружинит вниз целиком.
+            // Выражать его через прогресс убирания нельзя: 8 pt хода дают
+            // 6.7% прогресса, а те — масштаб 0.99, то есть меньше пикселя на
+            // экране. Натяжение оказывалось невидимым (аудит 22.08.2026).
+            next.position = band.position * scale - shift
             next.length = band.length * scale
             next.scale = band.scale * scale
             next.opacity = band.opacity * fade
@@ -959,10 +966,16 @@ enum TrayStow {
     /// засчитывается, если спроецированная точка остановки лежит за
     /// порогом. Иначе решительное движение, не дотянувшее десяток точек,
     /// читается как «не сработало» (`TR-36`, `SPEC_FLICK_PROJECTION.md`).
-    static func fires(strain: CGFloat, velocity: CGFloat) -> Bool {
+    static func fires(strain: CGFloat, velocity: CGFloat, releasing: Bool = false) -> Bool {
         if strain >= threshold { return true }
-        let projected = strain + abs(TrayFlickProjection.distance(velocity: velocity))
-        return projected >= threshold
+        // Проекция описывает путь ПОСЛЕ ОТРЫВА пальца, поэтому засчитывается
+        // только при отпускании. Прежде она складывалась с напряжением на
+        // каждом событии движения, а при скорости 500 pt/с даёт 249 pt — вдвое
+        // больше порога. Щелчок срабатывал уже на 12-33 pt хода, то есть от
+        // лёгкого касания, и порог в 112 pt существовал только на бумаге
+        // (аудит 22.08.2026).
+        guard releasing else { return false }
+        return strain + abs(TrayFlickProjection.distance(velocity: velocity)) >= threshold
     }
 
     /// Геометрия убранной карточки по прогрессу схлопывания: масштаб идёт

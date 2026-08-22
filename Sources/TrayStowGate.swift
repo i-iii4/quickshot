@@ -75,6 +75,17 @@ struct TrayStowGate: Equatable {
             return stowed ? .ignore : .pass
 
         case .ended, .cancelled:
+            // Бросок засчитывается ПО НАМЕРЕНИЮ — при отпускании, а не по ходу
+            // движения (`TR-36`). Уверенный флик, не дотянувший до порога,
+            // читался бы как «не сработало».
+            if input.kind == .ended, permitted, !spent,
+               TrayStow.fires(strain: strain, velocity: input.velocity, releasing: true) {
+                strain = 0
+                permitted = false
+                spent = true
+                stowed.toggle()
+                return stowed ? .fire(velocity: input.velocity) : .recall(velocity: input.velocity)
+            }
             let hadStrain = strain > 0.0001
             strain = 0
             permitted = false
