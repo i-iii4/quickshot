@@ -275,6 +275,19 @@ struct TrayScrollModelTests {
         expect(broken.strain == 0 && !broken.permitted && !broken.stowed,
                "обрыв оставил ступень в промежуточном состоянии")
 
+        // `TR-41`: ступень доступна только СТОПКЕ. У одиночного снимка
+        // шкатулки нет, поэтому убранная карточка не возвращается ничем —
+        // выход только перезапуском (аудит 22.08.2026).
+        var lone = Gate()
+        _ = lone.handle(.init(kind: .began, deckGathered: false))
+        var travel: CGFloat = 0
+        while travel < TrayStow.threshold * 2 {
+            let move = lone.handle(.init(kind: .changed, delta: 8, deckGathered: false))
+            expect(move == .pass, "ступень открылась там, где стопки нет: \(move)")
+            travel += 8
+        }
+        expect(!lone.stowed, "одиночный снимок убрался в несуществующую шкатулку")
+
         // Сброс состава ленты возвращает ступень в исходное.
         var populated = Gate()
         _ = populated.handle(.init(kind: .began, deckGathered: true))

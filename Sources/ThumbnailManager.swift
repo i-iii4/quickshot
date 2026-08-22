@@ -553,7 +553,7 @@ final class ThumbnailManager {
         }
         collectionModel.insert(id: artifact.id, sequence: artifact.sequence)
         itemByID[artifact.id] = t
-        scrollModel.stowed = wasStowed
+        scrollModel.apply(phase: wasStowed)
         scrollIntent = wasCompressed ? .stayCompressed : .revealNewest
         hostContent.addSubview(t.hostView, positioned: .below, relativeTo: casePanel)  // новейшая поверх старых, под панелью шкатулки
         for it in items { it.applyWidth(cardWidth, screenHeight: screen.frame.height) }
@@ -844,6 +844,12 @@ final class ThumbnailManager {
             // 20.08.2026).
             if !self.items.isEmpty { self.applyScrollOffset() }
             if self.items.isEmpty {
+                // Снимков не осталось — ступени нечего держать. Сброс стоял
+                // только в проходе раскладки, который для этой ветки явно
+                // пропускается, и следующий снимок приходил невидимым (аудит
+                // 22.08.2026).
+                self.deckStep.reset()
+                self.scrollModel.apply(phase: false)
                 self.collapsed = false
                 self.trayHoverActive = false
                 self.collapsedPeekItem = nil
@@ -862,6 +868,17 @@ final class ThumbnailManager {
     /// Колода собрана: лента доехала до упора и стоит там.
     private var deckIsGathered: Bool {
         scrollModel.offset >= scrollModel.maximumOffset - 0.5
+    }
+
+    /// Ступень доступна только СТОПКЕ (`TR-41`). Шкатулка — всегда стопка
+    /// кадров, единственный кадр в неё не помещается, поэтому убирать нечего.
+    ///
+    /// Прежде ступень открывалась и одиночному снимку: он гас, шкатулки с
+    /// командами при одном кадре нет, зона приёма мыши пустела, и возвратный
+    /// жест физически не доходил до трея — выход только перезапуском, снимок
+    /// терялся (аудит 22.08.2026).
+    private var deckStepAvailable: Bool {
+        items.count > 1 && deckIsGathered
     }
 
     /// Выбирает ось раскрытия по ходу пальца.
@@ -947,7 +964,11 @@ final class ThumbnailManager {
         // `TR-41`: в третьей фазе горизонтальный ход не делает НИЧЕГО — ни
         // возврата колоды, ни раскрытия ленты, ни смены оси. Убирание живёт
         // на вертикальной оси, и выход из него тоже только вертикальный.
-        if scrollModel.isStowed, !stepSettling {
+        // Убранная фаза глушит горизонталь ВСЕГДА, в том числе пока играет
+        // пружина щелчка. Прежнее исключение на время анимации пускало смену
+        // оси, после чего каждое событие отбивалось по несовпадению оси —
+        // лента запиралась в убранной фазе навсегда (аудит 22.08.2026).
+        if scrollModel.isStowed || deckStep.stowed {
             let horizontal = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
             if horizontal || !axisIsVertical { return }
         }
@@ -992,7 +1013,7 @@ final class ThumbnailManager {
             // ступень выдаёт она, у обработчика своих флагов нет.
             let opening = deckStep.handle(TrayStowGate.Input(
                 kind: .began, verticalAxis: axisIsVertical,
-                deckGathered: scrollModel.offset >= scrollModel.maximumOffset - 0.5))
+                deckGathered: deckStepAvailable))
             if case .ignore = opening { return }
             // Новый жест — новая история скорости.
             scrollVelocity = 0
@@ -1012,7 +1033,7 @@ final class ThumbnailManager {
             let carried = deckStep.handle(TrayStowGate.Input(
                 kind: .momentum, delta: delta, velocity: scrollVelocity,
                 verticalAxis: axisIsVertical,
-                deckGathered: scrollModel.offset >= scrollModel.maximumOffset - 0.5))
+                deckGathered: deckStepAvailable))
             if case .ignore = carried { return }
         }
         if momentumHandedToSpring, event.momentumPhase != [] {
@@ -1102,7 +1123,7 @@ final class ThumbnailManager {
             let outcome = deckStep.handle(TrayStowGate.Input(
                 kind: stepKind, delta: delta, velocity: scrollVelocity,
                 verticalAxis: axisIsVertical,
-                deckGathered: scrollModel.offset >= scrollModel.maximumOffset - 0.5))
+                deckGathered: deckStepAvailable))
             // Конец жеста никогда не обрывается здесь: он обязан дойти до
             // блока завершения, где садится лента и снимается признак
             // активного жеста.
@@ -1122,12 +1143,12 @@ final class ThumbnailManager {
                 if ending { break }
                 return
             case .fire(let velocity):
-                scrollModel.stowed = true
+                scrollModel.apply(phase: true)
                 performDetentHaptic(.snapIn)
                 animateStep(to: scrollModel.stowedMaximumOffset, velocity: velocity)
                 return
             case .recall(let velocity):
-                scrollModel.stowed = false
+                scrollModel.apply(phase: false)
                 performDetentHaptic(.release)
                 animateStep(to: scrollModel.maximumOffset, velocity: velocity)
                 return
@@ -1274,7 +1295,7 @@ final class ThumbnailManager {
         let ending = deckStep.handle(TrayStowGate.Input(
             kind: cancelled ? TrayStowGate.Kind.cancelled : .ended,
             verticalAxis: axisIsVertical,
-            deckGathered: scrollModel.offset >= scrollModel.maximumOffset - 0.5))
+            deckGathered: deckStepAvailable))
         if case .release = ending {
             animateStep(to: scrollModel.phaseLimit, velocity: 0)
             return true
@@ -1531,7 +1552,7 @@ final class ThumbnailManager {
         // колода появилась бы уже убранной.
         if items.isEmpty, deckStep.stowed || deckStep.strain > 0 {
             deckStep.reset()
-            scrollModel.stowed = false
+            scrollModel.apply(phase: false)
         }
         applyStackOrder()
         updateCase()
@@ -2279,7 +2300,7 @@ final class ThumbnailManager {
         // `TR-41`: третью фазу новый снимок НЕ прерывает. Фаза дискретна и
         // живёт в модели, поэтому достаточно вернуть ленту к пределу фазы —
         // он уже учитывает убранность.
-        scrollModel.stowed = deckStep.stowed
+        scrollModel.apply(phase: deckStep.stowed)
         if scrollModel.stowed {
             writeModel(scrollModel.phaseLimit)
             scrollIntent = .none

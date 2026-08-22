@@ -277,7 +277,7 @@ struct ThumbnailMotionTests {
 
         // Щелчок переключает фазу, и посадка исполняет её решение, а не
         // тянет ленту обратно к упору.
-        strip.stowed = true
+        strip.apply(phase: true)
         strip.offset = strip.stowedMaximumOffset
         try require(strip.isStowed, "Phase switch did not stow the deck")
         try require(abs(strip.settled().offset - strip.stowedMaximumOffset) < 0.001,
@@ -285,7 +285,7 @@ struct ThumbnailMotionTests {
         strip.offset = strip.stowedMaximumOffset + 40
         try require(abs(strip.settled().offset - strip.stowedMaximumOffset) < 0.001,
                     "Rubber band past the stow step was not returned")
-        strip.stowed = false
+        strip.apply(phase: false)
         strip.offset = 0
 
         let openStrip = strip.scrolled(by: 5000, rubberBand: false, limit: strip.maximumOffset)
@@ -311,19 +311,19 @@ struct ThumbnailMotionTests {
         // Внутри фазы убранность — чистая функция координаты, зажатой
         // пределом фазы: своего состояния у неё нет.
         var midway = strip
-        midway.stowed = true
+        midway.apply(phase: true)
         midway.offset = strip.maximumOffset + TrayScrollModel.stowSpan / 2
         try require(abs(midway.stowProgress - 0.5) < 0.001,
                     "Stow progress is not a pure function of the offset inside its phase")
         // Незавершённая ступень возвращается к пределу СВОЕЙ фазы.
-        midway.stowed = false
+        midway.apply(phase: false)
         try require(abs(midway.settled().offset - strip.maximumOffset) < 0.001,
                     "Half-open stow step did not settle back to the gathered deck")
 
         // Видимое натяжение — 8 pt из всей длины ступени: колода пружинит
         // «почти незаметно», а не уезжает за пальцем.
         var tense = strip
-        tense.stowed = true
+        tense.apply(phase: true)
         tense.offset = strip.maximumOffset + TrayStow.maxShift
         try require(tense.stowProgress < 0.1,
                     "Tension alone already stowed the deck: \(tense.stowProgress)")

@@ -106,6 +106,21 @@ struct EditorScanTests {
             throw Failure("пружина ступени нигде не отменяется")
         }
 
+        // Этап 2 (аудит 22.08.2026).
+        guard live.contains("items.count > 1 && deckIsGathered") else {
+            throw Failure("ступень открыта не только стопке")
+        }
+        guard live.contains("self.deckStep.reset()") else {
+            throw Failure("опустевшая лента не сбрасывает ступень")
+        }
+        guard !live.contains("isStowed, !stepSettling") else {
+            throw Failure("убранная фаза пускает смену оси на время анимации щелчка")
+        }
+        // Фаза хранится в ОДНОМ месте: копия в модели только принимает её.
+        guard !live.contains("scrollModel.stowed = ") else {
+            throw Failure("фаза убирания снова присваивается напрямую, минуя владельца")
+        }
+
         guard let readAt = live.range(of: "let wasStowed = deckStep.stowed"),
               let decisionAt = live.range(of: "scrollIntent = wasCompressed"),
               readAt.lowerBound < decisionAt.lowerBound else {
