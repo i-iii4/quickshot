@@ -48,15 +48,42 @@ struct TrayScrollModel: Equatable {
     /// поэтому ход — ровно до начала новейшей карточки.
     var maximumOffset: CGFloat { max(0, contentLength - lastCardLength) }
 
+    /// Длина СТУПЕНИ УБИРАНИЯ (`TR-41`) — участка хода ЗА упором, на котором
+    /// колода уходит вглубь и гаснет.
+    ///
+    /// Убирание не отдельное состояние, а продолжение той же координаты. Две
+    /// независимые величины — положение ленты и прогресс убирания — некому
+    /// согласовывать: лента двигалась при ненулевом прогрессе, и геометрия
+    /// рассыпалась, карточки уходили за экран (откат 21.08.2026, три
+    /// попытки). Одна координата снимает вопрос: согласовывать нечего.
+    static let stowSpan: CGFloat = 120
+
+    /// Предел хода вместе со ступенью.
+    var stowedMaximumOffset: CGFloat { maximumOffset + Self.stowSpan }
+
+    /// Насколько убрана колода: 0 — на месте, 1 — убрана, видна панель.
+    /// Чистая функция координаты, никакого своего состояния.
+    var stowProgress: CGFloat {
+        min(1, max(0, (offset - maximumOffset) / Self.stowSpan))
+    }
+
+    /// Колода полностью убрана.
+    var isStowed: Bool { stowProgress > 0.9999 }
+
     /// Прокрутка осмысленна, как только есть хотя бы одна карточка: даже две
     /// карточки можно собрать в стопку у кнопки.
     var isScrollable: Bool { contentLength > 0.5 }
 
     /// Смещение после жеста с резиновым сопротивлением за краями (`TR-13`).
-    func scrolled(by delta: CGFloat, rubberBand: Bool = true) -> TrayScrollModel {
+    /// `limit` — докуда жесту позволено вести ленту. По умолчанию упор
+    /// сбора; жест, которому открыта ступень (`TR-41`), ведёт до
+    /// `stowedMaximumOffset`. Разделение фаз выражено ИМЕННО так: не вторым
+    /// состоянием, а пределом хода для конкретного жеста.
+    func scrolled(by delta: CGFloat, rubberBand: Bool = true, limit: CGFloat? = nil) -> TrayScrollModel {
         var next = self
+        let ceiling = limit ?? maximumOffset
         let raw = rawOffset + delta
-        let clamped = min(max(0, raw), maximumOffset)
+        let clamped = min(max(0, raw), ceiling)
         // Присваивание offset синхронизирует rawOffset через наблюдатель,
         // поэтому сырое значение выставляется ПОСЛЕ него.
         next.offset = rubberBand
@@ -89,10 +116,14 @@ struct TrayScrollModel: Equatable {
         return overshoot < 0 ? -value : value
     }
 
-    /// Возврат в границы после отпускания.
+    /// Возврат в границы после отпускания. Устойчивых положений три: лента
+    /// раскрыта, колода собрана, колода убрана. Ступень, пройденная не до
+    /// конца, возвращается к собранной колоде — как и любое незавершённое
+    /// натяжение.
     func settled() -> TrayScrollModel {
         var next = self
-        next.offset = min(max(0, offset), maximumOffset)
+        let ceiling = stowProgress > 0.5 ? stowedMaximumOffset : maximumOffset
+        next.offset = min(max(0, offset), ceiling)
         return next
     }
 
@@ -361,33 +392,30 @@ enum TrayStripLayout {
         return stowed(bands, progress: stow)
     }
 
-    /// Убирание колоды (`TR-41`) как ЧАСТЬ РАСКЛАДКИ, а не наложение поверх.
+    /// Убирание колоды (`TR-41`) как ЧАСТЬ РАСКЛАДКИ.
     ///
-    /// Колода уходит вглубь целиком: все полосы уменьшаются одним множителем
-    /// и стягиваются к ЯКОРЮ — верхнему краю колоды. Панель шкатулки стоит
-    /// у этого края, поэтому она остаётся неподвижной, а низ колоды
-    /// подтягивается к ней.
+    /// Колода уходит вглубь целиком и стягивается к ОСНОВАНИЮ ленты — к тому
+    /// краю, где стоит низ шкатулки. Основание в координатах ленты равно
+    /// нулю, поэтому стягивание — простое умножение позиций: ошибиться
+    /// системой координат негде.
     ///
-    /// Почему именно здесь. В трее один источник истины: постановка карточек,
-    /// контур шкатулки, попадание мыши и анимации читают результат раскладки.
-    /// Наложение трансформации на слой поверх раскладки невидимо для всех
-    /// троих — карточки рисуются в одном месте, а считаются в другом, отчего
-    /// шкатулка строится мимо, мышь попадает мимо, а часть колоды уезжает
-    /// (откат 21.08.2026, две попытки).
+    /// Якорь именно снизу. Стягивание к верхнему краю уводило колоду вверх и
+    /// за экран, а шкатулку заставляло схлопываться не в ту сторону (откат
+    /// 21.08.2026). Низ шкатулки обязан стоять неподвижно, а панель —
+    /// опускаться вместе с верхней границей.
+    ///
+    /// Почему здесь, а не поверх раскладки: в трее один источник истины —
+    /// постановка карточек, контур шкатулки, попадание мыши и анимации
+    /// читают её результат. Наложение поверх невидимо всем троим.
     static func stowed(_ bands: [TrayCardBand], progress: CGFloat) -> [TrayCardBand] {
         let p = min(1, max(0, progress))
         guard p > 0.0001 else { return bands }
         let scale = 1 - (1 - TrayStow.stowedScale) * p
         let fade = 1 - p
-        // Якорь — верх колоды: самая дальняя точка видимых полос.
-        var anchor: CGFloat = 0
-        for band in bands where !band.hidden {
-            anchor = max(anchor, band.position + band.length)
-        }
         return bands.map { band in
             guard !band.hidden else { return band }
             var next = band
-            next.position = anchor + (band.position - anchor) * scale
+            next.position = band.position * scale
             next.length = band.length * scale
             next.scale = band.scale * scale
             next.opacity = band.opacity * fade
@@ -517,16 +545,19 @@ struct TrayDetentModel: Equatable {
     /// Прогон одной дельты жеста через защёлку. `stretch` — можно ли уводить
     /// ленту за край: тянет только палец, инерция упирается (приёмка
     /// 19.08.2026 — после отпускания лента продолжала уезжать).
+    /// `limit` — предел хода для этого жеста (`TR-41`): без разрешения лента
+    /// упирается в сбор, с разрешением идёт дальше, на ступень убирания.
     mutating func apply(delta: CGFloat,
                         to model: TrayScrollModel,
-                        stretch: Bool = true) -> (model: TrayScrollModel, click: Click?) {
+                        stretch: Bool = true,
+                        limit: CGFloat? = nil) -> (model: TrayScrollModel, click: Click?) {
         guard Self.fits(model) else {
-            let next = model.scrolled(by: delta, rubberBand: stretch)
+            let next = model.scrolled(by: delta, rubberBand: stretch, limit: limit)
             sync(with: next)
             return (next, nil)
         }
-        return engaged ? applyEngaged(delta: delta, to: model, stretch: stretch)
-                       : applyFree(delta: delta, to: model, stretch: stretch)
+        return engaged ? applyEngaged(delta: delta, to: model, stretch: stretch, limit: limit)
+                       : applyFree(delta: delta, to: model, stretch: stretch, limit: limit)
     }
 
     /// Куда осесть ленте, если жест замер в зоне напряжения: защёлка не
@@ -550,7 +581,8 @@ struct TrayDetentModel: Equatable {
 
     private mutating func applyFree(delta: CGFloat,
                                     to model: TrayScrollModel,
-                                    stretch: Bool) -> (model: TrayScrollModel, click: Click?) {
+                                    stretch: Bool,
+                                    limit: CGFloat? = nil) -> (model: TrayScrollModel, click: Click?) {
         var next = model
         let zoneStart = next.maximumOffset - Self.effectiveZone(for: next)
         guard delta > 0, next.offset + delta > zoneStart else {
@@ -575,13 +607,15 @@ struct TrayDetentModel: Equatable {
 
     private mutating func applyEngaged(delta: CGFloat,
                                        to model: TrayScrollModel,
-                                       stretch: Bool) -> (model: TrayScrollModel, click: Click?) {
+                                       stretch: Bool,
+                                       limit: CGFloat? = nil) -> (model: TrayScrollModel, click: Click?) {
         var next = model
         let maxOffset = next.maximumOffset
         if delta >= 0 {
-            // Глубже в упор — обычная резинка за краем (`TR-13`).
+            // Глубже в упор: без разрешения — обычная резинка за краем
+            // (`TR-13`), с разрешением — ход по ступени убирания (`TR-41`).
             strain = 0
-            next = next.scrolled(by: delta, rubberBand: stretch)
+            next = next.scrolled(by: delta, rubberBand: stretch, limit: limit)
             return (next, nil)
         }
         if next.offset > maxOffset {
@@ -589,7 +623,7 @@ struct TrayDetentModel: Equatable {
             let back = max(delta, maxOffset - next.offset)
             next.offset += back
             let rest = delta - back
-            if rest < -0.001 { return applyEngaged(delta: rest, to: next, stretch: stretch) }
+            if rest < -0.001 { return applyEngaged(delta: rest, to: next, stretch: stretch, limit: limit) }
             return (next, nil)
         }
         strain += -delta

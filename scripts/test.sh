@@ -751,6 +751,7 @@ xcrun swiftc \
   -framework AppKit \
   Sources/MotionCurves.swift \
   Sources/ThumbnailMotion.swift \
+  Sources/TrayScrollModel.swift \
   Tests/ThumbnailMotionTests.swift \
   -o "$THUMBNAIL_MOTION_OUT"
 

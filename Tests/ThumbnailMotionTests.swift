@@ -261,6 +261,33 @@ struct ThumbnailMotionTests {
         try require(trayAxisPick(accumulatedX: 12, accumulatedY: 12, threshold: 10) == true,
                     "A clean diagonal did not fall back to the vertical axis")
 
+        // `TR-41`: разделение фаз выражено ПРЕДЕЛОМ ХОДА для конкретного
+        // жеста, а не вторым состоянием. Жест, начатый до упора, за упор не
+        // уходит; жест, начатый на упоре, уходит на ступень убирания.
+        var strip = TrayScrollModel(contentLength: 800, viewportLength: 400,
+                                    offset: 0, lastCardLength: 150)
+        strip.offset = strip.maximumOffset
+        let stopped = strip.scrolled(by: 200, rubberBand: false, limit: strip.maximumOffset)
+        try require(abs(stopped.offset - strip.maximumOffset) < 0.001,
+                    "Gesture without permission passed the gathered stop")
+        try require(stopped.stowProgress == 0, "Gesture without permission entered the stow step")
+
+        let allowed = strip.scrolled(by: 200, rubberBand: false,
+                                     limit: strip.stowedMaximumOffset)
+        try require(abs(allowed.offset - strip.stowedMaximumOffset) < 0.001,
+                    "Permitted gesture did not reach the end of the stow step")
+        try require(allowed.isStowed, "Permitted gesture did not stow the deck")
+
+        // Ступень — участок ТОЙ ЖЕ координаты: прогресс однозначно следует из
+        // положения, отдельного состояния нет и рассинхрону взяться неоткуда.
+        var midway = strip
+        midway.offset = strip.maximumOffset + TrayScrollModel.stowSpan / 2
+        try require(abs(midway.stowProgress - 0.5) < 0.001,
+                    "Stow progress is not a pure function of the offset")
+        // Незавершённая ступень возвращается к собранной колоде.
+        try require(abs(midway.settled().offset - strip.maximumOffset) < 0.001,
+                    "Half-open stow step did not settle back to the gathered deck")
+
         // `TR-40`: ресайз переносит долю раскрытия, а не смещение.
         try require(trayOffsetPreservingShare(offset: 316, maximum: 316, newMaximum: 406) == 406,
                     "Resizing broke a gathered deck apart")

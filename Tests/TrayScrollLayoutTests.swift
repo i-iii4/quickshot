@@ -23,6 +23,8 @@ struct TrayScrollLayoutTests {
         bandFieldsReachSlots()
         trailingStackStaysOnScreen()
         deeperLayersGoBehind()
+        stowSweepKeepsTheBaseStill()
+        stowSweepSurvivesCollectionChanges()
         visibleFrameFollowsTheSlot()
         loneCardStandsWhereTheStackTopStands()
         print("TrayScrollLayoutTests: passed")
@@ -95,6 +97,139 @@ struct TrayScrollLayoutTests {
         let vertical = thumbnailVisibleFrame(slot: band, cardSize: card, vertical: true)
         expect(abs(vertical.height - 12) < 0.001, "вертикальная полоса взяла не свою длину")
         expect(abs(vertical.minX - (300 + 20)) < 0.001, "вертикальная полоса не центрирована")
+    }
+
+    /// `TR-41`: раскладка ведётся по ВСЕМУ ходу — от нуля до конца ступени
+    /// убирания — и на каждом шаге проверяется целиком.
+    ///
+    /// Замеров отдельных положений недостаточно: три реализации подряд
+    /// давали верные числа на статических срезах и разваливались в движении.
+    /// Дефект живёт в сочетании — лента едет, ступень не в нуле, — поэтому
+    /// проверка идёт непрерывным проходом.
+    private static func stowSweepKeepsTheBaseStill() {
+        let screen = NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let cardW: CGFloat = 200, cardH: CGFloat = 150, gap: CGFloat = 8, margin: CGFloat = 16
+        let heights = Array(repeating: cardH, count: 5)
+        let content = heights.reduce(0, +) + gap * CGFloat(heights.count - 1)
+        var model = TrayScrollModel(contentLength: content, viewportLength: 844,
+                                    offset: 0, lastCardLength: cardH)
+        let base = screen.minY + margin
+
+        // Сопоставление идёт по НАСТОЯЩЕМУ индексу карточки, а не по месту в
+        // списке видимых: когда одна выпадает, места сдвигаются, и сравнение
+        // пошло бы между разными карточками.
+        func frames(at offset: CGFloat) -> [Int: NSRect] {
+            model.offset = offset
+            let layout = thumbnailScrollLayout(
+                screenFrame: screen, edge: .right, cardWidth: cardW, cardHeights: heights,
+                hubSize: .zero, margin: margin, gap: gap, offset: offset, menuBarInset: 24,
+                deckProgress: TrayDeckClosure.value(presented: offset, model: model),
+                stow: model.stowProgress)
+            var result: [Int: NSRect] = [:]
+            for slot in layout.visible {
+                result[slot.index] = thumbnailVisibleFrame(
+                    slot: slot, cardSize: NSSize(width: cardW, height: cardH), vertical: true)
+            }
+            return result
+        }
+
+        var previous: [Int: NSRect] = [:]
+        var sawStowed = false
+        var topAtStow: CGFloat = .greatestFiniteMagnitude
+        var offset: CGFloat = 0
+        while offset <= model.stowedMaximumOffset + 0.001 {
+            model.offset = offset
+            let current = frames(at: offset)
+            let list = Array(current.values)
+            let union = list.reduce(CGRect.null) { $0.union($1) }
+
+            if !list.isEmpty {
+                // Низ шкатулки НЕПОДВИЖЕН: колода стягивается к основанию.
+                expect(union.minY >= base - 0.5,
+                       "низ колоды ушёл ниже основания при ходе \(offset): \(union.minY)")
+                // Ни одна карточка не выходит за экран.
+                for frame in list {
+                    expect(frame.minY >= screen.minY - 0.5 && frame.maxY <= screen.maxY + 0.5,
+                           "карточка вышла за экран по вертикали при ходе \(offset)")
+                    expect(frame.minX >= screen.minX - 0.5 && frame.maxX <= screen.maxX + 0.5,
+                           "карточка вышла за экран по горизонтали при ходе \(offset)")
+                }
+            }
+
+            // За упором верх монотонно убывает.
+            if offset > model.maximumOffset, !union.isNull {
+                expect(union.maxY <= topAtStow + 0.5,
+                       "верх колоды растёт на ступени при ходе \(offset)")
+                topAtStow = union.maxY
+            } else if !union.isNull {
+                topAtStow = union.maxY
+            }
+
+            // Разрывов нет НИГДЕ, включая границу упора.
+            for (index, frame) in current {
+                if let was = previous[index] {
+                    let shift = max(abs(frame.minY - was.minY), abs(frame.minX - was.minX))
+                    expect(shift <= 1,
+                           "разрыв \(shift) pt у карточки \(index) при ходе \(offset)")
+                }
+            }
+            previous = current
+            if offset >= model.stowedMaximumOffset - 0.001 {
+                sawStowed = true
+                expect(list.isEmpty, "в конце ступени карточки всё ещё видны: \(list.count)")
+            }
+            offset += 0.5
+        }
+        expect(sawStowed, "проход не дошёл до конца ступени")
+
+        // Прозрачность и масштаб монотонны и приходят в свои точки.
+        var previousOpacity: CGFloat = 2
+        var previousScale: CGFloat = 2
+        var step: CGFloat = 0
+        while step <= 1.0001 {
+            let bands = TrayStripLayout.stowed(
+                [TrayCardBand(position: 0, length: cardH, insetSteps: 0, contentFraction: 1,
+                              sliceFromFarSide: false, opacity: 1, shadowFraction: 1,
+                              zOrder: 0, hidden: false)], progress: step)
+            let band = bands[0]
+            expect(band.opacity <= previousOpacity + 0.0001, "прозрачность не монотонна")
+            expect(band.scale <= previousScale + 0.0001, "масштаб не монотонен")
+            previousOpacity = band.opacity
+            previousScale = band.scale
+            step += 0.05
+        }
+        expect(previousOpacity <= 0.0001, "прозрачность не пришла в ноль: \(previousOpacity)")
+        expect(abs(previousScale - TrayStow.stowedScale) < 0.001,
+               "масштаб не пришёл в свою точку: \(previousScale)")
+    }
+
+    /// Ступень переживает смену состава: снимок прилетел или ушёл, пока
+    /// колода убрана.
+    private static func stowSweepSurvivesCollectionChanges() {
+        let screen = NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let cardW: CGFloat = 200, cardH: CGFloat = 150, gap: CGFloat = 8, margin: CGFloat = 16
+
+        func sweep(count: Int) -> [NSRect] {
+            let heights = Array(repeating: cardH, count: count)
+            let content = heights.reduce(0, +) + gap * CGFloat(max(0, count - 1))
+            var model = TrayScrollModel(contentLength: content, viewportLength: 844,
+                                        offset: 0, lastCardLength: cardH)
+            model.offset = model.stowedMaximumOffset
+            let layout = thumbnailScrollLayout(
+                screenFrame: screen, edge: .right, cardWidth: cardW, cardHeights: heights,
+                hubSize: .zero, margin: margin, gap: gap, offset: model.offset, menuBarInset: 24,
+                deckProgress: TrayDeckClosure.value(presented: model.offset, model: model),
+                stow: model.stowProgress)
+            return layout.visible.map {
+                thumbnailVisibleFrame(slot: $0, cardSize: NSSize(width: cardW, height: cardH),
+                                      vertical: true)
+            }
+        }
+
+        for count in [1, 2, 3, 5, 8] {
+            expect(sweep(count: count).isEmpty,
+                   "при \(count) снимках убранная колода всё ещё видна")
+        }
     }
 
     private static func offsetMovesCards() {
