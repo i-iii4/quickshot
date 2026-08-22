@@ -20,17 +20,122 @@ struct TrayGestureInput {
     var deviceLookup: () -> UInt64? = { nil }
 }
 
+/// Оценка скорости ленты по событиям, pt/с. Нужна пружине границы — без
+/// передачи скорости движение рвётся в момент отпускания (`TR-13`).
+struct TrayVelocityEstimator: Equatable {
+    private(set) var value: CGFloat = 0
+    private(set) var lastTimestamp: TimeInterval = 0
+
+    /// История начинается заново. Обнулять её на каждом событии нельзя — так
+    /// ломается оценка скорости, а с ней проекция броска.
+    mutating func restart(at timestamp: TimeInterval) {
+        value = 0
+        lastTimestamp = timestamp
+    }
+
+    /// Сглаживание убирает выброс от одиночного рваного кадра, иначе он задал
+    /// бы скорость передачи пружине.
+    mutating func track(movement: CGFloat, at timestamp: TimeInterval) {
+        defer { lastTimestamp = timestamp }
+        let dt = timestamp - lastTimestamp
+        guard dt > 0.0005, dt < 0.2 else { return }
+        let instant = movement / CGFloat(dt)
+        let alpha: CGFloat = 0.3
+        value = value * (1 - alpha) + instant * alpha
+    }
+
+    /// Скорость текущего кадра: у отскока сглаженная оценка уже испорчена
+    /// зажатыми кадрами (`TR-13`), поэтому там нужна именно эта.
+    mutating func frameVelocity(delta: CGFloat, at timestamp: TimeInterval) -> CGFloat {
+        let dt = max(0.001, timestamp - lastTimestamp)
+        lastTimestamp = timestamp
+        return delta / CGFloat(dt)
+    }
+}
+
+/// Выбор оси раскрытия по ходу пальца (`TR-38`).
+///
+/// Ось меняется ТОЛЬКО из собранного состояния. Раскрытая лента продолжает
+/// жить по своей оси до самого возврата — смена системы координат под
+/// раскрытой лентой давала прыжки, случайные щелчки и переходы в чужие
+/// состояния (приёмка 20.08.2026).
+struct TrayAxisPicker: Equatable {
+    enum Decision: Equatable {
+        /// Ход по своей оси либо ось уже выбрана: лента работает.
+        case proceed
+        /// Направление ещё не явное: ход копится, лента стоит.
+        case wait
+        /// Заявка на смену распознана.
+        case switchTo(ThumbnailLayoutEdge)
+    }
+
+    /// Порог выбора оси. Столько же, сколько система тратит на распознавание
+    /// направления свайпа: меньше — ось скачет на дрожании руки.
+    static let threshold: CGFloat = 10
+
+    private(set) var accumulatedX: CGFloat = 0
+    private(set) var accumulatedY: CGFloat = 0
+
+    /// Счёт направления начинается с этой точки.
+    mutating func restart() {
+        accumulatedX = 0
+        accumulatedY = 0
+    }
+
+    mutating func decide(deltaX: CGFloat,
+                         deltaY: CGFloat,
+                         began: Bool,
+                         activeEdge: ThumbnailLayoutEdge,
+                         base: ThumbnailLayoutEdge,
+                         alternate: ThumbnailLayoutEdge?) -> Decision {
+        if began { restart() }
+        accumulatedX += deltaX
+        accumulatedY += deltaY
+
+        // Движение ВДОЛЬ текущей оси не ждёт порога: это не заявка на смену
+        // направления, а обычная работа с лентой, и задерживать её нельзя —
+        // иначе первые точки хода в упор съедались бы и резинка начиналась с
+        // опозданием.
+        let along = activeEdge.isVertical ? abs(accumulatedY) : abs(accumulatedX)
+        let across = activeEdge.isVertical ? abs(accumulatedX) : abs(accumulatedY)
+        guard across > along else { return .proceed }
+
+        // Заявка на смену: ждём порога, пока направление не станет явным.
+        guard let vertical = trayAxisPick(accumulatedX: accumulatedX,
+                                          accumulatedY: accumulatedY,
+                                          threshold: Self.threshold) else { return .wait }
+        let chosen = vertical
+            ? (base.isVertical ? base : (alternate ?? base))
+            : (base.isVertical ? (alternate ?? base) : base)
+        guard chosen != activeEdge else { return .proceed }
+        return .switchTo(chosen)
+    }
+}
+
+/// Кому принадлежит инерция у границы ленты.
+struct TrayBoundaryGate: Equatable {
+    /// Инерция отдана пружине границы: её события механика не читает вовсе
+    /// (`TR-13`). Так же ведёт себя системный скролл.
+    private(set) var handedToSpring = false
+
+    mutating func handOff() { handedToSpring = true }
+    mutating func reset() { handedToSpring = false }
+
+    /// Съедает ли граница это событие. Событие догона после передачи пружине
+    /// до ленты не доходит: иначе первое же его событие глушило саму пружину.
+    mutating func swallows(momentumPhase: NSEvent.Phase) -> Bool {
+        guard handedToSpring, momentumPhase != [] else { return false }
+        if momentumPhase == .ended { handedToSpring = false }
+        return true
+    }
+}
+
 /// Состояние, принадлежащее жесту. Раньше эти величины лежали отдельными
 /// полями менеджера, и любая правка обработчика обязана была помнить их все.
 struct TrayGestureState: Equatable {
-    /// Накопленный ход выбора оси (`TR-38`).
-    var axisPickupX: CGFloat = 0
-    var axisPickupY: CGFloat = 0
-    /// Сглаженная оценка скорости ленты, pt/с.
-    var scrollVelocity: CGFloat = 0
-    var lastScrollTimestamp: TimeInterval = 0
-    /// Инерция отдана пружине границы: её события механика не читает (`TR-13`).
-    var momentumHandedToSpring = false
+    var axis = TrayAxisPicker()
+    var velocity = TrayVelocityEstimator()
+    var boundary = TrayBoundaryGate()
     var scrollGestureActive = false
     /// Была ли колода собрана на прошлом событии.
     var wasGathered = true
@@ -81,8 +186,6 @@ protocol TrayGestureOutput: AnyObject {
 /// доступ к одной переменной.
 @MainActor
 final class TrayGestureCore {
-    /// Мёртвая зона распознавания направления (`TR-38`).
-    static let axisPickThreshold: CGFloat = 10
     /// Щелчок колеса приходит в строках, а не в точках.
     static let wheelLineHeight: CGFloat = 40
 
@@ -93,60 +196,29 @@ final class TrayGestureCore {
         model.offset >= model.maximumOffset - 0.5
     }
 
-    /// Выбирает ось раскрытия по ходу пальца.
-    ///
-    /// Ось меняется ТОЛЬКО из собранного состояния. Раскрытая лента
-    /// продолжает жить по своей оси до самого возврата — смена системы
-    /// координат под раскрытой лентой давала прыжки, случайные щелчки и
-    /// переходы в чужие состояния (приёмка 20.08.2026).
+    /// Прогоняет событие через выбор оси. `false` — лента стоит, ход копится.
     private func pickOpenAxis(_ input: TrayGestureInput, out: TrayGestureOutput) -> Bool {
-        if input.phase == .began {
-            state.axisPickupX = 0
-            state.axisPickupY = 0
+        switch state.axis.decide(deltaX: input.deltaX,
+                                 deltaY: input.deltaY,
+                                 began: input.phase == .began,
+                                 activeEdge: out.gestureActiveEdge,
+                                 base: out.gestureBaseEdge,
+                                 alternate: out.gestureAlternateEdge) {
+        case .proceed:
+            return true
+        case .wait:
+            return false
+        case .switchTo(let edge):
+            out.gestureSwitchAxis(to: edge)
+            return true
         }
-        state.axisPickupX += input.deltaX
-        state.axisPickupY += input.deltaY
-
-        // Движение ВДОЛЬ текущей оси не ждёт порога: это не заявка на смену
-        // направления, а обычная работа с лентой, и задерживать её нельзя —
-        // иначе первые точки хода в упор съедались бы и резинка начиналась с
-        // опозданием.
-        let activeEdge = out.gestureActiveEdge
-        let along = activeEdge.isVertical ? abs(state.axisPickupY) : abs(state.axisPickupX)
-        let across = activeEdge.isVertical ? abs(state.axisPickupX) : abs(state.axisPickupY)
-        guard across > along else { return true }
-
-        // Заявка на смену: ждём порога, пока направление не станет явным.
-        guard let vertical = trayAxisPick(accumulatedX: state.axisPickupX,
-                                          accumulatedY: state.axisPickupY,
-                                          threshold: Self.axisPickThreshold) else { return false }
-        let base = out.gestureBaseEdge
-        let alternate = out.gestureAlternateEdge
-        let chosen = vertical
-            ? (base.isVertical ? base : (alternate ?? base))
-            : (base.isVertical ? (alternate ?? base) : base)
-        guard chosen != activeEdge else { return true }
-        out.gestureSwitchAxis(to: chosen)
-        return true
     }
 
     /// История скорости начинается заново: прежние отсчёты сняты с движения по
     /// другой оси. Обнулять её на каждом событии нельзя — так ломается оценка
     /// скорости, а с ней проекция броска.
     func resetVelocity(at timestamp: TimeInterval) {
-        state.scrollVelocity = 0
-        state.lastScrollTimestamp = timestamp
-    }
-
-    /// Оценка скорости ленты по событиям, pt/с. Сглаживание убирает выброс от
-    /// одиночного рваного кадра, иначе он задал бы скорость передачи пружине.
-    func trackVelocity(movement: CGFloat, at timestamp: TimeInterval) {
-        defer { state.lastScrollTimestamp = timestamp }
-        let dt = timestamp - state.lastScrollTimestamp
-        guard dt > 0.0005, dt < 0.2 else { return }
-        let instant = movement / CGFloat(dt)
-        let alpha: CGFloat = 0.3
-        state.scrollVelocity = state.scrollVelocity * (1 - alpha) + instant * alpha
+        state.velocity.restart(at: timestamp)
     }
 
     /// Жест завершён извне (лента спрятана, карточки схлопнуты).
@@ -155,7 +227,7 @@ final class TrayGestureCore {
     }
 
     func handOffMomentumToSpring() {
-        state.momentumHandedToSpring = true
+        state.boundary.handOff()
     }
 
     /// Непрерывная прокрутка ленты (`TR-1`, `TR-2`). Пошаговое переключение
@@ -176,8 +248,7 @@ final class TrayGestureCore {
             // Колода только что собралась: направление считаем с этой точки,
             // иначе в счётчике остаётся ход, которым её и собирали, и он
             // перевешивает новое направление (приёмка 21.08.2026).
-            state.axisPickupX = 0
-            state.axisPickupY = 0
+            state.axis.restart()
         }
         if out.gestureAlternateEdge != nil, gathered, input.momentumPhase == [],
            !pickOpenAxis(input, out: out) { return }
@@ -201,9 +272,8 @@ final class TrayGestureCore {
 
         if input.phase == .began {
             // Новый жест — новая история скорости.
-            state.scrollVelocity = 0
-            state.lastScrollTimestamp = input.timestamp
-            state.momentumHandedToSpring = false
+            state.velocity.restart(at: input.timestamp)
+            state.boundary.reset()
             // Палец коснулся во время догона: длинная инерционная подача
             // пережимается в короткую от текущего значения — перенацеливание
             // вместо среза (скилл, прерываемость).
@@ -213,10 +283,7 @@ final class TrayGestureCore {
         // общего блока, где события отменяют аниматоры: иначе первое же её
         // событие глушило саму пружину (`TR-13`). Так же ведёт себя системный
         // скролл: после передачи границе затухание не применяется.
-        if state.momentumHandedToSpring, input.momentumPhase != [] {
-            if input.momentumPhase == .ended { state.momentumHandedToSpring = false }
-            return
-        }
+        if state.boundary.swallows(momentumPhase: input.momentumPhase) { return }
         if hasPhases {
             // Новое событие отменяет отложенный возврат: жест продолжается.
             out.gestureCancelSettleAnimation(bumpGeneration: true)
@@ -256,10 +323,8 @@ final class TrayGestureCore {
             if TrayBoundaryHandoff.shouldBounce(model: out.gestureModel, delta: delta,
                                                 fingersDown: fingersDown,
                                                 isMomentum: input.momentumPhase != []) {
-                let dt = max(0.001, input.timestamp - state.lastScrollTimestamp)
-                let outward = delta / CGFloat(dt)
-                state.lastScrollTimestamp = input.timestamp
-                state.momentumHandedToSpring = true
+                let outward = state.velocity.frameVelocity(delta: delta, at: input.timestamp)
+                state.boundary.handOff()
                 out.gestureRunBoundarySpring(from: out.gestureModel.offset, velocity: outward)
                 return
             }
@@ -269,7 +334,7 @@ final class TrayGestureCore {
             // подачей, видимая позиция остаётся непрерывной. Сдвиг больше
             // порога восприятия за один кадр запрещён (`TR-29`).
             out.gestureWriteModel(result.model, absorbJump: result.click != nil)
-            trackVelocity(movement: out.gestureModel.offset - before, at: input.timestamp)
+            state.velocity.track(movement: out.gestureModel.offset - before, at: input.timestamp)
             if let click = result.click {
                 // Под пальцем догон короткий и без перелёта: палец сохраняет
                 // контроль над моделью, затухает только разница. На инерции —
@@ -304,7 +369,7 @@ final class TrayGestureCore {
             // Системный скролл после отпускания за краем инерцию тоже не
             // читает (`TR-13`).
             state.scrollGestureActive = false
-            state.momentumHandedToSpring = true
+            state.boundary.handOff()
             out.gestureSettleScrollAnimated()
         } else if input.phase == .ended || input.phase == .cancelled {
             state.scrollGestureActive = false
@@ -313,7 +378,7 @@ final class TrayGestureCore {
             // доезда. Иначе бросок, не дотянувший чуть-чуть, читается как
             // «не сработало».
             if !out.gestureDetentEngaged,
-               TrayFlickProjection.shouldSnap(model: out.gestureModel, velocity: state.scrollVelocity) {
+               TrayFlickProjection.shouldSnap(model: out.gestureModel, velocity: state.velocity.value) {
                 out.gestureSnapByFlick()
                 return
             }

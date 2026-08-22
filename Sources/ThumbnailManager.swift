@@ -883,7 +883,7 @@ final class ThumbnailManager {
         detent.sync(with: scrollModel)
         performDetentClick(.snapIn, profile: .inertia)
         applyScrollOffset()
-        debugTrayLog("защёлка по броску: скорость=\(Int(gestureCore.state.scrollVelocity)) pt/с")
+        debugTrayLog("защёлка по броску: скорость=\(Int(gestureCore.state.velocity.value)) pt/с")
     }
 
     /// Отложенный возврат: любое следующее событие жеста или инерции его
@@ -935,8 +935,8 @@ final class ThumbnailManager {
         // Пружина стартует со скоростью жеста. Оценка скорости протухает,
         // когда палец замер: событий нет, значение остаётся старым, и после
         // паузы пружина дёргала ленту. Пауза длиннее 0.1 с обнуляет передачу.
-        let sinceLastEvent = ProcessInfo.processInfo.systemUptime - gestureCore.state.lastScrollTimestamp
-        let releaseVelocity = sinceLastEvent < 0.1 ? gestureCore.state.scrollVelocity : 0
+        let sinceLastEvent = ProcessInfo.processInfo.systemUptime - gestureCore.state.velocity.lastTimestamp
+        let releaseVelocity = sinceLastEvent < 0.1 ? gestureCore.state.velocity.value : 0
         runBoundarySpring(from: target, displacement: from - target, velocity: releaseVelocity,
                           onDone: { [weak self] in
             guard let self else { return }

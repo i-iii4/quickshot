@@ -199,13 +199,13 @@ final class BaselineRun {
                 fmt(probe.model.rawOffset),
                 probe.detent.engaged ? "1" : "0",
                 fmt(probe.detent.strain),
-                fmt(s.scrollVelocity),
-                fmt(CGFloat(s.lastScrollTimestamp)),
-                s.momentumHandedToSpring ? "1" : "0",
+                fmt(s.velocity.value),
+                fmt(CGFloat(s.velocity.lastTimestamp)),
+                s.boundary.handedToSpring ? "1" : "0",
                 s.scrollGestureActive ? "1" : "0",
                 s.wasGathered ? "1" : "0",
-                fmt(s.axisPickupX),
-                fmt(s.axisPickupY),
+                fmt(s.axis.accumulatedX),
+                fmt(s.axis.accumulatedY),
                 probe.edge.rawValue,
                 probe.effects.joined(separator: ",")
             ].joined(separator: "|"))
