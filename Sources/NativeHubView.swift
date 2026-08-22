@@ -2621,7 +2621,7 @@ final class NativeCasePanelView: NSView {
         setCount(0)
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не поддерживается") }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     func setCount(_ count: Int) {
         guard count != lastCount else { return }

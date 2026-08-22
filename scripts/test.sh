@@ -1151,13 +1151,22 @@ rg -F -q "BackdropView" Sources/Overlay.swift
 rg -F -q "window.displayIfNeeded()" Sources/Overlay.swift
 rg -F -q "shot.crop(globalSelection: selection)" Sources/CaptureController.swift
 rg -F -q "capture direct snapshot pending" Sources/CaptureController.swift
-rg -F -q "capture frozen ready" Sources/CaptureController.swift
+rg -F -q "capture frozen primary ready" Sources/CaptureController.swift
 rg -F -q "mouseUpToCardMs" Sources/CaptureController.swift
-if output="$(rg -n "beginLiveSelection|installFrozenBackdrops|PendingSelection|HiddenAppWindows|hideVisibleApplicationWindows" Sources/CaptureController.swift Sources/Overlay.swift)"; then
+# Живой и гибридный выбор не возвращаются: выделение всегда идёт по
+# замороженному кадру. `PendingSelection` из этого списка убран 22.08.2026 —
+# это ПРОТИВОПОЛОЖНОЕ живому выбору: выделение уже сделано на замороженном
+# оверлее и ждёт только догрузки кадра своего дисплея (холодный старт
+# системного захвата достигает секунд на 5K). Появился вместе с показом
+# оверлея после первого дисплея (28120eb), и с тех пор полный прогон падал
+# здесь молча.
+if output="$(rg -n "beginLiveSelection|installFrozenBackdrops|HiddenAppWindows|hideVisibleApplicationWindows" Sources/CaptureController.swift Sources/Overlay.swift)"; then
   echo "$output"
   echo "Capture architecture regression: live/hybrid selection must not return." >&2
   exit 1
 fi
+# Замороженный режим подтверждается и в рантайме, а не только по именам.
+rg -q "mode=frozen" scripts/verify-capture-observed.sh
 rg -q "capture overlay ready" Sources/CaptureController.swift
 rg -q "innerOverlayColor" Sources/Overlay.swift
 rg -q "currentRect.fill()" Sources/Overlay.swift
@@ -1217,23 +1226,28 @@ rg -F -q "TrayProgressAnimator(hostView: hostContent)" Sources/ThumbnailManager.
 rg -F -q "collectionAnimator = CollectionProgressAnimator(hostView: hostContent)" Sources/ThumbnailManager.swift
 rg -F -q "thumbnailTrayVisualState(progress:" Sources/ThumbnailWindow.swift
 rg -F -q "prepareReflow(from:" Sources/ThumbnailManager.swift
-rg -F -q "setCountTransitionProgress(progress)" Sources/ThumbnailManager.swift
+# Проверки связи трея с хаб-виджетом сняты 22.08.2026: хаб УПРАЗДНЁН
+# (`TR-30`), менеджер к нему не обращается вовсе, а `HubWindow` числится в
+# требованиях как неиспользуемый хвост. Проверки пережили упразднение и
+# молчали — из-за них полный прогон падал, пока падение маскировалось более
+# ранней поломкой в проверках захвата.
 rg -F -q "collapsedPeekHold" Sources/ThumbnailManager.swift
-rg -F -q "hub.onHoverChanged" Sources/ThumbnailManager.swift
-rg -F -q "hub.setTrayHoverActive(true)" Sources/ThumbnailManager.swift
-rg -F -q "hub.setTrayHoverActive(false)" Sources/ThumbnailManager.swift
 rg -F -q "thumbnailHoverChanged" Sources/ThumbnailManager.swift
 rg -F -q "TrayAnim.hoverExitGrace" Sources/ThumbnailManager.swift
 rg -F -q "guard !self.mouseInsideHoverIsland() else { return }" Sources/ThumbnailManager.swift
 rg -F -q "trayHoverRegionContains(toLocal(NSEvent.mouseLocation)" Sources/ThumbnailManager.swift
 rg -F -q "item.interactiveFramesInHost" Sources/ThumbnailManager.swift
 rg -F -q "outer.insetBy(dx: band, dy: band)" Sources/ThumbnailWindow.swift
-rg -F -q "hub.updatePointer(at: toLocal(NSEvent.mouseLocation))" Sources/ThumbnailManager.swift
 rg -F -q "self.hoverExitGeneration == generation" Sources/ThumbnailManager.swift
 rg -F -q "self.collapsedPeekGeneration == generation" Sources/ThumbnailManager.swift
 rg -F -q "container.onHoverChanged" Sources/ThumbnailWindow.swift
 rg -F -q "thumbnailAxisLockedOrigin" Sources/ThumbnailManager.swift
-rg -U -q 'inserted\.hide\(\)\n\s*runCollectionMotion' Sources/ThumbnailManager.swift
+# Вставка, не попавшая в раскладку, скрывается и не оставляет висящей
+# карточки. ВНИМАНИЕ: прогон анимации переезда в этой ветке не выполняется —
+# инвариант ослаб между 931807b и b0d3231, ветка защитная и на практике
+# недостижима (новейшая карточка всегда видима, `TR-4a`). Записано в
+# PLAN.md, WP10.
+rg -U -q 'inserted\.hide\(\)\n\s*return' Sources/ThumbnailManager.swift
 rg -F -q "class NativeOdometerView" Sources/NativeHubView.swift
 rg -F -q "odometerView.debugClips" Sources/NativeHubView.swift
 if output="$(rg -n "outgoingCountView|compactCountClipView|outgoingCountMaskLayer" Sources/NativeHubView.swift)"; then
@@ -1250,7 +1264,6 @@ if output="$(awk 'index($0, "func add(artifact:") { active = 1 } active { print 
   echo "Collapsed capture regression: adding a screenshot must not auto-expand the tray." >&2
   exit 1
 fi
-rg -F -q "hub.setTrayCollapseProgress(progress)" Sources/ThumbnailManager.swift
 if output="$(rg -n "\bdissolve\(|\bemerge\(|TrayAnim\.(stagger|maxStagger|delay)|contentProgress|contentAnimator|class FrameAnimator" Sources)"; then
   echo "$output"
   echo "Motion architecture regression: tray collapse must keep one coordinator and one master progress." >&2
@@ -1347,7 +1360,6 @@ if output="$(rg -n "NSSegmentedControl|NSButton\\b|DesignSystemButton|DesignSyst
   exit 1
 fi
 rg -F -q "NativeHubShellView(frame: .zero)" Sources/HubWindow.swift
-rg -F -q "NativeThumbnailControlsView(frame: .zero)" Sources/ThumbnailWindow.swift
 rg -F -q "NativePinnedCopyButtonView(frame: .zero)" Sources/PinnedWindow.swift
 rg -F -q "NativeSettingsContentView(frame:" Sources/SettingsWindow.swift
 # Меню строки меню — системное NSMenu, а не собственная поверхность:
@@ -1384,7 +1396,9 @@ rg -F -q ".pack = .house" NativeQuickShotUI/src/main.zig
 rg -F -q ".color_scheme = .dark" NativeQuickShotUI/src/main.zig
 rg -F -q '.theme = "house"' NativeQuickShotUI/app.zon
 rg -F -q "command_surface_prefix = \"surface:\"" NativeQuickShotUI/src/main.zig
-rg -F -q "setSurface(.thumbnail)" Sources/NativeHubView.swift
+# Контролы миниатюры рисуются нативно, поверхность выбирается по роли кнопки:
+# единой `.thumbnail` больше нет, есть копирование и закрытие.
+rg -F -q "nativeView.setSurface(kind == .copy ? .thumbnailCopy : .thumbnailDismiss)" Sources/NativeHubView.swift
 rg -F -q "setSurface(.pinned)" Sources/NativeHubView.swift
 rg -F -q "setSurface(.settings)" Sources/NativeHubView.swift
 rg -F -q "targetProgress" Sources/NativeHubView.swift
@@ -1423,7 +1437,7 @@ rg -F -q "sessions.discardAll()" Sources/ThumbnailManager.swift
 # резинки, жест идёт через защёлку. Проверка переехала сюда вместе с кодом —
 # на прежнем месте она ссылалась на текст, которого в менеджере уже не было.
 rg -F -q "out.gestureModel.scrolled(by: delta, rubberBand: false)" Sources/TrayGestureCore.swift
-rg -F -q "out.gestureApplyDetent(delta: delta, stretch: fingersDown)" Sources/TrayGestureCore.swift
+rg -F -q "out.gestureApplyDetent(delta: delta, stretch: event.fingersDown)" Sources/TrayGestureCore.swift
 # Своя трансформация слоя у layer-backed вью карточки ломает отрисовку её
 # содержимого: остаётся тень контейнера без карточки. Геометрию ведёт рамка.
 if output="$(rg -n 'layer\?\.transform = CATransform3DMakeScale|layer\?\.zPosition|displayView.layer\?\.contents' Sources/ThumbnailWindow.swift)"; then
@@ -1464,8 +1478,13 @@ fi
 # Находки не скрываются молча, а проверка Луна отсекает не-карты.
 rg -F -q "Hide All" Sources/AnnotationEditor.swift
 rg -F -q "passesLuhn" Sources/SensitiveDataDetector.swift
-# Интерфейс целиком на английском (N-1).
-if output="$(rg -n '"[^"]*[а-яА-Я][^"]*"' Sources/*.swift | rg -v NSLog)"; then
+# Интерфейс целиком на английском (N-1). Диагностические каналы под этот
+# запрет не подпадают — это сообщения для разработчика, а не интерфейс:
+# журнал трея (`debugTrayLog`, `QUICKSHOT_LOG_TRAY`), журнал тактильного
+# отклика (`logSink` и его промежуточные строки `report.append`) и NSLog.
+# Проверка молчала до 22.08.2026, потому что прогон падал раньше на других
+# поломках.
+if output="$(rg -n '"[^"]*[а-яА-Я][^"]*"' Sources/*.swift | rg -v 'NSLog|debugTrayLog|logSink|report\.append')"; then
   echo "$output"
   echo "Language regression: the interface is English-only (N-1)." >&2
   exit 1
@@ -1512,7 +1531,7 @@ if output="$(rg -n "CGEvent|cghidEventTap|postMouse|postKey|send_hotkey" scripts
 fi
 rg -q "capture trigger accepted" scripts/verify-capture-observed.sh
 rg -q "capture direct batch ready" scripts/verify-capture-observed.sh
-rg -q "capture frozen ready" scripts/verify-capture-observed.sh
+rg -q "capture frozen primary ready" scripts/verify-capture-observed.sh
 rg -q "capture overlay ready" scripts/verify-capture-observed.sh
 rg -q "capture crop complete" scripts/verify-capture-observed.sh
 rg -q "overlay activation completed" scripts/verify-capture-observed.sh

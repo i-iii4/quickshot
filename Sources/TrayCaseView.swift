@@ -43,7 +43,7 @@ final class TrayCaseView: NSView {
         layer?.addSublayer(borderLayer)
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) не поддерживается") }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override func layout() {
         super.layout()
