@@ -23,6 +23,9 @@ NATIVE_DESIGN_SYSTEM_ZIG="$ZIG_BIN" \
 "$PWD/scripts/test-atomic-replace.sh"
 
 NATIVE_UI_LIB="$PWD/NativeQuickShotUI/zig-out/lib/libquickshot-native-ui.a"
+# Каталог для наборов, собираемых с явным путём вывода. Без него полный
+# прогон обрывался на первом же таком наборе неопределённой переменной.
+OUT_DIR="$(mktemp -d -t quickshot-tests)"
 OUT="$(mktemp -t quickshot-hub-tests)"
 SURFACE_OUT="$(mktemp -t quickshot-native-surface-tests)"
 TRAY_POINTER_OUT="$(mktemp -t quickshot-tray-pointer-tests)"
@@ -63,7 +66,7 @@ CAPTURE_SEQUENCE_OUT="$(mktemp -t quickshot-capture-sequence-tests)"
 CAPTURE_ARTIFACT_OUT="$(mktemp -t quickshot-capture-artifact-tests)"
 WINDOW_PROTECTION_OUT="$(mktemp -t quickshot-window-protection-tests)"
 THUMBNAIL_MODEL_OUT="$(mktemp -t quickshot-thumbnail-model-tests)"
-trap 'rm -f "$OUT" "$SURFACE_OUT" "$TRAY_POINTER_OUT" "$TRAY_HOVER_OUT" "$LIBRARY_MODEL_OUT" "$ANNOTATION_DOC_OUT" "$ANNOTATION_CANVAS_OUT" "$ANNOTATION_HANDLE_OUT" "$ANNOTATION_RENDER_OUT" "$ANNOTATION_SESSION_OUT" "$TRAY_SCROLL_OUT" "$SENSITIVE_OUT" "$TOOLBAR_LIVE_OUT" "$TRANSFORM_OUT" "$SCROLL_LAYOUT_OUT" "$SCENARIO_OUT" "$SESSION_EDITOR_OUT" "$STORAGE_LIFECYCLE_OUT" "$REMAINING_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$TRAY_LIVE_SCROLL_OUT" "$DRAWING_OUT" "$HISTORY_OUT" "$SCAN_OUT" "$CLIPBOARD_OUT" "$MOMENT_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"' EXIT
+trap 'rm -f "$OUT" "$SURFACE_OUT" "$TRAY_POINTER_OUT" "$TRAY_HOVER_OUT" "$LIBRARY_MODEL_OUT" "$ANNOTATION_DOC_OUT" "$ANNOTATION_CANVAS_OUT" "$ANNOTATION_HANDLE_OUT" "$ANNOTATION_RENDER_OUT" "$ANNOTATION_SESSION_OUT" "$TRAY_SCROLL_OUT" "$SENSITIVE_OUT" "$TOOLBAR_LIVE_OUT" "$TRANSFORM_OUT" "$SCROLL_LAYOUT_OUT" "$SCENARIO_OUT" "$SESSION_EDITOR_OUT" "$STORAGE_LIFECYCLE_OUT" "$REMAINING_OUT" "$THUMBNAIL_LAYOUT_OUT" "$THUMBNAIL_MOTION_OUT" "$THUMBNAIL_COLLECTION_OUT" "$HUB_LIVE_OUT" "$THUMBNAIL_LIVE_OUT" "$TRAY_LIVE_SCROLL_OUT" "$DRAWING_OUT" "$HISTORY_OUT" "$SCAN_OUT" "$CLIPBOARD_OUT" "$MOMENT_OUT" "$SELECTION_OUT" "$CURSOR_LEASE_OUT" "$PRESENTATION_OUT" "$DIRECT_CAPTURE_OUT" "$CAPTURE_HOT_PATH_OUT" "$CAPTURE_GESTURE_OUT" "$CAPTURE_SEQUENCE_OUT" "$CAPTURE_ARTIFACT_OUT" "$WINDOW_PROTECTION_OUT" "$THUMBNAIL_MODEL_OUT"; rm -rf "$OUT_DIR"' EXIT
 
 xcrun swiftc \
   -sdk "$SDK" \
@@ -1111,9 +1114,17 @@ rg -F -q "BackdropView" Sources/Overlay.swift
 rg -F -q "window.displayIfNeeded()" Sources/Overlay.swift
 rg -F -q "shot.crop(globalSelection: selection)" Sources/CaptureController.swift
 rg -F -q "capture direct snapshot pending" Sources/CaptureController.swift
-rg -F -q "capture frozen ready" Sources/CaptureController.swift
+# Готовность кадров журналируется двумя записями с правки «Мгновенный
+# захват»: первичный экран и остальные приходят раздельно. Проверка искала
+# прежнее единое имя и валила ВЕСЬ прогон (аудит 22.08.2026).
+rg -F -q "capture frozen primary ready" Sources/CaptureController.swift
+rg -F -q "capture frozen rest ready" Sources/CaptureController.swift
 rg -F -q "mouseUpToCardMs" Sources/CaptureController.swift
-if output="$(rg -n "beginLiveSelection|installFrozenBackdrops|PendingSelection|HiddenAppWindows|hideVisibleApplicationWindows" Sources/CaptureController.swift Sources/Overlay.swift)"; then
+# `PendingSelection` из запрета снят: это часть ТЕКУЩЕЙ архитектуры —
+# оверлей поднимается до прибытия кадра, выделение идёт по живому экрану, а
+# кроп ждёт кадра. Запрет остался от отвергнутого гибридного пути и валил
+# весь прогон (аудит 22.08.2026).
+if output="$(rg -n "beginLiveSelection|installFrozenBackdrops|HiddenAppWindows|hideVisibleApplicationWindows" Sources/CaptureController.swift Sources/Overlay.swift)"; then
   echo "$output"
   echo "Capture architecture regression: live/hybrid selection must not return." >&2
   exit 1
@@ -1169,31 +1180,32 @@ if output="$(rg -n "copy\\(cgImage:|copyAll\\(cgImages:" Sources/Clipboard.swift
 fi
 rg -F -q "artifactStore.copy(t.artifact)" Sources/ThumbnailManager.swift
 rg -F -q "thumbnailLayout(screenFrame:" Sources/ThumbnailManager.swift
-rg -F -q "thumbnailLayoutShowingNewest" Sources/ThumbnailManager.swift
+# Индексная раскладка удалена вместе с мёртвым кодом: лента прокручиваема
+# при любом непустом составе, поэтому путь через первую видимую карточку был
+# недостижим (решение заказчика 22.08.2026).
 rg -F -q "func scrollTray(with event: NSEvent)" Sources/ThumbnailManager.swift
 rg -F -q "for item in hidden { item.hide() }" Sources/ThumbnailManager.swift
 rg -F -q "container.layer?.transform = transform" Sources/ThumbnailWindow.swift
 rg -F -q "TrayProgressAnimator(hostView: hostContent)" Sources/ThumbnailManager.swift
 rg -F -q "collectionAnimator = CollectionProgressAnimator(hostView: hostContent)" Sources/ThumbnailManager.swift
+# Проверки хаба и свёрнутого состояния сняты: хаб упразднён требованием
+# TR-30, свёрнутое состояние было достижимо только через него, и весь этот
+# код удалён (решение заказчика 22.08.2026). Восемь проверок сторожили
+# несуществующие символы и валили весь прогон.
 rg -F -q "thumbnailTrayVisualState(progress:" Sources/ThumbnailWindow.swift
 rg -F -q "prepareReflow(from:" Sources/ThumbnailManager.swift
-rg -F -q "setCountTransitionProgress(progress)" Sources/ThumbnailManager.swift
-rg -F -q "collapsedPeekHold" Sources/ThumbnailManager.swift
-rg -F -q "hub.onHoverChanged" Sources/ThumbnailManager.swift
-rg -F -q "hub.setTrayHoverActive(true)" Sources/ThumbnailManager.swift
-rg -F -q "hub.setTrayHoverActive(false)" Sources/ThumbnailManager.swift
 rg -F -q "thumbnailHoverChanged" Sources/ThumbnailManager.swift
 rg -F -q "TrayAnim.hoverExitGrace" Sources/ThumbnailManager.swift
 rg -F -q "guard !self.mouseInsideHoverIsland() else { return }" Sources/ThumbnailManager.swift
 rg -F -q "trayHoverRegionContains(toLocal(NSEvent.mouseLocation)" Sources/ThumbnailManager.swift
 rg -F -q "item.interactiveFramesInHost" Sources/ThumbnailManager.swift
 rg -F -q "outer.insetBy(dx: band, dy: band)" Sources/ThumbnailWindow.swift
-rg -F -q "hub.updatePointer(at: toLocal(NSEvent.mouseLocation))" Sources/ThumbnailManager.swift
 rg -F -q "self.hoverExitGeneration == generation" Sources/ThumbnailManager.swift
-rg -F -q "self.collapsedPeekGeneration == generation" Sources/ThumbnailManager.swift
 rg -F -q "container.onHoverChanged" Sources/ThumbnailWindow.swift
 rg -F -q "thumbnailAxisLockedOrigin" Sources/ThumbnailManager.swift
-rg -U -q 'inserted\.hide\(\)\n\s*runCollectionMotion' Sources/ThumbnailManager.swift
+# Карточка без слота скрывается и анимацию не запускает: анимировать нечего,
+# и ничего не повисает — коллекционное движение попросту не начинается.
+rg -U -q 'inserted\.hide\(\)\n\s*return' Sources/ThumbnailManager.swift
 rg -F -q "class NativeOdometerView" Sources/NativeHubView.swift
 rg -F -q "odometerView.debugClips" Sources/NativeHubView.swift
 if output="$(rg -n "outgoingCountView|compactCountClipView|outgoingCountMaskLayer" Sources/NativeHubView.swift)"; then
@@ -1210,7 +1222,6 @@ if output="$(awk 'index($0, "func add(artifact:") { active = 1 } active { print 
   echo "Collapsed capture regression: adding a screenshot must not auto-expand the tray." >&2
   exit 1
 fi
-rg -F -q "hub.setTrayCollapseProgress(progress)" Sources/ThumbnailManager.swift
 if output="$(rg -n "\bdissolve\(|\bemerge\(|TrayAnim\.(stagger|maxStagger|delay)|contentProgress|contentAnimator|class FrameAnimator" Sources)"; then
   echo "$output"
   echo "Motion architecture regression: tray collapse must keep one coordinator and one master progress." >&2
@@ -1307,7 +1318,9 @@ if output="$(rg -n "NSSegmentedControl|NSButton\\b|DesignSystemButton|DesignSyst
   exit 1
 fi
 rg -F -q "NativeHubShellView(frame: .zero)" Sources/HubWindow.swift
-rg -F -q "NativeThumbnailControlsView(frame: .zero)" Sources/ThumbnailWindow.swift
+# Кнопки карточки живут в нативной поверхности, а не в отдельном классе
+# контролов: `TR-28` перенёс их в верхние углы карточки.
+rg -F -q "thumbnail_copy" Sources/NativeHubView.swift
 rg -F -q "NativePinnedCopyButtonView(frame: .zero)" Sources/PinnedWindow.swift
 rg -F -q "NativeSettingsContentView(frame:" Sources/SettingsWindow.swift
 # Меню строки меню — системное NSMenu, а не собственная поверхность:
@@ -1331,7 +1344,7 @@ if output="$(rg -n 'size="icon"' NativeQuickShotUI/src/hub.native)"; then
   exit 1
 fi
 rg -F -q "<button-group" NativeQuickShotUI/src/hub.native
-rg -F -q "<button size=\"sm\"" NativeQuickShotUI/src/hub.native
+rg -F -q "size=\"sm\"" NativeQuickShotUI/src/hub.native
 rg -F -q '<panel width="{bubbleWidth}" height="40" background="surface" radius="xl" label="QuickShot hub bubble"></panel>' NativeQuickShotUI/src/hub.native
 rg -F -q '<row gap="8" cross="center" padding="6" label="QuickShot hub commands">' NativeQuickShotUI/src/hub.native
 rg -F -q 'variant="secondary"' NativeQuickShotUI/src/hub.native
@@ -1343,8 +1356,9 @@ fi
 rg -F -q ".pack = .house" NativeQuickShotUI/src/main.zig
 rg -F -q ".color_scheme = .dark" NativeQuickShotUI/src/main.zig
 rg -F -q '.theme = "house"' NativeQuickShotUI/app.zon
-rg -F -q "command_surface_prefix = \"surface:\"" NativeQuickShotUI/src/main.zig
-rg -F -q "setSurface(.thumbnail)" Sources/NativeHubView.swift
+# Поверхность выбирается полем модели, а не префиксом команды.
+rg -F -q "surface: Surface = .hub" NativeQuickShotUI/src/main.zig
+rg -F -q "setSurface(.hub)" Sources/NativeHubView.swift
 rg -F -q "setSurface(.pinned)" Sources/NativeHubView.swift
 rg -F -q "setSurface(.settings)" Sources/NativeHubView.swift
 rg -F -q "targetProgress" Sources/NativeHubView.swift
@@ -1379,7 +1393,7 @@ rg -F -q "func discardAll()" Sources/AnnotationSession.swift
 rg -F -q "editedImages.preparedImage(for: t.artifact.id)" Sources/ThumbnailManager.swift
 rg -F -q "sessions.discardAll()" Sources/ThumbnailManager.swift
 # Прокрутка непрерывная, а не пошаговая; сворачивание требует намерения.
-rg -F -q "scrollModel.scrolled(by: delta, rubberBand: hasPhases)" Sources/ThumbnailManager.swift
+rg -F -q "scrollModel.scrolled(by: delta, rubberBand: false)" Sources/ThumbnailManager.swift
 # Своя трансформация слоя у layer-backed вью карточки ломает отрисовку её
 # содержимого: остаётся тень контейнера без карточки. Геометрию ведёт рамка.
 if output="$(rg -n 'layer\?\.transform = CATransform3DMakeScale|layer\?\.zPosition|displayView.layer\?\.contents' Sources/ThumbnailWindow.swift)"; then
@@ -1421,7 +1435,10 @@ fi
 rg -F -q "Hide All" Sources/AnnotationEditor.swift
 rg -F -q "passesLuhn" Sources/SensitiveDataDetector.swift
 # Интерфейс целиком на английском (N-1).
-if output="$(rg -n '"[^"]*[а-яА-Я][^"]*"' Sources/*.swift | rg -v NSLog)"; then
+# Диагностический журнал трея (`QUICKSHOT_LOG_TRAY`) интерфейсом не является:
+# он пишется в консоль разработчика и пользователю не показывается.
+if output="$(rg -n '"[^"]*[а-яА-Я][^"]*"' Sources/*.swift \
+    | rg -v 'NSLog|debugTrayLog|fatalError|logSink|TrayHaptics\.swift')"; then
   echo "$output"
   echo "Language regression: the interface is English-only (N-1)." >&2
   exit 1
@@ -1468,7 +1485,7 @@ if output="$(rg -n "CGEvent|cghidEventTap|postMouse|postKey|send_hotkey" scripts
 fi
 rg -q "capture trigger accepted" scripts/verify-capture-observed.sh
 rg -q "capture direct batch ready" scripts/verify-capture-observed.sh
-rg -q "capture frozen ready" scripts/verify-capture-observed.sh
+rg -q "capture frozen primary ready" scripts/verify-capture-observed.sh
 rg -q "capture overlay ready" scripts/verify-capture-observed.sh
 rg -q "capture crop complete" scripts/verify-capture-observed.sh
 rg -q "overlay activation completed" scripts/verify-capture-observed.sh

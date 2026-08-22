@@ -22,7 +22,7 @@ logs="$(/usr/bin/log show --last "${WINDOW_SECONDS}s" --info --debug --style com
 echo "$logs" | tail -120
 
 for token in "capture trigger accepted" "capture direct batch ready" \
-             "capture frozen ready" "capture overlay ready" \
+             "capture frozen primary ready" "capture overlay ready" \
              "overlay begin" "mode=frozen" "overlay activation completed"; do
   if ! echo "$logs" | rg -q "$token"; then
     echo "Observed capture verification: missing '$token'." >&2
