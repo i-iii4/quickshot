@@ -27,6 +27,7 @@ struct TrayGestureRoutingTests {
         run("каждый получатель — свой тип со своими методами", testPartiesAreSeparateTypes)
         run("каждый получатель сужает мир до своего", testPartiesNarrowTheirWorld)
         run("цепочка настоящая: лента не зовёт границу напрямую", testChainIsNotFaked)
+        run("конец жеста не оставляет накопленного хода", testEndClearsAxisTravel)
         run("следующий жест начинает счёт направления с нуля", testNoLeftoverState)
         run("обработчик не хранит полей состояния жеста", testHandlerHoldsNoState)
         run("обработчик остаётся коротким", testHandlerStaysShort)
@@ -206,6 +207,21 @@ struct TrayGestureRoutingTests {
                     "Бросок не защёлкнул ленту, эффекты: \(probe.effects)")
         try require(core.state.endedRecipients == TrayGestureRecipient.allCases,
                     "После броска конец дошёл не до всех: \(core.state.endedRecipients)")
+    }
+
+    /// Состояние не переживает событие, которое его завершает: иначе связь
+    /// неявная — «ход почистит начало следующего жеста».
+    private static func testEndClearsAxisTravel() throws {
+        let (core, probe) = make(gathered: true, alternate: .bottom)
+        core.handle(input(dx: 6, dy: 0, phase: .began), out: probe)
+        core.handle(input(dx: 6, dy: 0, phase: .changed, at: 10.02), out: probe)
+        try require(core.state.axis.accumulatedX != 0,
+                    "Ход не накопился — проверка бессмысленна")
+        core.handle(input(dx: 0, dy: 0, phase: .ended, at: 10.04), out: probe)
+        try require(core.state.axis.accumulatedX == 0 && core.state.axis.accumulatedY == 0,
+                    "После конца жеста остался ход: \(core.state.axis.accumulatedX), \(core.state.axis.accumulatedY)")
+        try require(core.state.endedRecipients == TrayGestureRecipient.allCases,
+                    "Конец жеста дошёл не до всех: \(core.state.endedRecipients)")
     }
 
     private static func testNoLeftoverState() throws {
