@@ -219,7 +219,8 @@ enum TrayStripLayout {
                       gap: CGFloat,
                       offset: CGFloat,
                       viewportLength: CGFloat,
-                      deckProgress: CGFloat = 0) -> [TrayCardBand] {
+                      deckProgress: CGFloat = 0,
+                      stow: CGFloat = 0) -> [TrayCardBand] {
         guard !cardLengths.isEmpty else { return [] }
         let count = cardLengths.count
         let e = edgeLength
@@ -357,7 +358,43 @@ enum TrayStripLayout {
             coverBottom = max(coverBottom, visibleFrom)
         }
 
-        return bands
+        return stowed(bands, progress: stow)
+    }
+
+    /// Убирание колоды (`TR-41`) как ЧАСТЬ РАСКЛАДКИ, а не наложение поверх.
+    ///
+    /// Колода уходит вглубь целиком: все полосы уменьшаются одним множителем
+    /// и стягиваются к ЯКОРЮ — верхнему краю колоды. Панель шкатулки стоит
+    /// у этого края, поэтому она остаётся неподвижной, а низ колоды
+    /// подтягивается к ней.
+    ///
+    /// Почему именно здесь. В трее один источник истины: постановка карточек,
+    /// контур шкатулки, попадание мыши и анимации читают результат раскладки.
+    /// Наложение трансформации на слой поверх раскладки невидимо для всех
+    /// троих — карточки рисуются в одном месте, а считаются в другом, отчего
+    /// шкатулка строится мимо, мышь попадает мимо, а часть колоды уезжает
+    /// (откат 21.08.2026, две попытки).
+    static func stowed(_ bands: [TrayCardBand], progress: CGFloat) -> [TrayCardBand] {
+        let p = min(1, max(0, progress))
+        guard p > 0.0001 else { return bands }
+        let scale = 1 - (1 - TrayStow.stowedScale) * p
+        let fade = 1 - p
+        // Якорь — верх колоды: самая дальняя точка видимых полос.
+        var anchor: CGFloat = 0
+        for band in bands where !band.hidden {
+            anchor = max(anchor, band.position + band.length)
+        }
+        return bands.map { band in
+            guard !band.hidden else { return band }
+            var next = band
+            next.position = anchor + (band.position - anchor) * scale
+            next.length = band.length * scale
+            next.scale = band.scale * scale
+            next.opacity = band.opacity * fade
+            next.shadowFraction = band.shadowFraction * fade
+            next.hidden = next.opacity <= 0.004
+            return next
+        }
     }
 
     /// Полоса запаркованной карточки: целая карточка в масштабе глубины минус
@@ -780,7 +817,7 @@ enum TrayDeckClosure {
 }
 
 /// Убирание КОЛОДЫ (`TR-41`): вторая ступень за собранным состоянием.
-/// Гаснет вся видимая лента как единый предмет, а не верхняя карточка. Спецификация — `SPEC_CARD_STOW.md`.
+/// Гаснет вся видимая лента как единый предмет. Спецификация — `SPEC_CARD_STOW.md`.
 ///
 /// Механика — НАПРЯЖЕНИЕ, а не прогресс. Карточка не уезжает за пальцем:
 /// она чуть пружинит, почти незаметно, напряжение копится, и за порогом
@@ -874,21 +911,6 @@ enum TrayStowAnim {
     /// Отклик возврата, когда порог не пройден. Короче: ничего не
     /// произошло, и задерживать на этом внимание незачем.
     static let releaseResponse: CFTimeInterval = 0.3
-
-    /// Глубина отдачи щелчка, доля хода натяжения. Собственная подача
-    /// ступени: в момент срабатывания колода на мгновение уходит ЧУТЬ ГЛУБЖЕ
-    /// упора и возвращается. Без неё щелчок не читается — он событие
-    /// скорости, и ему нужно движение, которое эту скорость покажет.
-    static let clickOvershoot: CGFloat = 0.35
-    /// Длительность отдачи. Короткая: щелчок — мгновение, а не анимация.
-    static let clickResponse: CFTimeInterval = 0.16
-
-    /// Отдача щелчка по времени: быстрый уход и мягкий возврат к нулю.
-    static func clickCurve(_ t: CGFloat) -> CGFloat {
-        let x = min(1, max(0, t))
-        // Полуволна синуса: ноль на концах, максимум в первой трети хода.
-        return sin(x * .pi) * (1 - x * 0.4)
-    }
 
     /// Кривая пружины с наследованием скорости жеста.
     ///
