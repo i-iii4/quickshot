@@ -1419,7 +1419,11 @@ rg -F -q "func discardAll()" Sources/AnnotationSession.swift
 rg -F -q "editedImages.preparedImage(for: t.artifact.id)" Sources/ThumbnailManager.swift
 rg -F -q "sessions.discardAll()" Sources/ThumbnailManager.swift
 # Прокрутка непрерывная, а не пошаговая; сворачивание требует намерения.
-rg -F -q "scrollModel.scrolled(by: delta, rubberBand: hasPhases)" Sources/ThumbnailManager.swift
+# Механика жеста живёт в TrayGestureCore: колесо шагает по дельте без
+# резинки, жест идёт через защёлку. Проверка переехала сюда вместе с кодом —
+# на прежнем месте она ссылалась на текст, которого в менеджере уже не было.
+rg -F -q "out.gestureModel.scrolled(by: delta, rubberBand: false)" Sources/TrayGestureCore.swift
+rg -F -q "out.gestureApplyDetent(delta: delta, stretch: fingersDown)" Sources/TrayGestureCore.swift
 # Своя трансформация слоя у layer-backed вью карточки ломает отрисовку её
 # содержимого: остаётся тень контейнера без карточки. Геометрию ведёт рамка.
 if output="$(rg -n 'layer\?\.transform = CATransform3DMakeScale|layer\?\.zPosition|displayView.layer\?\.contents' Sources/ThumbnailWindow.swift)"; then
