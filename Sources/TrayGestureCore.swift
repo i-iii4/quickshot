@@ -130,6 +130,18 @@ struct TrayBoundaryGate: Equatable {
     }
 }
 
+/// Получатели события жеста, в порядке прохождения. Первый взявший
+/// останавливает цепочку — раньше это выражалось восемью ранними выходами, и
+/// каждая новая ветка обязана была помнить все предыдущие.
+enum TrayGestureRecipient: String, CaseIterable {
+    /// Выбор оси раскрытия: пока направление не явное, лента стоит.
+    case axis
+    /// Граница ленты: отскок и инерция, отданная пружине.
+    case boundary
+    /// Сама лента: защёлка и прокрутка.
+    case strip
+}
+
 /// Состояние, принадлежащее жесту. Раньше эти величины лежали отдельными
 /// полями менеджера, и любая правка обработчика обязана была помнить их все.
 struct TrayGestureState: Equatable {
@@ -139,6 +151,11 @@ struct TrayGestureState: Equatable {
     var scrollGestureActive = false
     /// Была ли колода собрана на прошлом событии.
     var wasGathered = true
+    /// Кто взял последнее событие. Ведётся ради проверяемости маршрута: без
+    /// него «кто съел событие» видно только под отладчиком.
+    var lastTaker: TrayGestureRecipient?
+    /// Кому был разослан конец последнего жеста.
+    var endedRecipients: [TrayGestureRecipient] = []
 }
 
 /// Мир, с которым работает механика жеста: позиция ленты, защёлка, анимации,
@@ -251,7 +268,7 @@ final class TrayGestureCore {
             state.axis.restart()
         }
         if out.gestureAlternateEdge != nil, gathered, input.momentumPhase == [],
-           !pickOpenAxis(input, out: out) { return }
+           !pickOpenAxis(input, out: out) { return hand(to: .axis) }
         let vertical = out.gestureActiveEdge.isVertical
         // Ход, накопленный до выбора оси, лента НЕ наверстывает. Порог —
         // мёртвая зона распознавания направления, как у системных жестов:
@@ -283,7 +300,7 @@ final class TrayGestureCore {
         // общего блока, где события отменяют аниматоры: иначе первое же её
         // событие глушило саму пружину (`TR-13`). Так же ведёт себя системный
         // скролл: после передачи границе затухание не применяется.
-        if state.boundary.swallows(momentumPhase: input.momentumPhase) { return }
+        if state.boundary.swallows(momentumPhase: input.momentumPhase) { return hand(to: .boundary) }
         if hasPhases {
             // Новое событие отменяет отложенный возврат: жест продолжается.
             out.gestureCancelSettleAnimation(bumpGeneration: true)
@@ -326,7 +343,7 @@ final class TrayGestureCore {
                 let outward = state.velocity.frameVelocity(delta: delta, at: input.timestamp)
                 state.boundary.handOff()
                 out.gestureRunBoundarySpring(from: out.gestureModel.offset, velocity: outward)
-                return
+                return hand(to: .boundary)
             }
             let before = out.gestureModel.offset
             let result = out.gestureApplyDetent(delta: delta, stretch: fingersDown)
@@ -350,6 +367,7 @@ final class TrayGestureCore {
             out.gestureSyncDetent()
         }
 
+        hand(to: .strip)
         out.gestureApplyScrollOffset()
 
         if !hasPhases {
@@ -361,6 +379,7 @@ final class TrayGestureCore {
             // Инерция кончилась — жест завершён окончательно.
             state.scrollGestureActive = false
             out.gestureSettleScrollAnimated()
+            finishGesture(out: out)
         } else if (input.phase == .ended || input.phase == .cancelled),
                   abs(out.gestureModel.overshoot) > 0.5 {
             // Отпустили за краем: пружина возврата стартует со скоростью
@@ -371,6 +390,7 @@ final class TrayGestureCore {
             state.scrollGestureActive = false
             state.boundary.handOff()
             out.gestureSettleScrollAnimated()
+            finishGesture(out: out)
         } else if input.phase == .ended || input.phase == .cancelled {
             state.scrollGestureActive = false
             // `TR-36`: уверенный бросок к сбору защёлкивает ПО НАМЕРЕНИЮ —
@@ -380,6 +400,7 @@ final class TrayGestureCore {
             if !out.gestureDetentEngaged,
                TrayFlickProjection.shouldSnap(model: out.gestureModel, velocity: state.velocity.value) {
                 out.gestureSnapByFlick()
+                finishGesture(out: out)
                 return
             }
             // Пальцы сняты, но следом может пойти инерция. Возврат из-за края
@@ -387,6 +408,39 @@ final class TrayGestureCore {
             // событием инерции, которое снова тянуло ленту наружу — старт,
             // отмена, старт, и это читалось как дёрганье (приёмка 19.08.2026).
             out.gestureScheduleSettleAfterGesture()
+            finishGesture(out: out)
+        }
+    }
+
+    /// Отмечает получателя, взявшего событие.
+    private func hand(to recipient: TrayGestureRecipient) {
+        state.lastTaker = recipient
+    }
+
+    /// Конец жеста проходит по ВСЕМ получателям, а не съедается первой веткой.
+    ///
+    /// Сегодня оси и границе на конце жеста делать нечего, и это записано
+    /// здесь явно, а не подразумевается отсутствием кода. Любое изменение
+    /// того, ЧТО они делают, — отдельная задача: этот перенос поведение не
+    /// меняет.
+    private func finishGesture(out: TrayGestureOutput) {
+        state.endedRecipients = []
+        for recipient in TrayGestureRecipient.allCases {
+            switch recipient {
+            case .axis:
+                // Ход выбора оси обнуляется началом следующего жеста, а не
+                // концом текущего: инерция после отрыва идёт по уже выбранной
+                // оси.
+                break
+            case .boundary:
+                // Признаком передачи инерции распоряжаются сами ветки конца:
+                // отпускание за краем оставляет инерцию пружине.
+                break
+            case .strip:
+                // Посадку ленты выполняет ветка, определившая вид завершения.
+                break
+            }
+            state.endedRecipients.append(recipient)
         }
     }
 }

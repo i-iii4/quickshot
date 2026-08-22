@@ -340,10 +340,31 @@ xcrun swiftc \
   Sources/ThumbnailLayout.swift \
   Sources/ThumbnailMotion.swift \
   Sources/TrayGestureCore.swift \
+  Tests/TrayGestureProbe.swift \
   Tests/TrayGestureBaselineTests.swift \
   -o "$GESTURE_BASELINE_OUT"
 
 "$GESTURE_BASELINE_OUT"
+
+# Маршрут события: порядок получателей и рассылка конца жеста. Эталон
+# покрывает числа, эта проверка — устройство.
+GESTURE_ROUTING_OUT="$(mktemp -t quickshot-tray-gesture-routing)"
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
+  Sources/MotionCurves.swift \
+  Sources/TrayScrollModel.swift \
+  Sources/ThumbnailLayout.swift \
+  Sources/ThumbnailMotion.swift \
+  Sources/TrayGestureCore.swift \
+  Tests/TrayGestureProbe.swift \
+  Tests/TrayGestureRoutingTests.swift \
+  -o "$GESTURE_ROUTING_OUT"
+
+"$GESTURE_ROUTING_OUT"
 
 xcrun swiftc \
   -sdk "$SDK" \
