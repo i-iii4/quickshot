@@ -326,6 +326,25 @@ xcrun swiftc \
 
 "$TRAY_SCROLL_OUT"
 
+# Эталон механики жеста: перенос кода обязан оставить движение тем же до
+# последнего числа. Файл эталона снят один раз и не пересматривается.
+GESTURE_BASELINE_OUT="$(mktemp -t quickshot-tray-gesture-baseline)"
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
+  Sources/MotionCurves.swift \
+  Sources/TrayScrollModel.swift \
+  Sources/ThumbnailLayout.swift \
+  Sources/ThumbnailMotion.swift \
+  Sources/TrayGestureCore.swift \
+  Tests/TrayGestureBaselineTests.swift \
+  -o "$GESTURE_BASELINE_OUT"
+
+"$GESTURE_BASELINE_OUT"
+
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
@@ -626,6 +645,7 @@ xcrun swiftc \
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
   Sources/ThumbnailManager.swift \
+  Sources/TrayGestureCore.swift \
   Sources/TrayCaseView.swift \
   Sources/TrayHaptics.swift \
   Tests/EditorScanTests.swift \
@@ -811,6 +831,7 @@ xcrun swiftc \
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
   Sources/ThumbnailManager.swift \
+  Sources/TrayGestureCore.swift \
   Sources/TrayCaseView.swift \
   Sources/TrayHaptics.swift \
   Tests/ThumbnailCollectionBehaviorTests.swift \
@@ -899,6 +920,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
   Sources/ThumbnailManager.swift \
+  Sources/TrayGestureCore.swift \
   Sources/TrayCaseView.swift \
   Sources/TrayHaptics.swift \
   Tests/ThumbnailWindowLiveClickTests.swift \
@@ -986,6 +1008,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
   Sources/ThumbnailManager.swift \
+  Sources/TrayGestureCore.swift \
   Sources/TrayCaseView.swift \
   Sources/TrayHaptics.swift \
   Tests/TrayLiveScrollTests.swift \
