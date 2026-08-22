@@ -48,76 +48,15 @@ struct TrayScrollModel: Equatable {
     /// поэтому ход — ровно до начала новейшей карточки.
     var maximumOffset: CGFloat { max(0, contentLength - lastCardLength) }
 
-    /// Длина СТУПЕНИ УБИРАНИЯ (`TR-41`) — участка хода ЗА упором, на котором
-    /// колода уходит вглубь и гаснет.
-    ///
-    /// Жест ведёт ленту по этому участку НЕ напрямую: он копит напряжение, а
-    /// координата отражает лишь его видимую часть — 8 pt из всей длины. Это
-    /// и есть «колода чуть пружинит, почти незаметно». Прыжок к концу
-    /// участка делает щелчок, после срабатывания.
-    ///
-    /// Убирание не отдельное состояние, а продолжение той же координаты. Две
-    /// независимые величины — положение ленты и прогресс убирания — некому
-    /// согласовывать: лента двигалась при ненулевом прогрессе, и геометрия
-    /// рассыпалась, карточки уходили за экран (откат 21.08.2026, три
-    /// попытки). Одна координата снимает вопрос: согласовывать нечего.
-    static let stowSpan: CGFloat = 120
-
-    /// Предел хода вместе со ступенью.
-    var stowedMaximumOffset: CGFloat { maximumOffset + Self.stowSpan }
-
-    /// ФАЗА ленты (`TR-41`) — дискретная величина: колода собрана или
-    /// убрана. Промежуточного значения нет; то, что видно во время
-    /// движения, — это положение ВНУТРИ фазы, а не третье состояние.
-    ///
-    /// Меняется ТОЛЬКО щелчком: ни движение пальца, ни отпускание, ни новый
-    /// снимок, ни прокрутка её не трогают. Щелчок же двигает координату к
-    /// новому пределу, поэтому фаза и координата меняются одним действием и
-    /// разойтись не могут.
-    ///
-    /// Владелец у фазы ОДИН — `TrayStowGate`; сюда она попадает через
-    /// `apply(phase:)`. Прежде она хранилась в двух местах и синхронизировалась
-    /// вручную в шести, вопреки прямому обещанию в документации структуры
-    /// (аудит 22.08.2026).
-    private(set) var stowed = false
-
-    /// Перенимает фазу у её владельца. Единственный способ её изменить.
-    mutating func apply(phase stowed: Bool) {
-        self.stowed = stowed
-    }
-
-    /// Докуда ленте позволено СТОЯТЬ в текущей фазе. Резинка работает за
-    /// этим пределом, как и раньше.
-    var phaseLimit: CGFloat { stowed ? stowedMaximumOffset : maximumOffset }
-
-    /// Насколько убрана колода: 0 — на месте, 1 — убрана.
-    ///
-    /// Считается от координаты, ЗАЖАТОЙ пределом фазы: растяжение резинки в
-    /// неё не попадает по построению. Иначе обычная подтяжка за собранную
-    /// колоду читалась бы как частичное убирание — «состояние 2,5»
-    /// (приёмка 21.08.2026).
-    var stowProgress: CGFloat {
-        let settled = min(max(0, offset), phaseLimit)
-        return min(1, max(0, (settled - maximumOffset) / Self.stowSpan))
-    }
-
-    /// Колода полностью убрана.
-    var isStowed: Bool { stowed }
-
     /// Прокрутка осмысленна, как только есть хотя бы одна карточка: даже две
     /// карточки можно собрать в стопку у кнопки.
     var isScrollable: Bool { contentLength > 0.5 }
 
     /// Смещение после жеста с резиновым сопротивлением за краями (`TR-13`).
-    /// `limit` — докуда жесту позволено вести ленту. По умолчанию упор
-    /// сбора; жест, которому открыта ступень (`TR-41`), ведёт до
-    /// `stowedMaximumOffset`. Разделение фаз выражено ИМЕННО так: не вторым
-    /// состоянием, а пределом хода для конкретного жеста.
-    func scrolled(by delta: CGFloat, rubberBand: Bool = true, limit: CGFloat? = nil) -> TrayScrollModel {
+    func scrolled(by delta: CGFloat, rubberBand: Bool = true) -> TrayScrollModel {
         var next = self
-        let ceiling = limit ?? maximumOffset
         let raw = rawOffset + delta
-        let clamped = min(max(0, raw), ceiling)
+        let clamped = min(max(0, raw), maximumOffset)
         // Присваивание offset синхронизирует rawOffset через наблюдатель,
         // поэтому сырое значение выставляется ПОСЛЕ него.
         next.offset = rubberBand
@@ -150,26 +89,16 @@ struct TrayScrollModel: Equatable {
         return overshoot < 0 ? -value : value
     }
 
-    /// Возврат в границы после отпускания — к пределу ТЕКУЩЕЙ ФАЗЫ, а не к
-    /// ближайшему из положений. Фазу уже решил щелчок; посадке остаётся
-    /// исполнить её решение.
-    ///
-    /// Прежде посадка считала всё за упором растяжением и тянула обратно —
-    /// поэтому убирание отменялось сразу после щелчка, и лента выпрыгивала
-    /// во вторую фазу (приёмка 21.08.2026).
+    /// Возврат в границы после отпускания.
     func settled() -> TrayScrollModel {
         var next = self
-        next.offset = min(max(0, offset), phaseLimit)
+        next.offset = min(max(0, offset), maximumOffset)
         return next
     }
 
-    /// Растяжение за пределом ТЕКУЩЕЙ ФАЗЫ. Меряется от того же предела, что
-    /// и посадка: прежде растяжение считалось от упора сбора, а посадка от
-    /// предела фазы, и в убранной фазе каждое отпускание выглядело
-    /// отпусканием за краем (аудит 22.08.2026).
     var overshoot: CGFloat {
         if offset < 0 { return offset }
-        if offset > phaseLimit { return offset - phaseLimit }
+        if offset > maximumOffset { return offset - maximumOffset }
         return 0
     }
 
@@ -290,9 +219,7 @@ enum TrayStripLayout {
                       gap: CGFloat,
                       offset: CGFloat,
                       viewportLength: CGFloat,
-                      deckProgress: CGFloat = 0,
-                      stow: CGFloat = 0,
-                      stowShift: CGFloat = 0) -> [TrayCardBand] {
+                      deckProgress: CGFloat = 0) -> [TrayCardBand] {
         guard !cardLengths.isEmpty else { return [] }
         let count = cardLengths.count
         let e = edgeLength
@@ -430,46 +357,7 @@ enum TrayStripLayout {
             coverBottom = max(coverBottom, visibleFrom)
         }
 
-        return stowed(bands, progress: stow, shift: stowShift)
-    }
-
-    /// Убирание колоды (`TR-41`) как ЧАСТЬ РАСКЛАДКИ.
-    ///
-    /// Колода уходит вглубь целиком и стягивается к ОСНОВАНИЮ ленты — к тому
-    /// краю, где стоит низ шкатулки. Основание в координатах ленты равно
-    /// нулю, поэтому стягивание — простое умножение позиций: ошибиться
-    /// системой координат негде.
-    ///
-    /// Якорь именно снизу. Стягивание к верхнему краю уводило колоду вверх и
-    /// за экран, а шкатулку заставляло схлопываться не в ту сторону (откат
-    /// 21.08.2026). Низ шкатулки обязан стоять неподвижно, а панель —
-    /// опускаться вместе с верхней границей.
-    ///
-    /// Почему здесь, а не поверх раскладки: в трее один источник истины —
-    /// постановка карточек, контур шкатулки, попадание мыши и анимации
-    /// читают её результат. Наложение поверх невидимо всем троим.
-    static func stowed(_ bands: [TrayCardBand],
-                       progress: CGFloat,
-                       shift: CGFloat = 0) -> [TrayCardBand] {
-        let p = min(1, max(0, progress))
-        guard p > 0.0001 || shift > 0.0001 else { return bands }
-        let scale = 1 - (1 - TrayStow.stowedScale) * p
-        let fade = 1 - p
-        return bands.map { band in
-            guard !band.hidden else { return band }
-            var next = band
-            // Натяжение — СОБСТВЕННЫЙ канал: колода пружинит вниз целиком.
-            // Выражать его через прогресс убирания нельзя: 8 pt хода дают
-            // 6.7% прогресса, а те — масштаб 0.99, то есть меньше пикселя на
-            // экране. Натяжение оказывалось невидимым (аудит 22.08.2026).
-            next.position = band.position * scale - shift
-            next.length = band.length * scale
-            next.scale = band.scale * scale
-            next.opacity = band.opacity * fade
-            next.shadowFraction = band.shadowFraction * fade
-            next.hidden = next.opacity <= 0.004
-            return next
-        }
+        return bands
     }
 
     /// Полоса запаркованной карточки: целая карточка в масштабе глубины минус
@@ -592,19 +480,16 @@ struct TrayDetentModel: Equatable {
     /// Прогон одной дельты жеста через защёлку. `stretch` — можно ли уводить
     /// ленту за край: тянет только палец, инерция упирается (приёмка
     /// 19.08.2026 — после отпускания лента продолжала уезжать).
-    /// `limit` — предел хода для этого жеста (`TR-41`): без разрешения лента
-    /// упирается в сбор, с разрешением идёт дальше, на ступень убирания.
     mutating func apply(delta: CGFloat,
                         to model: TrayScrollModel,
-                        stretch: Bool = true,
-                        limit: CGFloat? = nil) -> (model: TrayScrollModel, click: Click?) {
+                        stretch: Bool = true) -> (model: TrayScrollModel, click: Click?) {
         guard Self.fits(model) else {
-            let next = model.scrolled(by: delta, rubberBand: stretch, limit: limit)
+            let next = model.scrolled(by: delta, rubberBand: stretch)
             sync(with: next)
             return (next, nil)
         }
-        return engaged ? applyEngaged(delta: delta, to: model, stretch: stretch, limit: limit)
-                       : applyFree(delta: delta, to: model, stretch: stretch, limit: limit)
+        return engaged ? applyEngaged(delta: delta, to: model, stretch: stretch)
+                       : applyFree(delta: delta, to: model, stretch: stretch)
     }
 
     /// Куда осесть ленте, если жест замер в зоне напряжения: защёлка не
@@ -628,16 +513,13 @@ struct TrayDetentModel: Equatable {
 
     private mutating func applyFree(delta: CGFloat,
                                     to model: TrayScrollModel,
-                                    stretch: Bool,
-                                    limit: CGFloat? = nil) -> (model: TrayScrollModel, click: Click?) {
+                                    stretch: Bool) -> (model: TrayScrollModel, click: Click?) {
         var next = model
         let zoneStart = next.maximumOffset - Self.effectiveZone(for: next)
         guard delta > 0, next.offset + delta > zoneStart else {
             // Вне зоны или движение от упора: до щелчка выход свободен, жест
             // легко отменяется — сопротивление только в сторону сбора.
-            // Предел жеста соблюдается и здесь: прежде он принимался и молча
-            // игнорировался (аудит 22.08.2026).
-            next = next.scrolled(by: delta, rubberBand: stretch, limit: limit)
+            next = next.scrolled(by: delta, rubberBand: stretch)
             return (next, nil)
         }
         // Часть дельты до зоны — один к одному, остаток — через натяжение.
@@ -656,15 +538,13 @@ struct TrayDetentModel: Equatable {
 
     private mutating func applyEngaged(delta: CGFloat,
                                        to model: TrayScrollModel,
-                                       stretch: Bool,
-                                       limit: CGFloat? = nil) -> (model: TrayScrollModel, click: Click?) {
+                                       stretch: Bool) -> (model: TrayScrollModel, click: Click?) {
         var next = model
         let maxOffset = next.maximumOffset
         if delta >= 0 {
-            // Глубже в упор: без разрешения — обычная резинка за краем
-            // (`TR-13`), с разрешением — ход по ступени убирания (`TR-41`).
+            // Глубже в упор — обычная резинка за краем (`TR-13`).
             strain = 0
-            next = next.scrolled(by: delta, rubberBand: stretch, limit: limit)
+            next = next.scrolled(by: delta, rubberBand: stretch)
             return (next, nil)
         }
         if next.offset > maxOffset {
@@ -672,7 +552,7 @@ struct TrayDetentModel: Equatable {
             let back = max(delta, maxOffset - next.offset)
             next.offset += back
             let rest = delta - back
-            if rest < -0.001 { return applyEngaged(delta: rest, to: next, stretch: stretch, limit: limit) }
+            if rest < -0.001 { return applyEngaged(delta: rest, to: next, stretch: stretch) }
             return (next, nil)
         }
         strain += -delta
@@ -896,145 +776,5 @@ enum TrayDeckClosure {
     /// Степень опускания ПОТОКА карточек.
     static func flow(presented: CGFloat, model: TrayScrollModel) -> CGFloat {
         flowCurve(value(presented: presented, model: model))
-    }
-}
-
-/// Убирание КОЛОДЫ (`TR-41`): вторая ступень за собранным состоянием.
-/// Гаснет вся видимая лента как единый предмет. Спецификация — `SPEC_CARD_STOW.md`.
-///
-/// Механика — НАПРЯЖЕНИЕ, а не прогресс. Карточка не уезжает за пальцем:
-/// она чуть пружинит, почти незаметно, напряжение копится, и за порогом
-/// срабатывает щелчок, после которого карточка схлопывается уже своей
-/// анимацией.
-enum TrayStow {
-    /// Полный ход натяжения. Столько же, сколько побег из защёлки сбора:
-    /// убирание последнего снимка — действие того же веса, что раскрытие
-    /// колоды, и не должно случаться от короткого движения.
-    static let threshold: CGFloat = TrayDetentModel.escape
-
-    /// Видимый сдвиг карточки при полном натяжении — примерно один ярус
-    /// стопки. Ровно столько же даёт страгивание в защёлке сбора: величина
-    /// уже принята на ощупь и читается как «почти незаметно, но заметно».
-    static let maxShift: CGFloat = 8
-
-    /// Масштаб в конце натяжения. Предвестник отдаления, которое случится
-    /// при срабатывании: интерфейс намекает на исход, а не только сообщает
-    /// о нажиме.
-    static let tensionScale: CGFloat = 0.98
-
-    /// Масштаб убранной карточки: она удаляется от зрителя, а не улетает и
-    /// не сжимается в полоску.
-    static let stowedScale: CGFloat = 0.85
-
-    /// Какую долю полного ухода занимает фаза НАТЯЖЕНИЯ. Натяжение обязано
-    /// быть «почти незаметным»: колода чуть подаётся, а не наполовину
-    /// исчезает. Полный ход натяжения даёт лишь эту долю прогресса.
-    static let tensionShare: CGFloat = 0.13
-
-    /// Сдвиг карточки по накопленному напряжению.
-    ///
-    /// Растёт с УБЫВАЮЩЕЙ скоростью: первые точки хода дают больше сдвига,
-    /// последние — меньше, отчего связь читается упругой, а не свободной.
-    /// Но убывание пологое: к концу хода прогресс обязан оставаться
-    /// видимым.
-    ///
-    /// Формула сопротивления Apple здесь НЕ годится, хотя за краем ленты
-    /// работает именно она. Та рассчитана на уход в десятки точек; здесь
-    /// весь ход — 8 pt на 112 pt пальца, и она вырождается: первая четверть
-    /// хода забирала 72% сдвига, последняя — 4%. Получалась мёртвая зона,
-    /// где глаз не видит прогресса, а срыв читается взрывом — дефект,
-    /// отвергнутый ещё в защёлке сбора (аудит 19.08.2026).
-    ///
-    /// Степень 0.7 даёт по четвертям хода примерно 38 / 24 / 20 / 18
-    /// процентов: убывание есть, мёртвой зоны нет.
-    static func shift(strain: CGFloat) -> CGFloat {
-        maxShift * curve(tension(strain: strain))
-    }
-
-    /// Кривая натяжения. Производная в нуле велика — первое же движение
-    /// пальца даёт видимый отклик, без этого прямое управление рушится.
-    static func curve(_ t: CGFloat) -> CGFloat {
-        pow(min(1, max(0, t)), 0.7)
-    }
-
-    /// Масштаб в фазе натяжения: от единицы к `tensionScale`, по той же
-    /// насыщающейся кривой, что и сдвиг, — оба канала идут вместе.
-    static func scale(strain: CGFloat) -> CGFloat {
-        return 1 - (1 - tensionScale) * curve(tension(strain: strain))
-    }
-
-    /// Доля натяжения от порога: ноль — покой, единица — порог достигнут.
-    static func tension(strain: CGFloat) -> CGFloat {
-        min(1, max(0, strain / threshold))
-    }
-
-    /// Сработало ли убирание. Порог берётся ПО НАМЕРЕНИЮ: уверенный бросок
-    /// засчитывается, если спроецированная точка остановки лежит за
-    /// порогом. Иначе решительное движение, не дотянувшее десяток точек,
-    /// читается как «не сработало» (`TR-36`, `SPEC_FLICK_PROJECTION.md`).
-    static func fires(strain: CGFloat, velocity: CGFloat, releasing: Bool = false) -> Bool {
-        if strain >= threshold { return true }
-        // Проекция описывает путь ПОСЛЕ ОТРЫВА пальца, поэтому засчитывается
-        // только при отпускании. Прежде она складывалась с напряжением на
-        // каждом событии движения, а при скорости 500 pt/с даёт 249 pt — вдвое
-        // больше порога. Щелчок срабатывал уже на 12-33 pt хода, то есть от
-        // лёгкого касания, и порог в 112 pt существовал только на бумаге
-        // (аудит 22.08.2026).
-        guard releasing else { return false }
-        return strain + abs(TrayFlickProjection.distance(velocity: velocity)) >= threshold
-    }
-
-    /// Геометрия убранной карточки по прогрессу схлопывания: масштаб идёт
-    /// от того, где натяжение его оставило, к `stowedScale`, прозрачность —
-    /// в ноль синхронно.
-    static func stowedScale(progress: CGFloat, fromScale: CGFloat) -> CGFloat {
-        let p = min(1, max(0, progress))
-        return fromScale + (stowedScale - fromScale) * p
-    }
-
-    static func stowedOpacity(progress: CGFloat) -> CGFloat {
-        1 - min(1, max(0, progress))
-    }
-}
-
-/// Темп второй ступени (`TR-41`).
-enum TrayStowAnim {
-    /// Отклик пружины схлопывания. Медленнее схлопывания колоды: убирание
-    /// последнего снимка — отдельное событие, а не продолжение сбора.
-    static let response: CFTimeInterval = 0.45
-    /// Отклик возврата, когда порог не пройден. Короче: ничего не
-    /// произошло, и задерживать на этом внимание незачем.
-    static let releaseResponse: CFTimeInterval = 0.3
-
-    /// Глубина отдачи щелчка, доля хода натяжения. Собственная подача
-    /// ступени: подача ЛЕНТЫ здесь не работает — ступень ленту не двигает, и
-    /// её пружина выходит по нулевой подаче, не показав ничего.
-    static let clickOvershoot: CGFloat = 0.5
-    /// Длительность отдачи: щелчок — мгновение, а не анимация.
-    static let clickResponse: CFTimeInterval = 0.16
-
-    /// Отдача щелчка: быстрый уход и мягкий возврат к нулю.
-    static func clickCurve(_ t: CGFloat) -> CGFloat {
-        let x = min(1, max(0, t))
-        return sin(x * .pi) * (1 - x * 0.4)
-    }
-
-    /// Кривая пружины с наследованием скорости жеста.
-    ///
-    /// Критически задемпфированная пружина без перелёта: `1 - (1 + k·t)·e^-k·t`
-    /// при нулевой начальной скорости. Ненулевая скорость добавляет разгон в
-    /// начале — сорвал броском, схлопывание стартует быстрым и тормозит.
-    static func curve(_ t: CGFloat, initialVelocity: CGFloat) -> CGFloat {
-        let x = min(1, max(0, t))
-        let k: CGFloat = 5
-        // Нормировка обязательна: несглаженная пружина за отведённое время
-        // доходит лишь до 0.96, и остаток отыгрывался бы скачком в последнем
-        // кадре — прозрачность прыгала бы на 0.04 у самой границы.
-        let tail = 1 - (1 + k) * exp(-k)
-        let base = (1 - (1 + k * x) * exp(-k * x)) / tail
-        guard initialVelocity > 0.0001 else { return min(1, base) }
-        // Разгон гаснет к концу хода, поэтому финал остаётся мягким.
-        let boost = initialVelocity * x * exp(-k * x)
-        return min(1, base + boost)
     }
 }

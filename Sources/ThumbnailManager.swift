@@ -103,23 +103,7 @@ final class ThumbnailManager {
     /// направления свайпа: меньше — ось скачет на дрожании руки.
     private static let axisPickThreshold: CGFloat = 10
 
-    /// Открыт ли текущему жесту ход ЗА упор — на ступень убирания (`TR-41`).
-    /// Разделение фаз выражено пределом хода для конкретного жеста, а не
-    /// вторым состоянием: два независимых состояния некому согласовывать.
-    /// Ступень убирания (`TR-41`): состояние и все решения о нём живут ВНУТРИ
-    /// структуры. У менеджера своих полей ступени нет — именно они шесть раз
-    /// оставались необнулёнными и роняли ленту в залипание.
-    private var deckStep = TrayStowGate()
-    /// Контур колоды, запомненный до убирания: по его основанию встаёт
-    /// полоска третьей фазы, когда видимых карточек не осталось.
-    private var caseBaseline: CGRect?
-    /// Длина ленты и её предел на прошлой синхронизации: по ним видно, что
-    /// состав изменился посреди жеста.
-    private var previousContentLength: CGFloat = 0
-    private var previousMaximumOffset: CGFloat = 0
-    private var stepSettling = false
-    private lazy var stepAnimator = CollectionProgressAnimator(hostView: hostContent)
-
+    private var collapsed = false
     private var anchorScreen: NSScreen?
 
     private let host: TrayHostPanel
@@ -132,6 +116,7 @@ final class ThumbnailManager {
     private var hoverExitWorkItem: DispatchWorkItem?
     private var collapsedPeekGeneration: UInt = 0
     private var hoverExitGeneration: UInt = 0
+    private weak var collapsedPeekItem: ThumbnailWindow?
     /// Библиотека снимков: редактор перезаписывает через неё файл в папке.
     weak var library: ScreenshotLibrary?
     /// Редактируемые состояния и запечённые версии живут, пока снимок в трее.
@@ -348,11 +333,10 @@ final class ThumbnailManager {
         return inside
     }
 
-    /// Свёрнутого состояния у трея НЕТ: вход в него был через кнопку хаба,
-    /// упразднённую требованием `TR-30`, и его код удалён (аудит 22.08.2026).
-    /// Признак оставлен ложным, чтобы не тянуть проверки по живым путям.
-    private var cardsAreCollapsed: Bool { false }
-
+    private var cardsAreCollapsed: Bool {
+        thumbnailTrayCollapseTarget(userCollapsed: collapsed,
+                                    hoverExpanded: trayHoverActive) == 1
+    }
 
     private func cancelCollapsedPeekDismiss() {
         collapsedPeekGeneration &+= 1
@@ -387,29 +371,44 @@ final class ThumbnailManager {
             // трекпада: его открытие занимает сотни миллисекунд (`TR-29`).
             TrayHaptics.shared.arm()
             cancelHoverExit()
-            if !trayHoverActive {
+            if collapsedPeekItem === thumbnail { cancelCollapsedPeekDismiss() }
+            if !trayHoverActive, collapsedPeekItem == nil {
                 beginTrayHoverSession()
             }
-        } else if trayHoverActive {
+        } else if trayHoverActive || collapsedPeekItem === thumbnail {
             scheduleCollapsedPresentationExit()
         }
     }
 
     private func beginTrayHoverSession() {
         guard !trayHoverActive, !items.isEmpty else { return }
+        if collapsed {
+            cancelCollapsedPeekDismiss()
+            collapsedPeekItem = nil
+            finishCollectionMotion()
+        }
         trayHoverActive = true
+        if collapsed, let screen = anchorScreen ?? NSScreen.main {
+            runTrayTransition(to: 0, on: screen)
+        }
     }
 
     private func scheduleCollapsedPresentationExit() {
-        guard trayHoverActive, activeDragPayloads.isEmpty else { return }
+        guard trayHoverActive || (collapsed && collapsedPeekItem != nil) else { return }
+        guard activeDragPayloads.isEmpty else { return }
         cancelHoverExit()
         let generation = hoverExitGeneration
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.trayHoverActive else { return }
+            guard let self,
+                  self.trayHoverActive || (self.collapsed && self.collapsedPeekItem != nil) else { return }
             guard self.hoverExitGeneration == generation else { return }
             self.hoverExitWorkItem = nil
             guard !self.mouseInsideHoverIsland() else { return }
-            self.endTrayHoverSession()
+            if self.trayHoverActive {
+                self.endTrayHoverSession()
+            } else if let peek = self.collapsedPeekItem {
+                self.dismissCollapsedPeek(peek)
+            }
         }
         hoverExitWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + TrayAnim.hoverExitGrace, execute: work)
@@ -418,6 +417,9 @@ final class ThumbnailManager {
     private func endTrayHoverSession() {
         guard trayHoverActive else { return }
         trayHoverActive = false
+        guard collapsed, let screen = anchorScreen ?? NSScreen.main else { return }
+        finishCollectionMotion()
+        runTrayTransition(to: 1, on: screen)
     }
 
     private var anchorHeight: CGFloat { (anchorScreen ?? NSScreen.main)?.frame.height ?? 900 }
@@ -509,15 +511,8 @@ final class ThumbnailManager {
         // собранная колода из одного элемента, а не раскрытая (`TR-39`).
         // Считая её раскрытой, второй снимок раскладывал ленту открыто, и
         // она поднималась на резерв под ярусы — 14 pt (приёмка 21.08.2026).
-        // `TR-41`: фаза читается ДО решения о ленте — синхронизация модели
-        // происходит позже и к этому моменту про убранную колоду не знает.
-        //
-        // Признак смотрит на ФАКТИЧЕСКОЕ положение ленты у упора, а не на её
-        // прокручиваемость: прежний проверял `maximumOffset > 0.5`, то есть у
-        // любой ленты из двух и более снимков был истинным, и раскрытая лента
-        // собиралась от каждого нового снимка (приёмка 21.08.2026).
-        let wasStowed = deckStep.stowed
-        let wasCompressed = wasStowed || scrollModel.offset >= scrollModel.maximumOffset - 1
+        let wasCompressed = scrollModel.maximumOffset > 0.5 || items.count == 1
+            && scrollModel.offset >= scrollModel.maximumOffset - 1
         finishCollectionMotion()
         finishTrayMotion()
         cancelCollapsedPeekDismiss()
@@ -538,12 +533,15 @@ final class ThumbnailManager {
         }
         collectionModel.insert(id: artifact.id, sequence: artifact.sequence)
         itemByID[artifact.id] = t
-        scrollModel.apply(phase: wasStowed)
         scrollIntent = wasCompressed ? .stayCompressed : .revealNewest
         hostContent.addSubview(t.hostView, positioned: .below, relativeTo: casePanel)  // новейшая поверх старых, под панелью шкатулки
         for it in items { it.applyWidth(cardWidth, screenHeight: screen.frame.height) }
         showHost()
-        animateInsertion(t, on: screen, previousVisible: previousVisible, oldFrames: oldFrames)
+        cardsAreCollapsed ? presentCollapsedCapture(t, on: screen)
+                          : animateInsertion(t,
+                                             on: screen,
+                                             previousVisible: previousVisible,
+                                             oldFrames: oldFrames)
     }
 
     func remove(_ t: ThumbnailWindow) {
@@ -577,7 +575,6 @@ final class ThumbnailManager {
     }
 
     private func finishCollectionMotion() {
-        cancelStepMotion()
         guard let completion = collectionCompletion else {
             collectionAnimator.cancel()
             return
@@ -656,26 +653,88 @@ final class ThumbnailManager {
         })
     }
 
+    private func presentCollapsedCapture(_ inserted: ThumbnailWindow, on screen: NSScreen) {
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        collapsedPeekItem = inserted
+        for item in items where item !== inserted { item.hide() }
+        let edge = ThumbnailLayoutEdge(rawValue: TrayPosition.current.rawValue)!
+        let margin = TrayPosition.current == .left
+            ? ThumbStyle.margin
+            : ThumbStyle.margin
+        let slot = thumbnailLayout(screenFrame: screen.frame,
+                                   edge: edge,
+                                   cardWidth: cardWidth,
+                                   cardHeights: [inserted.cardHeight],
+                                   hubSize: .zero,
+                                   margin: margin,
+                                   gap: ThumbStyle.gap).visible.first
+        guard let slot else {
+            collapsedPeekItem = nil
+            inserted.hide()
+            return
+        }
+        inserted.prepareInsertion(at: toLocal(slot.origin),
+                                  from: collectionDirectionalOffset(),
+                                  reduceMotion: reduceMotion)
+        runCollectionMotion(duration: reduceMotion ? TrayAnim.reducedTransition : TrayAnim.insertion,
+                            onFrame: { [weak inserted] progress in
+            inserted?.applyInsertion(progress: progress, reduceMotion: reduceMotion)
+        }, completion: { [weak self, weak inserted] in
+            guard let self, let inserted else { return }
+            inserted.finishCollectionMotion()
+            self.scheduleCollapsedPeekDismiss(inserted,
+                                              after: TrayAnim.collapsedPeekHold,
+                                              reduceMotion: reduceMotion)
+        })
+    }
 
+    private func scheduleCollapsedPeekDismiss(_ inserted: ThumbnailWindow,
+                                              after delay: TimeInterval,
+                                              reduceMotion: Bool) {
+        cancelCollapsedPeekDismiss()
+        let generation = collapsedPeekGeneration
+        let work = DispatchWorkItem { [weak self, weak inserted] in
+            guard let self, let inserted,
+                  self.collapsedPeekGeneration == generation,
+                  self.collapsed, !self.trayHoverActive,
+                  self.collapsedPeekItem === inserted else { return }
+            self.collapsedPeekWorkItem = nil
+            guard !self.mouseOverTray() else { return }
+            self.dismissCollapsedPeek(inserted, reduceMotion: reduceMotion)
+        }
+        collapsedPeekWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
 
+    private func dismissCollapsedPeek(_ inserted: ThumbnailWindow,
+                                      reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) {
+        guard collapsed, !trayHoverActive, collapsedPeekItem === inserted else { return }
+        finishCollectionMotion()
+        guard collapsed, !trayHoverActive, collapsedPeekItem === inserted else { return }
+        cancelCollapsedPeekDismiss()
+        collapsedPeekItem = nil
+        inserted.prepareRemoval(toward: collectionDirectionalOffset(), reduceMotion: reduceMotion)
+        runCollectionMotion(duration: reduceMotion ? TrayAnim.reducedTransition : TrayAnim.collapsedPeekExit,
+                            onFrame: { [weak inserted] progress in
+            inserted?.applyRemoval(progress: progress, reduceMotion: reduceMotion)
+        }, completion: { [weak inserted] in
+            inserted?.finishCollectionMotion(hidden: true)
+        })
+    }
 
     private func animateRemoval(_ removed: [ThumbnailWindow]) {
-        finishCollectionMotion()
-        finishTrayMotion()
-        cancelCollapsedPeekDismiss()
-        cancelHoverExit()
-
-        // Экран недоступен — уходим, НИЧЕГО не тронув. Освобождение сессий,
-        // запечённых изображений и дискового состояния стояло выше этой
-        // проверки: при недоступном экране карточки оставались в трее с
-        // уничтоженными правками, и вернуть их было нельзя (аудит
-        // 22.08.2026, единственная находка с необратимой потерей).
-        guard let screen = anchorScreen ?? NSScreen.main else { return }
         for item in removed {
             sessions.discard(item.artifact.id)
             editedImages.discard(item.artifact.id)
             stateStore.discard(for: item.artifact.id)
         }
+        finishCollectionMotion()
+        finishTrayMotion()
+        cancelCollapsedPeekDismiss()
+        cancelHoverExit()
+        let removesVisiblePeek = removed.contains { $0 === collapsedPeekItem }
+        if removesVisiblePeek { collapsedPeekItem = nil }
+        guard let screen = anchorScreen ?? NSScreen.main else { return }
         let oldVisibleIDs = Set(items.filter { !$0.hostView.isHidden }.map { ObjectIdentifier($0) })
         let oldFrames = Dictionary(uniqueKeysWithValues: items.map { (ObjectIdentifier($0), $0.layoutFrame) })
         let removedArtifactIDs = Set(removed.map { $0.artifact.id })
@@ -684,12 +743,13 @@ final class ThumbnailManager {
             itemByID.removeValue(forKey: id)
         }
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let animateCards = !cardsAreCollapsed || removesVisiblePeek
 
         let (visible, hidden) = cardLayout(on: screen)
         for item in hidden { item.hide() }
         var reflowing: [(ThumbnailWindow, NSRect)] = []
         var entering: [ThumbnailWindow] = []
-        do {
+        if animateCards {
             for (item, slot) in visible {
                 let identifier = ObjectIdentifier(item)
                 // Слои стопки не анимируются полными карточками: полоса встаёт
@@ -718,14 +778,17 @@ final class ThumbnailManager {
                     reduceMotion: reduceMotion)
                 reflowing.append((item, oldFrame))
             }
+        } else {
+            for (item, _) in visible { item.hide() }
         }
-        // Карточки анимируются всегда: свёрнутого состояния у трея нет.
-        let animatedRemoved = removed.filter { oldVisibleIDs.contains(ObjectIdentifier($0)) }
+        let animatedRemoved = animateCards
+            ? removed.filter { oldVisibleIDs.contains(ObjectIdentifier($0)) || $0 === collapsedPeekItem }
+            : []
         let immediateRemoved = removed.filter { candidate in
             !animatedRemoved.contains(where: { $0 === candidate })
         }
         for item in immediateRemoved { closeAndRelease(item) }
-        do {
+        if animateCards {
             for item in animatedRemoved {
                 item.prepareRemoval(toward: collectionDirectionalOffset(), reduceMotion: reduceMotion)
             }
@@ -737,7 +800,9 @@ final class ThumbnailManager {
                 item.applyReflow(progress: progress, from: oldFrame, reduceMotion: reduceMotion)
             }
             for item in entering { item.applyInsertion(progress: progress, reduceMotion: reduceMotion) }
-            for item in animatedRemoved { item.applyRemoval(progress: progress, reduceMotion: reduceMotion) }
+            if animateCards {
+                for item in animatedRemoved { item.applyRemoval(progress: progress, reduceMotion: reduceMotion) }
+            }
         }, completion: { [weak self] in
             guard let self else { return }
             for (item, _) in reflowing { item.finishCollectionMotion() }
@@ -752,13 +817,9 @@ final class ThumbnailManager {
             // 20.08.2026).
             if !self.items.isEmpty { self.applyScrollOffset() }
             if self.items.isEmpty {
-                // Снимков не осталось — ступени нечего держать. Сброс стоял
-                // только в проходе раскладки, который для этой ветки явно
-                // пропускается, и следующий снимок приходил невидимым (аудит
-                // 22.08.2026).
-                self.deckStep.reset()
-                self.scrollModel.apply(phase: false)
+                self.collapsed = false
                 self.trayHoverActive = false
+                self.collapsedPeekItem = nil
                 self.trayAnimator.synchronize(0)
                 self.trayProgress = 0
                 self.host.orderOut(nil)
@@ -774,17 +835,6 @@ final class ThumbnailManager {
     /// Колода собрана: лента доехала до упора и стоит там.
     private var deckIsGathered: Bool {
         scrollModel.offset >= scrollModel.maximumOffset - 0.5
-    }
-
-    /// Ступень доступна только СТОПКЕ (`TR-41`). Шкатулка — всегда стопка
-    /// кадров, единственный кадр в неё не помещается, поэтому убирать нечего.
-    ///
-    /// Прежде ступень открывалась и одиночному снимку: он гас, шкатулки с
-    /// командами при одном кадре нет, зона приёма мыши пустела, и возвратный
-    /// жест физически не доходил до трея — выход только перезапуском, снимок
-    /// терялся (аудит 22.08.2026).
-    private var deckStepAvailable: Bool {
-        items.count > 1 && deckIsGathered
     }
 
     /// Выбирает ось раскрытия по ходу пальца.
@@ -833,9 +883,6 @@ final class ThumbnailManager {
     /// же углу.
     private func switchAxis(to edge: ThumbnailLayoutEdge) {
         openAxis = edge
-        // Смена оси отзывает разрешение ступени: оно выдавалось на вертикали,
-        // и без отзыва колода убиралась боковым свайпом (аудит 22.08.2026).
-        deckStep.revokePermission()
         writeDip(0)
         // История скорости начинается с момента смены: прежние отсчёты сняты
         // с движения по другой оси. Обнулять её на каждом событии нельзя —
@@ -869,17 +916,7 @@ final class ThumbnailManager {
     /// заменено на смещение, потому что ступенчатая лента не даёт понять, где
     /// ты находишься, и не позволяет остановиться между карточками.
     func scrollTray(with event: NSEvent) {
-        // `TR-41`: в третьей фазе горизонтальный ход не делает НИЧЕГО — ни
-        // возврата колоды, ни раскрытия ленты, ни смены оси. Убирание живёт
-        // на вертикальной оси, и выход из него тоже только вертикальный.
-        // Убранная фаза глушит горизонталь ВСЕГДА, в том числе пока играет
-        // пружина щелчка. Прежнее исключение на время анимации пускало смену
-        // оси, после чего каждое событие отбивалось по несовпадению оси —
-        // лента запиралась в убранной фазе навсегда (аудит 22.08.2026).
-        if scrollModel.isStowed || deckStep.stowed {
-            let horizontal = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
-            if horizontal || !axisIsVertical { return }
-        }
+        guard !cardsAreCollapsed else { return }
         // `TR-38`: ось раскрытия выбирает ЖЕСТ. Пока колода собрана и ось не
         // выбрана, лента не двигается — копится ход пальца, и по нему
         // решается, вверх раскрывать или влево.
@@ -896,11 +933,7 @@ final class ThumbnailManager {
             axisPickupX = 0
             axisPickupY = 0
         }
-        // Конец жеста через выбор оси не теряется: он обязан дойти до блока
-        // завершения, где садится лента (аудит 22.08.2026).
-        let gestureEnds = event.phase == .ended || event.phase == .cancelled
-            || event.momentumPhase == .ended
-        if alternateEdge != nil, gathered, event.momentumPhase == [], !gestureEnds,
+        if alternateEdge != nil, gathered, event.momentumPhase == [],
            !pickOpenAxis(with: event) { return }
         let vertical = axisIsVertical
         // Ход, накопленный до выбора оси, лента НЕ наверстывает. Порог —
@@ -921,18 +954,9 @@ final class ThumbnailManager {
         let fingersDown = event.phase != []
 
         if event.phase == .began {
-            // История скорости начинается заново ДО того, как ступень решит
-            // судьбу события: её ответ «ничего не делать» уводил отсюда
-            // возвратом, и старая скорость доживала до следующего жеста
-            // (аудит 22.08.2026).
+            // Новый жест — новая история скорости.
             scrollVelocity = 0
             lastScrollTimestamp = event.timestamp
-            // `TR-41`: начало жеста идёт ЧЕРЕЗ структуру — разрешение на
-            // ступень выдаёт она, у обработчика своих флагов нет.
-            let opening = deckStep.handle(TrayStowGate.Input(
-                kind: .began, verticalAxis: axisIsVertical,
-                deckGathered: deckStepAvailable))
-            if case .ignore = opening { return }
             momentumHandedToSpring = false
             // Палец коснулся во время догона: длинная инерционная подача
             // пережимается в короткую от текущего значения — перенацеливание
@@ -943,14 +967,6 @@ final class ThumbnailManager {
         // общего блока, где события отменяют аниматоры: иначе первое же её
         // событие глушило саму пружину (`TR-13`). Так же ведёт себя системный
         // скролл: после передачи границе затухание не применяется.
-        if event.momentumPhase != [] {
-            // Инерция идёт через структуру: хвост жеста ступень не двигает.
-            let carried = deckStep.handle(TrayStowGate.Input(
-                kind: .momentum, delta: delta, velocity: scrollVelocity,
-                verticalAxis: axisIsVertical,
-                deckGathered: deckStepAvailable))
-            if case .ignore = carried { return }
-        }
         if momentumHandedToSpring, event.momentumPhase != [] {
             if event.momentumPhase == .ended { momentumHandedToSpring = false }
             return
@@ -1013,68 +1029,7 @@ final class ThumbnailManager {
                 return
             }
             let before = scrollModel.offset
-            // `TR-41`: решение принимает СТРУКТУРА ступени. Здесь только
-            // передача события и применение ответа — своих веток и флагов у
-            // обработчика нет.
-            //
-            // Форма события берётся ИЗ ФАЗЫ, а не подставляется движением.
-            // Прежде сюда жёстко шло `.changed`, поэтому конец жеста уходил в
-            // ступень как движение, ответы `.ignore` и `.tension` возвращались
-            // до блока завершения, и воронка завершения обходилась сверху:
-            // признак активного жеста залипал, ступень не отпускалась, трей
-            // замолкал до перезапуска (аудит 22.08.2026, корневой дефект).
-            let stepKind: TrayStowGate.Kind
-            if event.phase == .cancelled {
-                stepKind = .cancelled
-            } else if event.phase == .ended {
-                stepKind = .ended
-            } else if event.momentumPhase != [] {
-                stepKind = .momentum
-            } else if event.phase == .began {
-                stepKind = .began
-            } else {
-                stepKind = .changed
-            }
-            let outcome = deckStep.handle(TrayStowGate.Input(
-                kind: stepKind, delta: delta, velocity: scrollVelocity,
-                verticalAxis: axisIsVertical,
-                deckGathered: deckStepAvailable))
-            // Конец жеста никогда не обрывается здесь: он обязан дойти до
-            // блока завершения, где садится лента и снимается признак
-            // активного жеста.
-            let ending = stepKind == .ended || stepKind == .cancelled
-            switch outcome {
-            case .ignore:
-                trackVelocity(movement: 0, at: event.timestamp)
-                if ending { break }
-                return
-            case .tension(let shift):
-                if deckStep.strain > TrayStow.threshold * 0.5 { TrayHaptics.shared.arm() }
-                let anchor = deckStep.stowed ? scrollModel.stowedMaximumOffset
-                                             : scrollModel.maximumOffset
-                writeModel(deckStep.stowed ? anchor - shift : anchor + shift)
-                applyScrollOffset()
-                trackVelocity(movement: delta, at: event.timestamp)
-                if ending { break }
-                return
-            case .fire(let velocity):
-                scrollModel.apply(phase: true)
-                performDetentHaptic(.snapIn)
-                animateStep(to: scrollModel.stowedMaximumOffset, velocity: velocity)
-                return
-            case .recall(let velocity):
-                scrollModel.apply(phase: false)
-                performDetentHaptic(.release)
-                animateStep(to: scrollModel.maximumOffset, velocity: velocity)
-                return
-            case .release:
-                animateStep(to: scrollModel.phaseLimit, velocity: 0)
-                return
-            case .pass:
-                break
-            }
-            let result = detent.apply(delta: delta, to: scrollModel, stretch: fingersDown,
-                                      limit: scrollModel.phaseLimit)
+            let result = detent.apply(delta: delta, to: scrollModel, stretch: fingersDown)
             // Щелчок ПЕРЕНАЦЕЛИВАЕТ движение: прыжок модели поглощается
             // подачей, видимая позиция остаётся непрерывной. Сдвиг больше
             // порога восприятия за один кадр запрещён (`TR-29`).
@@ -1105,7 +1060,6 @@ final class ThumbnailManager {
         if event.momentumPhase == .ended {
             // Инерция кончилась — жест завершён окончательно.
             scrollGestureActive = false
-            if finishGestureForStep() { return }
             settleScrollAnimated()
         } else if (event.phase == .ended || event.phase == .cancelled),
                   abs(scrollModel.overshoot) > 0.5 {
@@ -1116,11 +1070,9 @@ final class ThumbnailManager {
             // читает (`TR-13`).
             scrollGestureActive = false
             momentumHandedToSpring = true
-            if finishGestureForStep(cancelled: event.phase == .cancelled) { return }
             settleScrollAnimated()
         } else if event.phase == .ended || event.phase == .cancelled {
             scrollGestureActive = false
-            if finishGestureForStep(cancelled: event.phase == .cancelled) { return }
             // `TR-36`: уверенный бросок к сбору защёлкивает ПО НАМЕРЕНИЮ —
             // по точке, где лента остановилась бы сама, а не по факту
             // доезда. Иначе бросок, не дотянувший чуть-чуть, читается как
@@ -1162,62 +1114,6 @@ final class ThumbnailManager {
         }
     }
 
-    /// Пружина ступени (`TR-41`): уводит ленту к пределу фазы. Без перелёта,
-    /// отклик медленнее схлопывания колоды — убирание отдельное событие, а не
-    /// продолжение сбора. Начальная скорость наследуется от жеста, иначе на
-    /// месте срыва виден шов.
-    private func animateStep(to target: CGFloat, velocity: CGFloat) {
-        let from = scrollModel.offset
-        guard abs(target - from) > 0.5 else {
-            writeModel(target)
-            applyScrollOffset()
-            return
-        }
-        // Одну координату не пишут два аниматора: пружина границы и подача
-        // защёлки отменяются до старта. Иначе на возврате колоды они ехали
-        // параллельно — возврат техдолга единого источника позиции (`TR-35`).
-        scrollSettleAnimator.cancel()
-        scrollSettleAnimating = false
-        settleGeneration &+= 1
-        stepSettling = true
-        let relative = min(4, abs(velocity) / max(1, TrayStow.threshold))
-        stepAnimator.run(duration: TrayStowAnim.response, onFrame: { [weak self] progress in
-            guard let self else { return }
-            let eased = TrayStowAnim.curve(progress, initialVelocity: relative)
-            self.writeModel(from + (target - from) * eased)
-            self.applyScrollOffset()
-        }, onDone: { [weak self] in
-            guard let self else { return }
-            self.stepSettling = false
-            self.writeModel(target)
-            self.applyScrollOffset()
-        })
-    }
-
-    /// Завершение жеста для ступени (`TR-41`) — ЕДИНСТВЕННЫЙ путь.
-    ///
-    /// Веток завершения три: конец инерции, отпускание за краем и обычное
-    /// отпускание. Вызов структуры стоял только в третьей, поэтому после
-    /// срабатывания ступени — а оно как раз оставляет ленту растянутой и
-    /// уводит жест во вторую ветку — структура о конце не узнавала. Признак
-    /// «израсходован» оставался навсегда, и трей переставал реагировать на
-    /// свайпы вовсе (приёмка 22.08.2026).
-    ///
-    /// Теперь ветки зовут этот метод, а сканирующая проверка требует, чтобы
-    /// вызовов было столько же, сколько мест сброса `scrollGestureActive`.
-    @discardableResult
-    private func finishGestureForStep(cancelled: Bool = false) -> Bool {
-        let ending = deckStep.handle(TrayStowGate.Input(
-            kind: cancelled ? TrayStowGate.Kind.cancelled : .ended,
-            verticalAxis: axisIsVertical,
-            deckGathered: deckStepAvailable))
-        if case .release = ending {
-            animateStep(to: scrollModel.phaseLimit, velocity: 0)
-            return true
-        }
-        return false
-    }
-
     /// Оценка скорости ленты по событиям, pt/с. Сглаживание убирает выброс от
     /// одиночного рваного кадра, иначе он задал бы скорость передачи пружине.
     private func trackVelocity(movement: CGFloat, at timestamp: TimeInterval) {
@@ -1225,12 +1121,7 @@ final class ThumbnailManager {
         let dt = timestamp - lastScrollTimestamp
         guard dt > 0.0005, dt < 0.2 else { return }
         let instant = movement / CGFloat(dt)
-        // Сглаживание нормировано ПО ВРЕМЕНИ, а не по числу событий. При
-        // фиксированной доле один и тот же бросок давал 88% скорости на
-        // 120 Гц и 66% на 60 Гц, а от неё зависят защёлка по броску, глубина
-        // отскока и срабатывание ступени (аудит 22.08.2026).
-        let timeConstant: CGFloat = 0.05
-        let alpha = 1 - exp(-CGFloat(dt) / timeConstant)
+        let alpha: CGFloat = 0.3
         scrollVelocity = scrollVelocity * (1 - alpha) + instant * alpha
     }
 
@@ -1443,7 +1334,7 @@ final class ThumbnailManager {
     }
 
     private func applyScrollOffset() {
-        guard let screen = anchorScreen ?? NSScreen.main else {
+        guard let screen = anchorScreen ?? NSScreen.main, !cardsAreCollapsed else {
             layout()
             return
         }
@@ -1468,12 +1359,6 @@ final class ThumbnailManager {
     /// `refreshHostPointerRouting`, и зона приёма мыши отставала от карточек
     /// (аудит 20.08.2026).
     private func finishLayoutPass() {
-        // Снимков не осталось — ступени нечего держать, иначе следующая
-        // колода появилась бы уже убранной.
-        if items.isEmpty, deckStep.stowed || deckStep.strain > 0 {
-            deckStep.reset()
-            scrollModel.apply(phase: false)
-        }
         applyStackOrder()
         updateCase()
         refreshHoverUnderPointer()
@@ -1483,7 +1368,7 @@ final class ThumbnailManager {
     /// Шкатулка (`TR-30`): видима строго когда лента защёлкнута; контур —
     /// объединение видимых карточек с отступом, панель кнопок сверху.
     private func updateCase() {
-        let engaged = detent.engaged && !items.isEmpty
+        let engaged = detent.engaged && !cardsAreCollapsed && !items.isEmpty
         guard engaged else {
             if caseVisible {
                 caseVisible = false
@@ -1502,44 +1387,16 @@ final class ThumbnailManager {
             // положением: иначе шкатулка гонится за ней от края экрана.
             contour = contour.union(enteringTargets[ObjectIdentifier(item)] ?? item.visibleCardFrame)
         }
-        // `TR-41`, третья фаза: колода уходит, остаётся полоска с командами.
-        //
-        // Контур сводится к панели ПЛАВНО, по прогрессу убирания. Прежде он
-        // строился по карточкам до самого их исчезновения, а карточка
-        // уменьшается лишь до 0.85 — в момент, когда она пропадала, ширина
-        // скакала к панели примерно на 96 pt, а высота срывалась за один
-        // кадр (аудит 22.08.2026).
-        let stowing = scrollModel.stowProgress
-        if stowing > 0.0001 {
-            let panelWidth = max(1, casePanel.fittingSize.width)
-            let base = contour.isNull ? (caseBaseline ?? contour) : contour
-            guard !base.isNull, base.width > 1 else { return }
-            let width = base.width + (panelWidth - base.width) * stowing
-            let height = max(1, base.height * (1 - stowing))
-            contour = CGRect(x: base.maxX - width, y: base.minY,
-                             width: width, height: height)
-        } else if !contour.isNull, contour.height > 1 {
-            caseBaseline = contour
-        }
-        guard !contour.isNull, contour.width > 1 else { return }
+        guard !contour.isNull, contour.width > 1, contour.height > 1 else { return }
         casePanel.setCount(items.count)
         let panelSize = casePanel.fittingSize
         let side = TrayCaseView.sidePadding
         let gap = TrayCaseView.panelGap
         // 8 pt по периметру верхней карточки, сверху добавка под панель.
-        var caseRect = NSRect(x: contour.minX - side,
+        let caseRect = NSRect(x: contour.minX - side,
                               y: contour.minY - side,
                               width: max(contour.width + side * 2, panelSize.width + side * 2),
                               height: side + contour.height + gap + panelSize.height + gap)
-        // Позиция трея «сверху»: шкатулка растёт вверх и панель уходит под
-        // строку меню, а то и за край экрана. Прижимаем к рабочей области
-        // (аудит 22.08.2026).
-        if let screen = anchorScreen ?? NSScreen.main {
-            let ceiling = screen.frame.maxY - menuBarInset(on: screen) - ThumbStyle.margin
-            if caseRect.maxY > ceiling {
-                caseRect.origin.y -= caseRect.maxY - ceiling
-            }
-        }
         caseView.frame = caseRect
         // Панель ставится по своему измеренному размеру: растянутая на всю
         // ширину, она рисовала ряд кнопок натуральной величины у левого края
@@ -1631,7 +1488,76 @@ final class ThumbnailManager {
         for item in items { item.applyHover(item === hovered) }
     }
 
+    private func shiftViewport(by delta: Int) {
+        finishCollectionMotion()
+        finishTrayMotion()
+        guard let screen = anchorScreen ?? NSScreen.main, !items.isEmpty else { return }
 
+        let maximumStart = newestViewportLayout(on: screen).firstVisibleIndex
+        guard collectionModel.shiftViewport(by: delta, maximumStart: maximumStart) else { return }
+
+        let oldVisible = items.filter { !$0.hostView.isHidden }
+        let oldVisibleIDs = Set(oldVisible.map { ObjectIdentifier($0) })
+        let oldFrames = Dictionary(uniqueKeysWithValues: oldVisible.map {
+            (ObjectIdentifier($0), $0.layoutFrame)
+        })
+        animateViewportChange(on: screen,
+                              oldVisibleIDs: oldVisibleIDs,
+                              oldFrames: oldFrames)
+    }
+
+    private func animateViewportChange(on screen: NSScreen,
+                                       oldVisibleIDs: Set<ObjectIdentifier>,
+                                       oldFrames: [ObjectIdentifier: NSRect]) {
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let (visible, hidden) = cardLayout(on: screen)
+        let visibleIDs = Set(visible.map { ObjectIdentifier($0.0) })
+        let outgoing = hidden.filter { oldVisibleIDs.contains(ObjectIdentifier($0)) }
+        for item in hidden where !outgoing.contains(where: { $0 === item }) { item.hide() }
+
+        var reflowing: [(ThumbnailWindow, NSRect)] = []
+        var entering: [ThumbnailWindow] = []
+        for (item, slot) in visible {
+            let identifier = ObjectIdentifier(item)
+            // Слои стопки встают полосами сразу, без анимации полной рамкой.
+            if !slot.isFullCard {
+                place(item, at: slot)
+            } else if let oldFrame = oldFrames[identifier] {
+                item.prepareReflow(
+                    from: oldFrame,
+                    to: thumbnailReflowOrigin(candidate: toLocal(slot.origin),
+                                                      oldOuterFrame: oldFrame,
+                                                      targetOuterSize: outerSize(of: item),
+                                                      resizeBand: ThumbStyle.resizeBand,
+                                                      vertical: axisIsVertical),
+                    reduceMotion: reduceMotion)
+                reflowing.append((item, oldFrame))
+            } else {
+                item.prepareInsertion(at: toLocal(slot.origin),
+                                      from: collectionDirectionalOffset(),
+                                      reduceMotion: reduceMotion)
+                entering.append(item)
+            }
+        }
+        for item in outgoing {
+            item.prepareRemoval(toward: collectionDirectionalOffset(), reduceMotion: reduceMotion)
+        }
+
+        runCollectionMotion(duration: reduceMotion ? TrayAnim.reducedTransition : TrayAnim.removalAndReflow,
+                            onFrame: { progress in
+            for (item, oldFrame) in reflowing {
+                item.applyReflow(progress: progress, from: oldFrame, reduceMotion: reduceMotion)
+            }
+            for item in entering { item.applyInsertion(progress: progress, reduceMotion: reduceMotion) }
+            for item in outgoing { item.applyRemoval(progress: progress, reduceMotion: reduceMotion) }
+        }, completion: { [weak self] in
+            guard let self else { return }
+            for (item, _) in reflowing { item.finishCollectionMotion() }
+            for item in entering { item.finishCollectionMotion() }
+            for item in outgoing { item.finishCollectionMotion(hidden: true) }
+            for item in self.items where !visibleIDs.contains(ObjectIdentifier(item)) { item.hide() }
+        })
+    }
 
     /// Копирование НЕ закрывает карточку — только короткий фидбэк.
     func copy(_ t: ThumbnailWindow) {
@@ -1781,7 +1707,9 @@ final class ThumbnailManager {
         activeDragPayloads.remove(ObjectIdentifier(payload))
         artifactStore.finishDrag(payload)
         refreshHostPointerRouting()
-        if trayHoverActive { scheduleCollapsedPresentationExit() }
+        if trayHoverActive || (collapsed && collapsedPeekItem != nil) {
+            scheduleCollapsedPresentationExit()
+        }
     }
 
 #if TESTING
@@ -1790,8 +1718,7 @@ final class ThumbnailManager {
     var debugScrollIsActive: Bool { scrollModel.isScrollable }
     var debugScrollOffset: CGFloat { scrollModel.offset }
     var debugMaximumScrollOffset: CGFloat { scrollModel.maximumOffset }
-    /// Свёрнутого состояния у трея нет: код упразднён вместе с хабом.
-    var debugIsCollapsed: Bool { false }
+    var debugIsCollapsed: Bool { collapsed }
     /// Отключение анимации вставки для замеров: позволяет отделить цену
     /// анимации от цены самой карточки.
     static var debugDisablesInsertionMotion = false
@@ -1898,8 +1825,52 @@ final class ThumbnailManager {
 
     // MARK: сворачивание/разворачивание (растворение в хаб)
 
+    /// Клик по кнопке хаба ведёт по ступеням (`TR-27`): развёрнутая лента
+    /// сначала собирается в стопку у кнопки, и только повторный клик по уже
+    /// собранной стопке прячет трей. Скрытый трей клик разворачивает.
+    func toggleCollapse() {
+        if collapsed {
+            expand()
+        } else if stackIsGatheredAtHub || !scrollModel.isScrollable {
+            collapse()
+        } else {
+            gatherStackAtHub()
+        }
+    }
 
+    /// Собрать ленту в стопку у кнопки.
+    private func gatherStackAtHub() { animateScroll(to: scrollModel.maximumOffset, detentClick: .snapIn) }
 
+    /// Программная прокрутка тем же пружинным возвратом, что и жест:
+    /// отдельной кривой у программного сбора нет (`TR-26`).
+    private func animateScroll(to target: CGFloat, detentClick: TrayDetentModel.Click? = nil) {
+        scrollSettleAnimator.cancel()
+        scrollSettleAnimating = false
+        scrollGestureActive = false
+        let from = scrollModel.offset
+        guard abs(target - from) > 0.5 else {
+            writePresented(target)
+            detent.sync(with: scrollModel)
+            applyScrollOffset()
+            return
+        }
+        scrollSettleAnimating = true
+        scrollSettleAnimator.run(duration: 0.32, onFrame: { [weak self] progress in
+            guard let self else { return }
+            let eased = 1 - pow(1 - progress, 3)
+            self.writePresented(from + (target - from) * eased)
+            self.applyScrollOffset()
+        }, onDone: { [weak self] in
+            guard let self else { return }
+            self.scrollSettleAnimating = false
+            self.writePresented(target)
+            self.detent.sync(with: self.scrollModel)
+            self.applyScrollOffset()
+            // Кнопочный сбор садится своим ease: осадка вдогонку читалась бы
+            // вторым движением, остаётся только тактильная посадка.
+            if let detentClick { self.performDetentHaptic(detentClick) }
+        })
+    }
 
     /// Лента полностью собрана в стопку у кнопки: смещение на максимуме и
     /// ход реальный (`TR-27`).
@@ -1908,32 +1879,105 @@ final class ThumbnailManager {
             && scrollModel.offset >= scrollModel.maximumOffset - 1
     }
 
+    func collapse() {
+        // Сворачиваем при любом count >= 1 (хаб теперь виден и при одном снимке — клик должен работать).
+        guard !collapsed, !items.isEmpty, let screen = anchorScreen ?? NSScreen.main else { return }
+        finishCollectionMotion()
+        cancelCollapsedPeekDismiss()
+        cancelHoverExit()
+        collapsedPeekItem = nil
+        trayHoverActive = false
+        collapsed = true
+        runTrayTransition(to: 1, on: screen)
+    }
 
+    func expand() {
+        guard collapsed, let screen = anchorScreen ?? NSScreen.main else { return }
+        cancelCollapsedPeekDismiss()
+        cancelHoverExit()
+        finishCollectionMotion()
+        collapsedPeekItem = nil
+        collapsed = false
+        runTrayTransition(to: 0, on: screen)
+    }
 
+    private func runTrayTransition(to target: CGFloat, on screen: NSScreen) {
+        let travelOffset = thumbnailTrayTravelOffset(vertical: axisIsVertical)
+        let (visible, hidden) = cardLayout(on: screen)
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
 
-    /// Останавливает пружину ступени: она ведёт координату и обязана
-    /// отменяться вместе с остальными, иначе переживает вставку снимка со
-    /// старой целью и тянет ленту в устаревшее положение.
-    private func cancelStepMotion() {
-        guard stepSettling else { return }
-        stepAnimator.cancel()
-        stepSettling = false
+        for item in hidden {
+            item.setCollapsed(target == 1)
+            item.hide()
+        }
+        // Слои стопки не гоняются полными рамками: при развороте кромка сразу
+        // встаёт полосой со своей перспективой, при сворачивании — прячется.
+        // Прогон их через transition и оставлял стопку без эффекта глубины в
+        // ховер-показе свёрнутого трея.
+        var animated: [ThumbnailWindow] = []
+        for (item, slot) in visible {
+            guard slot.isFullCard else {
+                if target == 0 {
+                    place(item, at: slot)
+                } else {
+                    item.hide()
+                }
+                continue
+            }
+            item.prepareTrayTransition(progress: trayProgress,
+                                       travelOffset: travelOffset,
+                                       restingOrigin: toLocal(slot.origin),
+                                       expanding: target == 0,
+                                       reduceMotion: reduceMotion)
+            animated.append(item)
+        }
+
+        let cards = animated
+        trayAnimator.retarget(to: target,
+                              response: TrayAnim.response(reduceMotion: reduceMotion),
+                              onFrame: { [weak self] progress in
+            guard let self else { return }
+            self.trayProgress = progress
+            for item in cards {
+                item.applyTrayTransition(progress: progress,
+                                         travelOffset: travelOffset,
+                                         reduceMotion: reduceMotion)
+            }
+            self.refreshHostPointerRouting()
+        }, onDone: { [weak self] in
+            guard let self else { return }
+            self.trayProgress = target
+            let isCollapsed = target == 1
+            for item in cards { item.finishTrayTransition(collapsed: isCollapsed) }
+            // Итоговый кадр разворота — из раскладки: кромки получают полосы
+            // и перспективу, а не полные рамки.
+            if !isCollapsed {
+                self.applyScrollOffset()
+            } else {
+                // Свёрнутый трей прячет карточки поштучно, хост не гаснет
+                // целиком — без этого подложка шкатулки и её панель команд
+                // оставались висеть на экране (аудит 20.08.2026).
+                self.updateCase()
+                self.refreshHostPointerRouting()
+            }
+        })
     }
 
     private func finishTrayMotion() {
-        // Свёрнутого состояния нет: цель перехода всегда «развёрнуто».
-        trayAnimator.synchronize(0)
-        trayProgress = 0
+        let target = thumbnailTrayCollapseTarget(userCollapsed: collapsed,
+                                                 hoverExpanded: trayHoverActive)
+        trayAnimator.synchronize(target)
+        trayProgress = target
         if let screen = anchorScreen ?? NSScreen.main {
             let (visible, hidden) = cardLayout(on: screen)
             for item in hidden { item.hide() }
             for (item, slot) in visible {
                 // Слой стопки в развёрнутом состоянии — полоса с перспективой,
                 // а не полная рамка.
-                if !slot.isFullCard {
+                if target != 1, !slot.isFullCard {
                     place(item, at: slot)
                 } else {
-                    item.finishTrayTransition(collapsed: false)
+                    item.finishTrayTransition(collapsed: target == 1)
                 }
             }
         }
@@ -1946,19 +1990,26 @@ final class ThumbnailManager {
     private func layout() {
         finishCollectionMotion()
         guard let screen = anchorScreen ?? NSScreen.main else { return }
-        // Свёрнутого состояния нет: лента всегда развёрнута.
-        trayAnimator.synchronize(0)
-        trayProgress = 0
+        let settledProgress = thumbnailTrayCollapseTarget(userCollapsed: collapsed,
+                                                          hoverExpanded: trayHoverActive)
+        trayAnimator.synchronize(settledProgress)
+        trayProgress = settledProgress
         ensureHost(on: screen)
         updateClampedCardWidth(on: screen)
         for t in items {
             t.applyWidth(cardWidth, screenHeight: screen.frame.height)
         }
         let edgePos = TrayPosition.current
-        for t in items { t.setCollapsed(false); t.configureResize(for: edgePos) }
+        for t in items { t.setCollapsed(settledProgress == 1); t.configureResize(for: edgePos) }
         let (visible, hidden) = cardLayout(on: screen)
         for t in hidden { t.hide() }
-        for (item, slot) in visible { place(item, at: slot) }
+        if settledProgress == 1 {
+            for (t, _) in visible { t.hide() }
+        } else {
+            for (item, slot) in visible {
+                place(item, at: slot)
+            }
+        }
         finishLayoutPass()
     }
 
@@ -2002,43 +2053,21 @@ final class ThumbnailManager {
     }
 
     private func syncScrollModel(on screen: NSScreen) {
-        let metrics = stripMetrics(on: screen)
-        let content = metrics.content
-        applyStripMetrics(content: metrics.content, viewport: metrics.viewport, last: metrics.last)
+        let vertical = axisIsVertical
+        let gap = ThumbStyle.gap
+        let lengths = items.map { vertical ? $0.cardSize.height : $0.cardSize.width }
+        let content = lengths.reduce(0, +) + gap * CGFloat(max(0, lengths.count - 1))
+        let geometry = viewportGeometry(on: screen)
+        let viewport = thumbnailTrayViewportLength(screenFrame: screen.frame,
+                                                   edge: geometry.edge,
+                                                   hubSize: geometry.hubSize,
+                                                   margin: geometry.margin,
+                                                   menuBarInset: menuBarInset(on: screen))
+        applyStripMetrics(content: content, viewport: viewport, last: lengths.last ?? 0)
         // Пока идёт жест или пружинный возврат, смещение может законно жить за
         // границей — мгновенный clamp здесь и делал резинку невидимой.
-        //
-        // Анимация СТУПЕНИ тоже ведёт смещение и тоже должна быть здесь: без
-        // неё щелчок ступени становился телепортом на 80 pt за кадр, потому
-        // что синхронизация сажала ленту обратно посреди пружины (аудит
-        // 22.08.2026, спящий конфликт).
-        // Состав ленты вырос посреди жеста: смещение сохраняет ДОЛЮ, а не
-        // абсолютное значение, иначе дельта в 1 pt давала скачок на длину
-        // новой карточки (аудит 22.08.2026). Механизм тот же, что у ресайза
-        // (`TR-40`).
-        if scrollGestureActive, abs(content - previousContentLength) > 0.5,
-           previousContentLength > 0.5 {
-            writeModel(trayOffsetPreservingShare(offset: scrollModel.offset,
-                                                 maximum: previousMaximumOffset,
-                                                 newMaximum: scrollModel.maximumOffset))
-        }
-        previousContentLength = content
-        previousMaximumOffset = scrollModel.maximumOffset
-        if scrollGestureActive || scrollSettleAnimating || stepSettling {
+        if scrollGestureActive || scrollSettleAnimating {
             if !scrollModel.isScrollable { writeModel(0) }
-            return
-        }
-        // `TR-41`: третью фазу новый снимок НЕ прерывает. Фаза дискретна и
-        // живёт в модели, поэтому достаточно вернуть ленту к пределу фазы —
-        // он уже учитывает убранность.
-        scrollModel.apply(phase: deckStep.stowed)
-        if scrollModel.stowed {
-            // Третью фазу снимок не прерывает, но счётчик на панели обязан
-            // измениться: иначе о снимке ничто не сообщает (аудит 22.08.2026).
-            casePanel.setCount(items.count)
-            writeModel(scrollModel.phaseLimit)
-            scrollIntent = .none
-            detent.sync(with: scrollModel)
             return
         }
         switch scrollIntent {
@@ -2082,18 +2111,29 @@ final class ThumbnailManager {
                                          // `TR-34`: степень схлопывания колоды
                                          // от той же видимой позиции.
                                          deckProgress: TrayDeckClosure.value(
-                                             presented: presentedOffset, model: scrollModel),
-                                         stow: scrollModel.stowProgress,
-                                         stowShift: TrayStow.shift(strain: deckStep.strain))
+                                             presented: presentedOffset, model: scrollModel))
         }
 
-        // Индексной раскладки не бывает: лента прокручиваема при любом
-        // непустом составе, поэтому ветка выше возвращает всегда. Прежний
-        // путь через индекс первой видимой карточки был недостижим (аудит
-        // 22.08.2026).
-        return layout(on: screen, firstVisibleIndex: 0)
+        let newest = newestViewportLayout(on: screen)
+        let firstVisibleIndex = collectionModel.resolveFirstVisibleIndex(
+            maximumStart: newest.firstVisibleIndex)
+        if collectionModel.followsNewest {
+            return newest.layout
+        }
+
+        return layout(on: screen, firstVisibleIndex: firstVisibleIndex)
     }
 
+    private func newestViewportLayout(on screen: NSScreen) -> ThumbnailViewportResult {
+        let geometry = viewportGeometry(on: screen)
+        return thumbnailLayoutShowingNewest(screenFrame: screen.frame,
+                                            edge: geometry.edge,
+                                            cardWidth: cardWidth,
+                                            cardHeights: items.map(\.cardHeight),
+                                            hubSize: geometry.hubSize,
+                                            margin: geometry.margin,
+                                            gap: ThumbStyle.gap)
+    }
 
     private func layout(on screen: NSScreen, firstVisibleIndex: Int) -> ThumbnailLayoutResult {
         let geometry = viewportGeometry(on: screen)
