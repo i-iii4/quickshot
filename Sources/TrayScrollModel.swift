@@ -163,9 +163,13 @@ struct TrayScrollModel: Equatable {
         return next
     }
 
+    /// Растяжение за пределом ТЕКУЩЕЙ ФАЗЫ. Меряется от того же предела, что
+    /// и посадка: прежде растяжение считалось от упора сбора, а посадка от
+    /// предела фазы, и в убранной фазе каждое отпускание выглядело
+    /// отпусканием за краем (аудит 22.08.2026).
     var overshoot: CGFloat {
         if offset < 0 { return offset }
-        if offset > maximumOffset { return offset - maximumOffset }
+        if offset > phaseLimit { return offset - phaseLimit }
         return 0
     }
 
@@ -631,7 +635,9 @@ struct TrayDetentModel: Equatable {
         guard delta > 0, next.offset + delta > zoneStart else {
             // Вне зоны или движение от упора: до щелчка выход свободен, жест
             // легко отменяется — сопротивление только в сторону сбора.
-            next = next.scrolled(by: delta, rubberBand: stretch)
+            // Предел жеста соблюдается и здесь: прежде он принимался и молча
+            // игнорировался (аудит 22.08.2026).
+            next = next.scrolled(by: delta, rubberBand: stretch, limit: limit)
             return (next, nil)
         }
         // Часть дельты до зоны — один к одному, остаток — через натяжение.
