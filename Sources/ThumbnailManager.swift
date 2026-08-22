@@ -974,9 +974,12 @@ final class ThumbnailManager {
         let fingersDown = event.phase != []
 
         if event.phase == .began {
-            // `TR-41`: ступень открыта жесту, чьё НАЧАЛО пришлось на собранную
-            // колоду или на убранную. Условие — собранность, а не защёлка: у
-            // ленты из одного снимка хода нет, и защёлка не встаёт.
+            // `TR-41`: начало жеста идёт ЧЕРЕЗ структуру — разрешение на
+            // ступень выдаёт она, у обработчика своих флагов нет.
+            let opening = deckStep.handle(TrayStowGate.Input(
+                kind: .began, verticalAxis: axisIsVertical,
+                deckGathered: scrollModel.offset >= scrollModel.maximumOffset - 0.5))
+            if case .ignore = opening { return }
             // Новый жест — новая история скорости.
             scrollVelocity = 0
             lastScrollTimestamp = event.timestamp
@@ -990,15 +993,16 @@ final class ThumbnailManager {
         // общего блока, где события отменяют аниматоры: иначе первое же её
         // событие глушило саму пружину (`TR-13`). Так же ведёт себя системный
         // скролл: после передачи границе затухание не применяется.
-        if momentumHandedToSpring, event.momentumPhase != [] {
-            if event.momentumPhase != [] {
+        if event.momentumPhase != [] {
+            // Инерция идёт через структуру: хвост жеста ступень не двигает.
             let carried = deckStep.handle(TrayStowGate.Input(
                 kind: .momentum, delta: delta, velocity: scrollVelocity,
                 verticalAxis: axisIsVertical,
                 deckGathered: scrollModel.offset >= scrollModel.maximumOffset - 0.5))
             if case .ignore = carried { return }
         }
-        if event.momentumPhase == .ended { momentumHandedToSpring = false }
+        if momentumHandedToSpring, event.momentumPhase != [] {
+            if event.momentumPhase == .ended { momentumHandedToSpring = false }
             return
         }
         if hasPhases {
