@@ -104,11 +104,19 @@ struct TrayAxisPicker: Equatable {
         guard let vertical = trayAxisPick(accumulatedX: accumulatedX,
                                           accumulatedY: accumulatedY,
                                           threshold: Self.threshold) else { return .wait }
-        let chosen = vertical
-            ? (base.isVertical ? base : (alternate ?? base))
-            : (base.isVertical ? (alternate ?? base) : base)
+        let chosen = Self.edge(vertical: vertical, base: base, alternate: alternate)
         guard chosen != activeEdge else { return .proceed }
         return .switchTo(chosen)
+    }
+
+    /// Край для выбранного направления: пара берётся из одного угла, поэтому
+    /// вторая ось — всегда `alternate`.
+    static func edge(vertical: Bool,
+                     base: ThumbnailLayoutEdge,
+                     alternate: ThumbnailLayoutEdge?) -> ThumbnailLayoutEdge {
+        vertical
+            ? (base.isVertical ? base : (alternate ?? base))
+            : (base.isVertical ? (alternate ?? base) : base)
     }
 }
 
@@ -128,34 +136,6 @@ struct TrayBoundaryGate: Equatable {
         if momentumPhase == .ended { handedToSpring = false }
         return true
     }
-}
-
-/// Получатели события жеста, в порядке прохождения. Первый взявший
-/// останавливает цепочку — раньше это выражалось восемью ранними выходами, и
-/// каждая новая ветка обязана была помнить все предыдущие.
-enum TrayGestureRecipient: String, CaseIterable {
-    /// Выбор оси раскрытия: пока направление не явное, лента стоит.
-    case axis
-    /// Граница ленты: отскок и инерция, отданная пружине.
-    case boundary
-    /// Сама лента: защёлка и прокрутка.
-    case strip
-}
-
-/// Состояние, принадлежащее жесту. Раньше эти величины лежали отдельными
-/// полями менеджера, и любая правка обработчика обязана была помнить их все.
-struct TrayGestureState: Equatable {
-    var axis = TrayAxisPicker()
-    var velocity = TrayVelocityEstimator()
-    var boundary = TrayBoundaryGate()
-    var scrollGestureActive = false
-    /// Была ли колода собрана на прошлом событии.
-    var wasGathered = true
-    /// Кто взял последнее событие. Ведётся ради проверяемости маршрута: без
-    /// него «кто съел событие» видно только под отладчиком.
-    var lastTaker: TrayGestureRecipient?
-    /// Кому был разослан конец последнего жеста.
-    var endedRecipients: [TrayGestureRecipient] = []
 }
 
 /// Мир, с которым работает механика жеста: позиция ленты, защёлка, анимации,
@@ -196,6 +176,313 @@ protocol TrayGestureOutput: AnyObject {
     func gestureScheduleSettleAfterGesture()
 }
 
+/// Получатели события жеста, в порядке прохождения. Первый взявший
+/// останавливает цепочку — раньше это выражалось восемью ранними выходами, и
+/// каждая новая ветка обязана была помнить все предыдущие.
+enum TrayGestureRecipient: String, CaseIterable {
+    /// Выбор оси раскрытия: пока направление не явное, лента стоит.
+    case axis
+    /// Граница ленты: отскок и инерция, отданная пружине.
+    case boundary
+    /// Сама лента: защёлка и прокрутка.
+    case strip
+}
+
+/// Разобранное событие. Величины, зависящие от оси, считаются по запросу:
+/// выбор оси стоит первым в цепочке и может сменить ось под теми, кто идёт
+/// следом.
+@MainActor
+struct TrayGestureEvent {
+    let input: TrayGestureInput
+    /// Колода собрана: лента доехала до упора и стоит там.
+    let gathered: Bool
+    /// Трекпад шлёт фазы жеста и инерции; классическое колесо — нет.
+    let hasPhases: Bool
+    /// Пальцы на трекпаде: фаза самого жеста. Инерция приходит уже без них.
+    let fingersDown: Bool
+
+    var phase: NSEvent.Phase { input.phase }
+    var momentumPhase: NSEvent.Phase { input.momentumPhase }
+    var timestamp: TimeInterval { input.timestamp }
+
+    /// Ход вдоль текущей оси, в точках. Колесо мыши шлёт дельту в строках, а
+    /// не в точках: один щелчок — это единица, и лента ползла на пиксель за
+    /// щелчок.
+    func delta(_ out: TrayGestureOutput) -> CGFloat {
+        let raw = out.gestureActiveEdge.isVertical
+            ? input.deltaY
+            : (abs(input.deltaX) > 0.01 ? input.deltaX : input.deltaY)
+        return input.hasPreciseDeltas ? raw : raw * TrayGestureCore.wheelLineHeight
+    }
+}
+
+/// Участник цепочки. Событие идёт по участникам по порядку; вернувший
+/// получателя забирает событие себе и останавливает цепочку.
+@MainActor
+protocol TrayGestureParty: AnyObject {
+    var kind: TrayGestureRecipient { get }
+    func receive(_ event: TrayGestureEvent, out: TrayGestureOutput) -> TrayGestureRecipient?
+    /// Конец жеста доходит до КАЖДОГО участника, независимо от того, кто взял
+    /// событие.
+    func gestureEnded(_ event: TrayGestureEvent, out: TrayGestureOutput)
+}
+
+// MARK: - Ось
+
+/// Выбор оси раскрытия (`TR-38`): первым в цепочке, потому что от него
+/// зависит, вдоль чего вообще считать ход.
+@MainActor
+final class TrayAxisParty: TrayGestureParty {
+    let kind = TrayGestureRecipient.axis
+    private(set) var picker = TrayAxisPicker()
+    /// Была ли колода собрана на прошлом событии.
+    private(set) var wasGathered = true
+
+    func receive(_ event: TrayGestureEvent, out: TrayGestureOutput) -> TrayGestureRecipient? {
+        defer { wasGathered = event.gathered }
+        if event.gathered, !wasGathered {
+            // Колода только что собралась: направление считаем с этой точки,
+            // иначе в счётчике остаётся ход, которым её и собирали, и он
+            // перевешивает новое направление (приёмка 21.08.2026).
+            picker.restart()
+        }
+        // Ось выбирает ПАЛЕЦ. Инерция оси не выбирает: события догона летят
+        // уже после отрыва, и хвост предыдущего жеста уводил ленту в
+        // направление, которого пользователь не показывал (приёмка
+        // 20.08.2026).
+        guard out.gestureAlternateEdge != nil, event.gathered,
+              event.momentumPhase == [] else { return nil }
+        switch picker.decide(deltaX: event.input.deltaX,
+                             deltaY: event.input.deltaY,
+                             began: event.phase == .began,
+                             activeEdge: out.gestureActiveEdge,
+                             base: out.gestureBaseEdge,
+                             alternate: out.gestureAlternateEdge) {
+        case .proceed:
+            return nil
+        case .wait:
+            // Пока колода собрана и ось не выбрана, лента не двигается —
+            // копится ход пальца, и по нему решается, вверх раскрывать или
+            // влево.
+            return kind
+        case .switchTo(let edge):
+            out.gestureSwitchAxis(to: edge)
+            return nil
+        }
+    }
+
+    func gestureEnded(_ event: TrayGestureEvent, out: TrayGestureOutput) {
+        // Ход выбора оси обнуляется началом следующего жеста, а не концом
+        // текущего: инерция после отрыва идёт по уже выбранной оси.
+    }
+}
+
+// MARK: - Граница
+
+/// Граница ленты: кому принадлежит инерция и кто отвечает за отскок.
+@MainActor
+final class TrayBoundaryParty: TrayGestureParty {
+    let kind = TrayGestureRecipient.boundary
+    private(set) var gate = TrayBoundaryGate()
+    private unowned let core: TrayGestureCore
+
+    init(core: TrayGestureCore) { self.core = core }
+
+    func receive(_ event: TrayGestureEvent, out: TrayGestureOutput) -> TrayGestureRecipient? {
+        if event.phase == .began { beginGesture(event, out: out) }
+        // Инерцию, уже переданную пружине границы, не читаем вовсе — и до
+        // общего блока, где события отменяют аниматоры: иначе первое же её
+        // событие глушило саму пружину (`TR-13`). Так же ведёт себя системный
+        // скролл: после передачи границе затухание не применяется.
+        return gate.swallows(momentumPhase: event.momentumPhase) ? kind : nil
+    }
+
+    private func beginGesture(_ event: TrayGestureEvent, out: TrayGestureOutput) {
+        // Новый жест — новая история скорости.
+        core.velocity.restart(at: event.timestamp)
+        gate.reset()
+        // Палец коснулся во время догона: длинная инерционная подача
+        // пережимается в короткую от текущего значения — перенацеливание
+        // вместо среза (скилл, прерываемость).
+        if out.gestureDipAnimating { out.gestureRunDetentSpringUnderFinger() }
+    }
+
+    /// Отскок: лента на границе и инерция толкает наружу. Решается ДО
+    /// применения дельты, прямой проверкой края. Скорость — из текущего кадра,
+    /// сглаженная оценка к этому моменту уже испорчена зажатыми кадрами
+    /// (`TR-13`).
+    func takeBounce(_ event: TrayGestureEvent,
+                    delta: CGFloat,
+                    out: TrayGestureOutput) -> TrayGestureRecipient? {
+        guard TrayBoundaryHandoff.shouldBounce(model: out.gestureModel, delta: delta,
+                                               fingersDown: event.fingersDown,
+                                               isMomentum: event.momentumPhase != []) else { return nil }
+        let outward = core.velocity.frameVelocity(delta: delta, at: event.timestamp)
+        gate.handOff()
+        out.gestureRunBoundarySpring(from: out.gestureModel.offset, velocity: outward)
+        return kind
+    }
+
+    func handOff() { gate.handOff() }
+
+    func gestureEnded(_ event: TrayGestureEvent, out: TrayGestureOutput) {
+        // Признаком передачи инерции распоряжаются сами ветки конца:
+        // отпускание за краем оставляет инерцию пружине.
+    }
+}
+
+// MARK: - Лента
+
+/// Сама лента: защёлка, прокрутка, посадка. Последняя в цепочке — берёт всё,
+/// что не забрали ось и граница.
+@MainActor
+final class TrayStripParty: TrayGestureParty {
+    let kind = TrayGestureRecipient.strip
+    private unowned let core: TrayGestureCore
+
+    init(core: TrayGestureCore) { self.core = core }
+
+    func receive(_ event: TrayGestureEvent, out: TrayGestureOutput) -> TrayGestureRecipient? {
+        prepareFrame(event, out: out)
+        let delta = event.delta(out)
+        guard out.gestureModel.isScrollable || abs(delta) > 0.01 else { return kind }
+        out.gestureClearScrollIntent()
+        if let taker = apply(event, delta: delta, out: out) { return taker }
+        out.gestureApplyScrollOffset()
+        settle(event, out: out)
+        return kind
+    }
+
+    /// Общий кадр жеста: отложенный возврат отменяется, актуатор взводится,
+    /// источник отклика запоминается на всё время жеста.
+    private func prepareFrame(_ event: TrayGestureEvent, out: TrayGestureOutput) {
+        guard event.hasPhases else { return }
+        // Новое событие отменяет отложенный возврат: жест продолжается.
+        out.gestureCancelSettleAnimation(bumpGeneration: true)
+        // Открытие актуатора внешнего трекпада стоит сотни миллисекунд
+        // (Bluetooth): готовим дескриптор в фоне заранее, чтобы сам щелчок
+        // стоил доли миллисекунды.
+        out.gesturePrepareHaptics()
+        // Устройство берётся из самого события (`TR-29`). В инерции
+        // HID-нагрузки может не быть, поэтому источник запоминается на всё
+        // время жеста: защёлка часто срабатывает уже на инерции.
+        out.gestureAdoptDevice(event.input.deviceLookup())
+        if !core.scrollGestureActive {
+            let model = out.gestureModel
+            out.gestureLog("gesture offset=\(Int(model.offset)) max=\(Int(model.maximumOffset)) fits=\(TrayDetentModel.fits(model)) engaged=\(out.gestureDetentEngaged)")
+        }
+        core.scrollGestureActive = true
+    }
+
+    /// Применение хода. Возвращает получателя, если событие забрала граница.
+    private func apply(_ event: TrayGestureEvent,
+                       delta: CGFloat,
+                       out: TrayGestureOutput) -> TrayGestureRecipient? {
+        // Резинка только у жестов с фазами: колесо упирается в край жёстко.
+        // Содержимое идёт за пальцами: положительная дельта двигает карточки к
+        // хабу. Жест никогда не прячет и не показывает трей — это делает
+        // только клик по кнопке; перетягивание за край лишь пружинит.
+        guard event.hasPhases else { return applyWheel(delta: delta, out: out) }
+        // `TR-29`: дельты жеста идут через защёлку — у полного сбора лента
+        // проходит точку напряжения и защёлкивается со щелчком.
+        if TrayDetentModel.isNearDetent(out.gestureModel) { out.gestureArmHaptics() }
+        // Растягивает резинку только палец: инерция упирается в край, иначе
+        // после отпускания лента продолжает уезжать (приёмка 19.08.2026).
+        if let taker = core.boundaryParty.takeBounce(event, delta: delta, out: out) { return taker }
+        applyDetent(event, delta: delta, out: out)
+        return nil
+    }
+
+    private func applyDetent(_ event: TrayGestureEvent, delta: CGFloat, out: TrayGestureOutput) {
+        let before = out.gestureModel.offset
+        let result = out.gestureApplyDetent(delta: delta, stretch: event.fingersDown)
+        // Щелчок ПЕРЕНАЦЕЛИВАЕТ движение: прыжок модели поглощается подачей,
+        // видимая позиция остаётся непрерывной. Сдвиг больше порога
+        // восприятия за один кадр запрещён (`TR-29`).
+        out.gestureWriteModel(result.model, absorbJump: result.click != nil)
+        core.velocity.track(movement: out.gestureModel.offset - before, at: event.timestamp)
+        // Под пальцем догон короткий и без перелёта: палец сохраняет контроль
+        // над моделью, затухает только разница. На инерции — длиннее и с
+        // лёгкой осадкой.
+        if let click = result.click {
+            out.gesturePerformDetentClick(click, underFinger: event.fingersDown)
+        }
+    }
+
+    /// Колесо шагает дискретно: защёлка следует за фактом без щелчка. Пружину
+    /// границы колесо гасит — иначе позицию пишут двое сразу.
+    private func applyWheel(delta: CGFloat, out: TrayGestureOutput) -> TrayGestureRecipient? {
+        out.gestureCancelSettleAnimation(bumpGeneration: false)
+        out.gestureWriteModel(out.gestureModel.scrolled(by: delta, rubberBand: false),
+                              absorbJump: false)
+        out.gestureSyncDetent()
+        return nil
+    }
+
+    /// Посадка после кадра: у колеса — сразу, у жеста — по виду завершения.
+    private func settle(_ event: TrayGestureEvent, out: TrayGestureOutput) {
+        guard event.hasPhases else {
+            out.gestureWriteModel(out.gestureModel.settled(), absorbJump: false)
+            out.gestureApplyScrollOffset()
+            return
+        }
+        guard event.momentumPhase != .ended else {
+            // Инерция кончилась — жест завершён окончательно.
+            core.scrollGestureActive = false
+            out.gestureSettleScrollAnimated()
+            return core.finishGesture(event, out: out)
+        }
+        guard event.phase == .ended || event.phase == .cancelled else { return }
+        core.scrollGestureActive = false
+        finishRelease(event, out: out)
+        core.finishGesture(event, out: out)
+    }
+
+    /// Отпускание пальцев: за краем, броском или обычным возвратом.
+    private func finishRelease(_ event: TrayGestureEvent, out: TrayGestureOutput) {
+        // Отпустили за краем: пружина возврата стартует со скоростью жеста, а
+        // вся последующая инерция игнорируется — иначе её события отменяли
+        // пружину и схлопывали растяжение телепортом (`TR-13`).
+        guard abs(out.gestureModel.overshoot) <= 0.5 else {
+            core.boundaryParty.handOff()
+            return out.gestureSettleScrollAnimated()
+        }
+        // `TR-36`: уверенный бросок к сбору защёлкивает ПО НАМЕРЕНИЮ — по
+        // точке, где лента остановилась бы сама, а не по факту доезда. Иначе
+        // бросок, не дотянувший чуть-чуть, читается как «не сработало».
+        guard out.gestureDetentEngaged
+                || !TrayFlickProjection.shouldSnap(model: out.gestureModel,
+                                                   velocity: core.velocity.value) else {
+            return out.gestureSnapByFlick()
+        }
+        // Пальцы сняты, но следом может пойти инерция. Возврат из-за края
+        // откладывается: запущенный сразу, он тут же отменялся первым же
+        // событием инерции, которое снова тянуло ленту наружу (приёмка
+        // 19.08.2026).
+        out.gestureScheduleSettleAfterGesture()
+    }
+
+    func gestureEnded(_ event: TrayGestureEvent, out: TrayGestureOutput) {
+        // Посадку ленты выполняет ветка, определившая вид завершения.
+    }
+}
+
+/// Снимок состояния жеста: собирается из участников, чтобы состояние было
+/// видно одним куском — и в проверках, и при разборе поведения.
+struct TrayGestureState: Equatable {
+    var axis = TrayAxisPicker()
+    var velocity = TrayVelocityEstimator()
+    var boundary = TrayBoundaryGate()
+    var scrollGestureActive = false
+    var wasGathered = true
+    /// Кто взял последнее событие.
+    var lastTaker: TrayGestureRecipient?
+    /// Кому был разослан конец последнего жеста.
+    var endedRecipients: [TrayGestureRecipient] = []
+    /// Кого обошла цепочка на последнем событии.
+    var visitedRecipients: [TrayGestureRecipient] = []
+}
+
 /// Механика жеста прокрутки трея.
 ///
 /// Класс, а не структура: владелец передаёт себя как `out`, и механика по ходу
@@ -206,241 +493,82 @@ final class TrayGestureCore {
     /// Щелчок колеса приходит в строках, а не в точках.
     static let wheelLineHeight: CGFloat = 40
 
-    private(set) var state = TrayGestureState()
+    /// Оценка скорости общая: её ведёт лента, читают граница и бросок.
+    var velocity = TrayVelocityEstimator()
+    var scrollGestureActive = false
+    private(set) var lastTaker: TrayGestureRecipient?
+    private(set) var endedRecipients: [TrayGestureRecipient] = []
+    /// Кого обошла цепочка на последнем событии. Первый взявший останавливает
+    /// перебор, и следующие в этом списке не появляются.
+    private(set) var visitedRecipients: [TrayGestureRecipient] = []
 
-    /// Колода собрана: лента доехала до упора и стоит там.
-    private func deckIsGathered(_ model: TrayScrollModel) -> Bool {
-        model.offset >= model.maximumOffset - 0.5
-    }
+    private(set) lazy var axisParty = TrayAxisParty()
+    private(set) lazy var boundaryParty = TrayBoundaryParty(core: self)
+    private(set) lazy var stripParty = TrayStripParty(core: self)
+    /// Порядок фиксирован и повторяет прежний порядок проверок дословно.
+    private lazy var parties: [any TrayGestureParty] = [axisParty, boundaryParty, stripParty]
 
-    /// Прогоняет событие через выбор оси. `false` — лента стоит, ход копится.
-    private func pickOpenAxis(_ input: TrayGestureInput, out: TrayGestureOutput) -> Bool {
-        switch state.axis.decide(deltaX: input.deltaX,
-                                 deltaY: input.deltaY,
-                                 began: input.phase == .began,
-                                 activeEdge: out.gestureActiveEdge,
-                                 base: out.gestureBaseEdge,
-                                 alternate: out.gestureAlternateEdge) {
-        case .proceed:
-            return true
-        case .wait:
-            return false
-        case .switchTo(let edge):
-            out.gestureSwitchAxis(to: edge)
-            return true
-        }
-    }
-
-    /// История скорости начинается заново: прежние отсчёты сняты с движения по
-    /// другой оси. Обнулять её на каждом событии нельзя — так ломается оценка
-    /// скорости, а с ней проекция броска.
-    func resetVelocity(at timestamp: TimeInterval) {
-        state.velocity.restart(at: timestamp)
-    }
-
-    /// Жест завершён извне (лента спрятана, карточки схлопнуты).
-    func endGesture() {
-        state.scrollGestureActive = false
-    }
-
-    func handOffMomentumToSpring() {
-        state.boundary.handOff()
+    var state: TrayGestureState {
+        TrayGestureState(axis: axisParty.picker,
+                         velocity: velocity,
+                         boundary: boundaryParty.gate,
+                         scrollGestureActive: scrollGestureActive,
+                         wasGathered: axisParty.wasGathered,
+                         lastTaker: lastTaker,
+                         endedRecipients: endedRecipients,
+                         visitedRecipients: visitedRecipients)
     }
 
     /// Непрерывная прокрутка ленты (`TR-1`, `TR-2`). Пошаговое переключение
     /// заменено на смещение, потому что ступенчатая лента не даёт понять, где
     /// ты находишься, и не позволяет остановиться между карточками.
     func handle(_ input: TrayGestureInput, out: TrayGestureOutput) {
-        guard !out.gestureCardsAreCollapsed else { return }
-        // `TR-38`: ось раскрытия выбирает ЖЕСТ. Пока колода собрана и ось не
-        // выбрана, лента не двигается — копится ход пальца, и по нему
-        // решается, вверх раскрывать или влево.
-        // Ось выбирает ПАЛЕЦ. Инерция оси не выбирает: события догона летят
-        // уже после отрыва, и хвост предыдущего жеста уводил ленту в
-        // направление, которого пользователь не показывал (приёмка
-        // 20.08.2026).
-        let gathered = deckIsGathered(out.gestureModel)
-        defer { state.wasGathered = gathered }
-        if gathered, !state.wasGathered {
-            // Колода только что собралась: направление считаем с этой точки,
-            // иначе в счётчике остаётся ход, которым её и собирали, и он
-            // перевешивает новое направление (приёмка 21.08.2026).
-            state.axis.restart()
-        }
-        if out.gestureAlternateEdge != nil, gathered, input.momentumPhase == [],
-           !pickOpenAxis(input, out: out) { return hand(to: .axis) }
-        let vertical = out.gestureActiveEdge.isVertical
-        // Ход, накопленный до выбора оси, лента НЕ наверстывает. Порог —
-        // мёртвая зона распознавания направления, как у системных жестов:
-        // после него движение идёт с текущей точки. Наверстывание давало
-        // скачок на старте и завышало оценку скорости, отчего ломались
-        // проекция броска и подача (приёмка 20.08.2026).
-        let raw = vertical
-            ? input.deltaY
-            : (abs(input.deltaX) > 0.01 ? input.deltaX : input.deltaY)
-        // Колесо мыши шлёт дельту в строках, а не в точках: один щелчок — это
-        // единица, и лента ползла на пиксель за щелчок.
-        let delta = input.hasPreciseDeltas ? raw : raw * Self.wheelLineHeight
-        // Трекпад шлёт фазы жеста и инерции; классическое колесо — нет.
-        let hasPhases = input.phase != [] || input.momentumPhase != []
-        // Пальцы на трекпаде: фаза самого жеста. Инерция приходит уже без них
-        // (`momentumPhase`) — и это разные режимы для анимации щелчка.
-        let fingersDown = input.phase != []
-
-        if input.phase == .began {
-            // Новый жест — новая история скорости.
-            state.velocity.restart(at: input.timestamp)
-            state.boundary.reset()
-            // Палец коснулся во время догона: длинная инерционная подача
-            // пережимается в короткую от текущего значения — перенацеливание
-            // вместо среза (скилл, прерываемость).
-            if out.gestureDipAnimating { out.gestureRunDetentSpringUnderFinger() }
-        }
-        // Инерцию, уже переданную пружине границы, не читаем вовсе — и до
-        // общего блока, где события отменяют аниматоры: иначе первое же её
-        // событие глушило саму пружину (`TR-13`). Так же ведёт себя системный
-        // скролл: после передачи границе затухание не применяется.
-        if state.boundary.swallows(momentumPhase: input.momentumPhase) { return hand(to: .boundary) }
-        if hasPhases {
-            // Новое событие отменяет отложенный возврат: жест продолжается.
-            out.gestureCancelSettleAnimation(bumpGeneration: true)
-            // Открытие актуатора внешнего трекпада стоит сотни миллисекунд
-            // (Bluetooth): готовим дескриптор в фоне заранее, чтобы сам
-            // щелчок стоил доли миллисекунды.
-            out.gesturePrepareHaptics()
-            // Устройство берётся из самого события (`TR-29`). В инерции
-            // HID-нагрузки может не быть, поэтому источник запоминается на
-            // всё время жеста: защёлка часто срабатывает уже на инерции.
-            out.gestureAdoptDevice(input.deviceLookup())
-            if !state.scrollGestureActive {
-                let model = out.gestureModel
-                out.gestureLog("gesture offset=\(Int(model.offset)) max=\(Int(model.maximumOffset)) fits=\(TrayDetentModel.fits(model)) engaged=\(out.gestureDetentEngaged)")
-            }
-            state.scrollGestureActive = true
-        }
-
-        guard out.gestureModel.isScrollable || abs(delta) > 0.01 else { return }
-        out.gestureClearScrollIntent()
-        // Резинка только у жестов с фазами: колесо упирается в край жёстко.
-        // Содержимое идёт за пальцами: положительная дельта двигает карточки к
-        // хабу. Обратный знак разворачивал ленту против жеста. Жест никогда не
-        // прячет и не показывает трей — это делает только клик по кнопке;
-        // перетягивание за край лишь пружинит и возвращается.
-        if hasPhases {
-            // `TR-29`: дельты жеста идут через защёлку — у полного сбора лента
-            // проходит точку напряжения и защёлкивается со щелчком.
-            if TrayDetentModel.isNearDetent(out.gestureModel) { out.gestureArmHaptics() }
-            // Растягивает резинку только палец: инерция упирается в край,
-            // иначе после отпускания лента продолжает уезжать, а возврат
-            // приходит с задержкой (приёмка 19.08.2026).
-            // Отскок решается ДО применения дельты, прямой проверкой края:
-            // лента на границе и инерция толкает наружу. Скорость — из
-            // текущего кадра (дельта/время), сглаженная оценка к этому
-            // моменту уже испорчена зажатыми кадрами (`TR-13`).
-            if TrayBoundaryHandoff.shouldBounce(model: out.gestureModel, delta: delta,
-                                                fingersDown: fingersDown,
-                                                isMomentum: input.momentumPhase != []) {
-                let outward = state.velocity.frameVelocity(delta: delta, at: input.timestamp)
-                state.boundary.handOff()
-                out.gestureRunBoundarySpring(from: out.gestureModel.offset, velocity: outward)
-                return hand(to: .boundary)
-            }
-            let before = out.gestureModel.offset
-            let result = out.gestureApplyDetent(delta: delta, stretch: fingersDown)
-            // Щелчок ПЕРЕНАЦЕЛИВАЕТ движение: прыжок модели поглощается
-            // подачей, видимая позиция остаётся непрерывной. Сдвиг больше
-            // порога восприятия за один кадр запрещён (`TR-29`).
-            out.gestureWriteModel(result.model, absorbJump: result.click != nil)
-            state.velocity.track(movement: out.gestureModel.offset - before, at: input.timestamp)
-            if let click = result.click {
-                // Под пальцем догон короткий и без перелёта: палец сохраняет
-                // контроль над моделью, затухает только разница. На инерции —
-                // длиннее и с лёгкой осадкой.
-                out.gesturePerformDetentClick(click, underFinger: fingersDown)
-            }
-        } else {
-            // Колесо шагает дискретно: защёлка следует за фактом без щелчка.
-            // Пружину границы колесо гасит — иначе позицию пишут двое сразу.
-            out.gestureCancelSettleAnimation(bumpGeneration: false)
-            out.gestureWriteModel(out.gestureModel.scrolled(by: delta, rubberBand: false),
-                                  absorbJump: false)
-            out.gestureSyncDetent()
-        }
-
-        hand(to: .strip)
-        out.gestureApplyScrollOffset()
-
-        if !hasPhases {
-            out.gestureWriteModel(out.gestureModel.settled(), absorbJump: false)
-            out.gestureApplyScrollOffset()
-            return
-        }
-        if input.momentumPhase == .ended {
-            // Инерция кончилась — жест завершён окончательно.
-            state.scrollGestureActive = false
-            out.gestureSettleScrollAnimated()
-            finishGesture(out: out)
-        } else if (input.phase == .ended || input.phase == .cancelled),
-                  abs(out.gestureModel.overshoot) > 0.5 {
-            // Отпустили за краем: пружина возврата стартует со скоростью
-            // жеста, а вся последующая инерция игнорируется — иначе её
-            // события отменяли пружину и схлопывали растяжение телепортом.
-            // Системный скролл после отпускания за краем инерцию тоже не
-            // читает (`TR-13`).
-            state.scrollGestureActive = false
-            state.boundary.handOff()
-            out.gestureSettleScrollAnimated()
-            finishGesture(out: out)
-        } else if input.phase == .ended || input.phase == .cancelled {
-            state.scrollGestureActive = false
-            // `TR-36`: уверенный бросок к сбору защёлкивает ПО НАМЕРЕНИЮ —
-            // по точке, где лента остановилась бы сама, а не по факту
-            // доезда. Иначе бросок, не дотянувший чуть-чуть, читается как
-            // «не сработало».
-            if !out.gestureDetentEngaged,
-               TrayFlickProjection.shouldSnap(model: out.gestureModel, velocity: state.velocity.value) {
-                out.gestureSnapByFlick()
-                finishGesture(out: out)
-                return
-            }
-            // Пальцы сняты, но следом может пойти инерция. Возврат из-за края
-            // откладывается: запущенный сразу, он тут же отменялся первым же
-            // событием инерции, которое снова тянуло ленту наружу — старт,
-            // отмена, старт, и это читалось как дёрганье (приёмка 19.08.2026).
-            out.gestureScheduleSettleAfterGesture()
-            finishGesture(out: out)
+        guard let event = intake(input, out: out) else { return }
+        lastTaker = nil
+        visitedRecipients = []
+        for party in parties {
+            visitedRecipients.append(party.kind)
+            guard let taker = party.receive(event, out: out) else { continue }
+            lastTaker = taker
+            break
         }
     }
 
-    /// Отмечает получателя, взявшего событие.
-    private func hand(to recipient: TrayGestureRecipient) {
-        state.lastTaker = recipient
+    /// Разбор события: один раз, на входе в цепочку.
+    private func intake(_ input: TrayGestureInput, out: TrayGestureOutput) -> TrayGestureEvent? {
+        guard !out.gestureCardsAreCollapsed else { return nil }
+        let model = out.gestureModel
+        return TrayGestureEvent(input: input,
+                                gathered: model.offset >= model.maximumOffset - 0.5,
+                                hasPhases: input.phase != [] || input.momentumPhase != [],
+                                fingersDown: input.phase != [])
     }
 
-    /// Конец жеста проходит по ВСЕМ получателям, а не съедается первой веткой.
+    /// Конец жеста проходит по ВСЕМ участникам, а не съедается первой веткой.
     ///
-    /// Сегодня оси и границе на конце жеста делать нечего, и это записано
-    /// здесь явно, а не подразумевается отсутствием кода. Любое изменение
-    /// того, ЧТО они делают, — отдельная задача: этот перенос поведение не
-    /// меняет.
-    private func finishGesture(out: TrayGestureOutput) {
-        state.endedRecipients = []
-        for recipient in TrayGestureRecipient.allCases {
-            switch recipient {
-            case .axis:
-                // Ход выбора оси обнуляется началом следующего жеста, а не
-                // концом текущего: инерция после отрыва идёт по уже выбранной
-                // оси.
-                break
-            case .boundary:
-                // Признаком передачи инерции распоряжаются сами ветки конца:
-                // отпускание за краем оставляет инерцию пружине.
-                break
-            case .strip:
-                // Посадку ленты выполняет ветка, определившая вид завершения.
-                break
-            }
-            state.endedRecipients.append(recipient)
+    /// Сегодня оси и границе на конце жеста делать нечего, и это записано в их
+    /// собственных методах, а не подразумевается отсутствием кода. Любое
+    /// изменение того, ЧТО они делают, — отдельная задача.
+    func finishGesture(_ event: TrayGestureEvent, out: TrayGestureOutput) {
+        endedRecipients = []
+        for party in parties {
+            party.gestureEnded(event, out: out)
+            endedRecipients.append(party.kind)
         }
+    }
+
+    /// История скорости начинается заново: прежние отсчёты сняты с движения по
+    /// другой оси.
+    func resetVelocity(at timestamp: TimeInterval) {
+        velocity.restart(at: timestamp)
+    }
+
+    /// Жест завершён извне (лента спрятана, карточки схлопнуты).
+    func endGesture() {
+        scrollGestureActive = false
+    }
+
+    func handOffMomentumToSpring() {
+        boundaryParty.handOff()
     }
 }

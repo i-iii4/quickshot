@@ -21,6 +21,10 @@ struct TrayGestureRoutingTests {
         run("конец жеста доходит до каждого получателя", testEndReachesEveryone)
         run("отпускание за краем тоже рассылает конец всем", testEndAfterOvershoot)
         run("бросок к сбору тоже рассылает конец всем", testEndAfterFlick)
+        run("взявший останавливает перебор: за осью никого", testAxisStopsChain)
+        run("взявший останавливает перебор: за границей нет ленты", testBoundaryStopsChain)
+        run("не взявшие пропускают событие дальше", testChainReachesStrip)
+        run("каждый получатель — свой тип со своими методами", testPartiesAreSeparateTypes)
         run("следующий жест начинает счёт направления с нуля", testNoLeftoverState)
         run("обработчик не хранит полей состояния жеста", testHandlerHoldsNoState)
         run("обработчик остаётся коротким", testHandlerStaysShort)
@@ -77,6 +81,41 @@ struct TrayGestureRoutingTests {
                     "Отскок обязан оставаться у границы, взял: \(String(describing: core.state.lastTaker))")
         try require(probe.effects.contains(where: { $0.hasPrefix("boundarySpring") }),
                     "Пружина границы не запущена: \(probe.effects)")
+    }
+
+    private static func testAxisStopsChain() throws {
+        let (core, probe) = make(gathered: true, alternate: .bottom)
+        core.handle(input(dx: 4, dy: 0, phase: .began), out: probe)
+        try require(core.state.visitedRecipients == [.axis],
+                    "Цепочка пошла дальше оси: \(core.state.visitedRecipients)")
+    }
+
+    private static func testBoundaryStopsChain() throws {
+        let (core, probe) = make(gathered: false, alternate: nil)
+        core.handOffMomentumToSpring()
+        core.handle(input(dx: 0, dy: 12, phase: [], momentum: .changed), out: probe)
+        try require(core.state.visitedRecipients == [.axis, .boundary],
+                    "Лента получила событие, съеденное границей: \(core.state.visitedRecipients)")
+    }
+
+    private static func testChainReachesStrip() throws {
+        let (core, probe) = make(gathered: false, alternate: nil)
+        core.handle(input(dx: 0, dy: 6, phase: .began), out: probe)
+        try require(core.state.visitedRecipients == [.axis, .boundary, .strip],
+                    "Событие не дошло до ленты: \(core.state.visitedRecipients)")
+    }
+
+    private static func testPartiesAreSeparateTypes() throws {
+        let source = try read("Sources/TrayGestureCore.swift")
+        for name in ["TrayAxisParty", "TrayBoundaryParty", "TrayStripParty"] {
+            try require(source.contains("final class \(name): TrayGestureParty"),
+                        "Получатель \(name) не отдельный тип")
+        }
+        // У каждого — оба метода: приём события и конец жеста.
+        try require(source.components(separatedBy: "func receive(_ event: TrayGestureEvent").count == 5,
+                    "Метод приёма есть не у всех трёх получателей")
+        try require(source.components(separatedBy: "func gestureEnded(_ event: TrayGestureEvent").count == 5,
+                    "Метод конца жеста есть не у всех трёх получателей")
     }
 
     // MARK: - Конец жеста
