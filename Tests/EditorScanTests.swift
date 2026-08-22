@@ -53,6 +53,20 @@ struct EditorScanTests {
         guard calls == 4 else {
             throw Failure("вызовов ступени \(calls) вместо четырёх: ветка осталась без связи")
         }
+
+        // КАЖДАЯ ветка завершения жеста ведёт в ступень. Ветки считаются ПО
+        // КОДУ, а не по памяти: их три — конец инерции, отпускание за краем,
+        // обычное отпускание, — и вызов стоял лишь в одной. После
+        // срабатывания ступени жест уходит как раз во вторую ветку, поэтому
+        // структура о конце не узнавала и трей переставал реагировать
+        // (приёмка 22.08.2026).
+        let endings = source.components(separatedBy: "\n").filter {
+            $0.contains("scrollGestureActive = false") && !$0.contains("private var")
+        }.count
+        let finishes = source.components(separatedBy: "finishGestureForStep(").count - 2
+        guard finishes >= endings else {
+            throw Failure("веток завершения жеста \(endings), а завершений ступени \(finishes)")
+        }
         guard !source.contains("private var stow") else {
             throw Failure("обработчик снова держит своё состояние ступени")
         }

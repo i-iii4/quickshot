@@ -1138,6 +1138,7 @@ final class ThumbnailManager {
         if event.momentumPhase == .ended {
             // Инерция кончилась — жест завершён окончательно.
             scrollGestureActive = false
+            if finishGestureForStep() { return }
             settleScrollAnimated()
         } else if (event.phase == .ended || event.phase == .cancelled),
                   abs(scrollModel.overshoot) > 0.5 {
@@ -1148,19 +1149,11 @@ final class ThumbnailManager {
             // читает (`TR-13`).
             scrollGestureActive = false
             momentumHandedToSpring = true
+            if finishGestureForStep(cancelled: event.phase == .cancelled) { return }
             settleScrollAnimated()
         } else if event.phase == .ended || event.phase == .cancelled {
             scrollGestureActive = false
-            // Конец жеста тоже идёт ЧЕРЕЗ структуру: обнулять снаружи нечего.
-            let ending = deckStep.handle(TrayStowGate.Input(
-                kind: event.phase == .cancelled ? TrayStowGate.Kind.cancelled : .ended,
-                verticalAxis: axisIsVertical,
-                deckGathered: scrollModel.offset >= scrollModel.maximumOffset - 0.5))
-            if case .release = ending {
-                animateStep(to: scrollModel.phaseLimit, velocity: 0)
-                return
-            }
-            if case .ignore = ending { return }
+            if finishGestureForStep(cancelled: event.phase == .cancelled) { return }
             // `TR-36`: уверенный бросок к сбору защёлкивает ПО НАМЕРЕНИЮ —
             // по точке, где лента остановилась бы сама, а не по факту
             // доезда. Иначе бросок, не дотянувший чуть-чуть, читается как
@@ -1226,6 +1219,30 @@ final class ThumbnailManager {
             self.writeModel(target)
             self.applyScrollOffset()
         })
+    }
+
+    /// Завершение жеста для ступени (`TR-41`) — ЕДИНСТВЕННЫЙ путь.
+    ///
+    /// Веток завершения три: конец инерции, отпускание за краем и обычное
+    /// отпускание. Вызов структуры стоял только в третьей, поэтому после
+    /// срабатывания ступени — а оно как раз оставляет ленту растянутой и
+    /// уводит жест во вторую ветку — структура о конце не узнавала. Признак
+    /// «израсходован» оставался навсегда, и трей переставал реагировать на
+    /// свайпы вовсе (приёмка 22.08.2026).
+    ///
+    /// Теперь ветки зовут этот метод, а сканирующая проверка требует, чтобы
+    /// вызовов было столько же, сколько мест сброса `scrollGestureActive`.
+    @discardableResult
+    private func finishGestureForStep(cancelled: Bool = false) -> Bool {
+        let ending = deckStep.handle(TrayStowGate.Input(
+            kind: cancelled ? TrayStowGate.Kind.cancelled : .ended,
+            verticalAxis: axisIsVertical,
+            deckGathered: scrollModel.offset >= scrollModel.maximumOffset - 0.5))
+        if case .release = ending {
+            animateStep(to: scrollModel.phaseLimit, velocity: 0)
+            return true
+        }
+        return false
     }
 
     /// Оценка скорости ленты по событиям, pt/с. Сглаживание убирает выброс от
@@ -1982,6 +1999,9 @@ final class ThumbnailManager {
         scrollSettleAnimator.cancel()
         scrollSettleAnimating = false
         scrollGestureActive = false
+        // Программный сбор обрывает жест: ступень обязана узнать и об этом,
+        // иначе разрешение и признак израсходованности повисают.
+        finishGestureForStep(cancelled: true)
         let from = scrollModel.offset
         guard abs(target - from) > 0.5 else {
             writePresented(target)
