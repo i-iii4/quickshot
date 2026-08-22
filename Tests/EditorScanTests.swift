@@ -52,13 +52,14 @@ struct EditorScanTests {
         let handler = try body(of: "func scrollTray(with event: NSEvent)", in: live)
 
         // Каждая форма события доходит до ступени ИЗ ТЕЛА обработчика.
-        for kind in ["began", "changed", "momentum"] {
-            guard handler.contains("kind: .\(kind)") || handler.contains("Kind.\(kind)") else {
+        // Каждая форма события доходит до ступени ИЗ ТЕЛА обработчика — либо
+        // прямым вызовом, либо через перевод фазы в форму.
+        for kind in ["began", "changed", "momentum", "ended", "cancelled"] {
+            let direct = handler.contains("kind: .\(kind)")
+            let mapped = handler.contains("stepKind = .\(kind)")
+            guard direct || mapped else {
                 throw Failure("форма события «\(kind)» не доходит до ступени из обработчика")
             }
-        }
-        guard handler.contains("Kind.cancelled") || handler.contains("finishGestureForStep") else {
-            throw Failure("конец и отмена жеста не доходят до ступени")
         }
 
         // Все ветки завершения жеста ведут в ступень. Ветки считаются ПО КОДУ:
@@ -90,6 +91,21 @@ struct EditorScanTests {
         guard line.contains("offset >= scrollModel.maximumOffset") else {
             throw Failure("состояние ленты не читается по её положению у упора")
         }
+        // Корень (аудит 22.08.2026): форма события берётся ИЗ ФАЗЫ, а не
+        // подставляется движением. Иначе конец жеста уходит в ступень как
+        // движение и обходит воронку завершения сверху.
+        guard handler.contains("kind: stepKind") else {
+            throw Failure("форма события подставляется вместо чтения фазы")
+        }
+
+        // Спящие конфликты, которые будит починка корня.
+        guard live.contains("scrollSettleAnimating || stepSettling") else {
+            throw Failure("анимация ступени не входит в условие раннего выхода синхронизации")
+        }
+        guard live.contains("private func cancelStepMotion") else {
+            throw Failure("пружина ступени нигде не отменяется")
+        }
+
         guard let readAt = live.range(of: "let wasStowed = deckStep.stowed"),
               let decisionAt = live.range(of: "scrollIntent = wasCompressed"),
               readAt.lowerBound < decisionAt.lowerBound else {

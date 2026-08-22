@@ -596,6 +596,7 @@ final class ThumbnailManager {
     }
 
     private func finishCollectionMotion() {
+        cancelStepMotion()
         guard let completion = collectionCompletion else {
             collectionAnimator.cancel()
             return
@@ -1079,13 +1080,37 @@ final class ThumbnailManager {
             // `TR-41`: решение принимает СТРУКТУРА ступени. Здесь только
             // передача события и применение ответа — своих веток и флагов у
             // обработчика нет.
+            //
+            // Форма события берётся ИЗ ФАЗЫ, а не подставляется движением.
+            // Прежде сюда жёстко шло `.changed`, поэтому конец жеста уходил в
+            // ступень как движение, ответы `.ignore` и `.tension` возвращались
+            // до блока завершения, и воронка завершения обходилась сверху:
+            // признак активного жеста залипал, ступень не отпускалась, трей
+            // замолкал до перезапуска (аудит 22.08.2026, корневой дефект).
+            let stepKind: TrayStowGate.Kind
+            if event.phase == .cancelled {
+                stepKind = .cancelled
+            } else if event.phase == .ended {
+                stepKind = .ended
+            } else if event.momentumPhase != [] {
+                stepKind = .momentum
+            } else if event.phase == .began {
+                stepKind = .began
+            } else {
+                stepKind = .changed
+            }
             let outcome = deckStep.handle(TrayStowGate.Input(
-                kind: .changed, delta: delta, velocity: scrollVelocity,
+                kind: stepKind, delta: delta, velocity: scrollVelocity,
                 verticalAxis: axisIsVertical,
                 deckGathered: scrollModel.offset >= scrollModel.maximumOffset - 0.5))
+            // Конец жеста никогда не обрывается здесь: он обязан дойти до
+            // блока завершения, где садится лента и снимается признак
+            // активного жеста.
+            let ending = stepKind == .ended || stepKind == .cancelled
             switch outcome {
             case .ignore:
                 trackVelocity(movement: 0, at: event.timestamp)
+                if ending { break }
                 return
             case .tension(let shift):
                 if deckStep.strain > TrayStow.threshold * 0.5 { TrayHaptics.shared.arm() }
@@ -1094,6 +1119,7 @@ final class ThumbnailManager {
                 writeModel(deckStep.stowed ? anchor - shift : anchor + shift)
                 applyScrollOffset()
                 trackVelocity(movement: delta, at: event.timestamp)
+                if ending { break }
                 return
             case .fire(let velocity):
                 scrollModel.stowed = true
@@ -1211,6 +1237,12 @@ final class ThumbnailManager {
             applyScrollOffset()
             return
         }
+        // Одну координату не пишут два аниматора: пружина границы и подача
+        // защёлки отменяются до старта. Иначе на возврате колоды они ехали
+        // параллельно — возврат техдолга единого источника позиции (`TR-35`).
+        scrollSettleAnimator.cancel()
+        scrollSettleAnimating = false
+        settleGeneration &+= 1
         stepSettling = true
         let relative = min(4, abs(velocity) / max(1, TrayStow.threshold))
         stepAnimator.run(duration: TrayStowAnim.response, onFrame: { [weak self] progress in
@@ -2123,6 +2155,15 @@ final class ThumbnailManager {
         })
     }
 
+    /// Останавливает пружину ступени: она ведёт координату и обязана
+    /// отменяться вместе с остальными, иначе переживает вставку снимка со
+    /// старой целью и тянет ленту в устаревшее положение.
+    private func cancelStepMotion() {
+        guard stepSettling else { return }
+        stepAnimator.cancel()
+        stepSettling = false
+    }
+
     private func finishTrayMotion() {
         let target = thumbnailTrayCollapseTarget(userCollapsed: collapsed,
                                                  hoverExpanded: trayHoverActive)
@@ -2226,7 +2267,12 @@ final class ThumbnailManager {
         applyStripMetrics(content: content, viewport: viewport, last: lengths.last ?? 0)
         // Пока идёт жест или пружинный возврат, смещение может законно жить за
         // границей — мгновенный clamp здесь и делал резинку невидимой.
-        if scrollGestureActive || scrollSettleAnimating {
+        //
+        // Анимация СТУПЕНИ тоже ведёт смещение и тоже должна быть здесь: без
+        // неё щелчок ступени становился телепортом на 80 pt за кадр, потому
+        // что синхронизация сажала ленту обратно посреди пружины (аудит
+        // 22.08.2026, спящий конфликт).
+        if scrollGestureActive || scrollSettleAnimating || stepSettling {
             if !scrollModel.isScrollable { writeModel(0) }
             return
         }
