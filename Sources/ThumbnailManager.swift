@@ -113,6 +113,10 @@ final class ThumbnailManager {
     /// Контур колоды, запомненный до убирания: по его основанию встаёт
     /// полоска третьей фазы, когда видимых карточек не осталось.
     private var caseBaseline: CGRect?
+    /// Длина ленты и её предел на прошлой синхронизации: по ним видно, что
+    /// состав изменился посреди жеста.
+    private var previousContentLength: CGFloat = 0
+    private var previousMaximumOffset: CGFloat = 0
     private var stepSettling = false
     private lazy var stepAnimator = CollectionProgressAnimator(hostView: hostContent)
 
@@ -927,6 +931,9 @@ final class ThumbnailManager {
     /// же углу.
     private func switchAxis(to edge: ThumbnailLayoutEdge) {
         openAxis = edge
+        // Смена оси отзывает разрешение ступени: оно выдавалось на вертикали,
+        // и без отзыва колода убиралась боковым свайпом (аудит 22.08.2026).
+        deckStep.revokePermission()
         writeDip(0)
         // История скорости начинается с момента смены: прежние отсчёты сняты
         // с движения по другой оси. Обнулять её на каждом событии нельзя —
@@ -988,7 +995,11 @@ final class ThumbnailManager {
             axisPickupX = 0
             axisPickupY = 0
         }
-        if alternateEdge != nil, gathered, event.momentumPhase == [],
+        // Конец жеста через выбор оси не теряется: он обязан дойти до блока
+        // завершения, где садится лента (аудит 22.08.2026).
+        let gestureEnds = event.phase == .ended || event.phase == .cancelled
+            || event.momentumPhase == .ended
+        if alternateEdge != nil, gathered, event.momentumPhase == [], !gestureEnds,
            !pickOpenAxis(with: event) { return }
         let vertical = axisIsVertical
         // Ход, накопленный до выбора оси, лента НЕ наверстывает. Порог —
@@ -1009,15 +1020,18 @@ final class ThumbnailManager {
         let fingersDown = event.phase != []
 
         if event.phase == .began {
+            // История скорости начинается заново ДО того, как ступень решит
+            // судьбу события: её ответ «ничего не делать» уводил отсюда
+            // возвратом, и старая скорость доживала до следующего жеста
+            // (аудит 22.08.2026).
+            scrollVelocity = 0
+            lastScrollTimestamp = event.timestamp
             // `TR-41`: начало жеста идёт ЧЕРЕЗ структуру — разрешение на
             // ступень выдаёт она, у обработчика своих флагов нет.
             let opening = deckStep.handle(TrayStowGate.Input(
                 kind: .began, verticalAxis: axisIsVertical,
                 deckGathered: deckStepAvailable))
             if case .ignore = opening { return }
-            // Новый жест — новая история скорости.
-            scrollVelocity = 0
-            lastScrollTimestamp = event.timestamp
             momentumHandedToSpring = false
             // Палец коснулся во время догона: длинная инерционная подача
             // пережимается в короткую от текущего значения — перенацеливание
@@ -1607,10 +1621,19 @@ final class ThumbnailManager {
         let side = TrayCaseView.sidePadding
         let gap = TrayCaseView.panelGap
         // 8 pt по периметру верхней карточки, сверху добавка под панель.
-        let caseRect = NSRect(x: contour.minX - side,
+        var caseRect = NSRect(x: contour.minX - side,
                               y: contour.minY - side,
                               width: max(contour.width + side * 2, panelSize.width + side * 2),
                               height: side + contour.height + gap + panelSize.height + gap)
+        // Позиция трея «сверху»: шкатулка растёт вверх и панель уходит под
+        // строку меню, а то и за край экрана. Прижимаем к рабочей области
+        // (аудит 22.08.2026).
+        if let screen = anchorScreen ?? NSScreen.main {
+            let ceiling = screen.frame.maxY - menuBarInset(on: screen) - ThumbStyle.margin
+            if caseRect.maxY > ceiling {
+                caseRect.origin.y -= caseRect.maxY - ceiling
+            }
+        }
         caseView.frame = caseRect
         // Панель ставится по своему измеренному размеру: растянутая на всю
         // ширину, она рисовала ряд кнопок натуральной величины у левого края
@@ -2297,6 +2320,18 @@ final class ThumbnailManager {
         // неё щелчок ступени становился телепортом на 80 pt за кадр, потому
         // что синхронизация сажала ленту обратно посреди пружины (аудит
         // 22.08.2026, спящий конфликт).
+        // Состав ленты вырос посреди жеста: смещение сохраняет ДОЛЮ, а не
+        // абсолютное значение, иначе дельта в 1 pt давала скачок на длину
+        // новой карточки (аудит 22.08.2026). Механизм тот же, что у ресайза
+        // (`TR-40`).
+        if scrollGestureActive, abs(content - previousContentLength) > 0.5,
+           previousContentLength > 0.5 {
+            writeModel(trayOffsetPreservingShare(offset: scrollModel.offset,
+                                                 maximum: previousMaximumOffset,
+                                                 newMaximum: scrollModel.maximumOffset))
+        }
+        previousContentLength = content
+        previousMaximumOffset = scrollModel.maximumOffset
         if scrollGestureActive || scrollSettleAnimating || stepSettling {
             if !scrollModel.isScrollable { writeModel(0) }
             return
@@ -2306,6 +2341,9 @@ final class ThumbnailManager {
         // он уже учитывает убранность.
         scrollModel.apply(phase: deckStep.stowed)
         if scrollModel.stowed {
+            // Третью фазу снимок не прерывает, но счётчик на панели обязан
+            // измениться: иначе о снимке ничто не сообщает (аудит 22.08.2026).
+            casePanel.setCount(items.count)
             writeModel(scrollModel.phaseLimit)
             scrollIntent = .none
             detent.sync(with: scrollModel)

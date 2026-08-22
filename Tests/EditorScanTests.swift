@@ -121,6 +121,26 @@ struct EditorScanTests {
             throw Failure("фаза убирания снова присваивается напрямую, минуя владельца")
         }
 
+        // Этап 4 (аудит 22.08.2026).
+        guard live.contains("deckStep.revokePermission()") else {
+            throw Failure("смена оси не отзывает разрешение ступени")
+        }
+        guard live.contains("!gestureEnds,") else {
+            throw Failure("выбор оси проглатывает конец жеста")
+        }
+        guard live.contains("trayOffsetPreservingShare(offset: scrollModel.offset,") else {
+            throw Failure("рост состава ленты посреди жеста не переносит долю")
+        }
+        guard live.contains("casePanel.setCount(items.count)") else {
+            throw Failure("новый снимок в убранной фазе не меняет счётчик")
+        }
+        // История скорости сбрасывается ДО ответа ступени на начало жеста.
+        guard let velocityAt = live.range(of: "scrollVelocity = 0\n            lastScrollTimestamp = event.timestamp"),
+              let openingAt = live.range(of: "let opening = deckStep.handle"),
+              velocityAt.lowerBound < openingAt.lowerBound else {
+            throw Failure("история скорости сбрасывается позже ответа ступени")
+        }
+
         guard let readAt = live.range(of: "let wasStowed = deckStep.stowed"),
               let decisionAt = live.range(of: "scrollIntent = wasCompressed"),
               readAt.lowerBound < decisionAt.lowerBound else {

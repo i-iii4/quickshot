@@ -141,6 +141,13 @@ struct TrayStowGate: Equatable {
         return stowed ? .ignore : .pass
     }
 
+    /// Отзывает разрешение, не трогая фазу: жест сменил ось и больше не
+    /// вправе вести ступень.
+    mutating func revokePermission() {
+        permitted = false
+        strain = 0
+    }
+
     /// Сброс при смене состава ленты: снимков не осталось — держать нечего.
     mutating func reset() {
         stowed = false
