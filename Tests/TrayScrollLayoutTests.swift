@@ -113,6 +113,10 @@ struct TrayScrollLayoutTests {
         let content = heights.reduce(0, +) + gap * CGFloat(heights.count - 1)
         var model = TrayScrollModel(contentLength: content, viewportLength: 844,
                                     offset: 0, lastCardLength: cardH)
+        // Проход ведётся по ленте, которой ступень УЖЕ разрешена: фаза
+        // дискретна и меняется щелчком, а тест проверяет геометрию внутри
+        // неё.
+        model.stowed = true
         let base = screen.minY + margin
 
         // Сопоставление идёт по НАСТОЯЩЕМУ индексу карточки, а не по месту в
@@ -214,6 +218,7 @@ struct TrayScrollLayoutTests {
             let content = heights.reduce(0, +) + gap * CGFloat(max(0, count - 1))
             var model = TrayScrollModel(contentLength: content, viewportLength: 844,
                                         offset: 0, lastCardLength: cardH)
+            model.stowed = true
             model.offset = model.stowedMaximumOffset
             let layout = thumbnailScrollLayout(
                 screenFrame: screen, edge: .right, cardWidth: cardW, cardHeights: heights,
@@ -239,6 +244,7 @@ struct TrayScrollLayoutTests {
         let content = heights.reduce(0, +) + gap * CGFloat(heights.count - 1)
         var before = TrayScrollModel(contentLength: content, viewportLength: 844,
                                      offset: 0, lastCardLength: cardH)
+        before.stowed = true
         before.offset = before.stowedMaximumOffset
         expect(before.isStowed, "исходная лента не убрана")
 

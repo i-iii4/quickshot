@@ -1060,7 +1060,7 @@ final class ThumbnailManager {
             // `TR-41`: у упора ход пальца копит НАПРЯЖЕНИЕ, а не ведёт ленту.
             // Колода чуть пружинит — 8 pt на весь ход, — и только щелчок за
             // порогом уводит её на ступень.
-            if stowGestureOpen, fingersDown, !scrollModel.isStowed,
+            if stowGestureOpen, fingersDown, !scrollModel.stowed,
                scrollModel.offset >= scrollModel.maximumOffset - 0.5 {
                 if delta > 0 {
                     if stowStrain > TrayStow.threshold * 0.5 { TrayHaptics.shared.arm() }
@@ -1083,7 +1083,7 @@ final class ThumbnailManager {
                 }
             }
             // Обратный ход из третьей фазы — то же зеркально.
-            if stowGestureOpen, fingersDown, scrollModel.isStowed {
+            if stowGestureOpen, fingersDown, scrollModel.stowed {
                 if delta < 0 {
                     if stowStrain > TrayStow.threshold * 0.5 { TrayHaptics.shared.arm() }
                     stowStrain += -delta
@@ -1099,8 +1099,10 @@ final class ThumbnailManager {
                 // Убранной колоде за упором двигаться некуда.
                 return
             }
+            // Резинка — за пределом ТЕКУЩЕЙ ФАЗЫ. Без разрешения жест дальше
+            // предела не уводит, растяжение фазу не меняет.
             let result = detent.apply(delta: delta, to: scrollModel, stretch: fingersDown,
-                                      limit: scrollModel.maximumOffset)
+                                      limit: scrollModel.phaseLimit)
             // Щелчок ПЕРЕНАЦЕЛИВАЕТ движение: прыжок модели поглощается
             // подачей, видимая позиция остаётся непрерывной. Сдвиг больше
             // порога восприятия за один кадр запрещён (`TR-29`).
@@ -1200,6 +1202,8 @@ final class ThumbnailManager {
         stowStrain = 0
         stowGestureOpen = false
         performStowClick(.snapIn)
+        // Фаза и координата меняются ОДНИМ действием: разойтись им негде.
+        scrollModel.stowed = true
         animateStow(to: scrollModel.stowedMaximumOffset, velocity: velocity)
     }
 
@@ -1208,6 +1212,7 @@ final class ThumbnailManager {
         stowStrain = 0
         stowGestureOpen = false
         performStowClick(.release)
+        scrollModel.stowed = false
         animateStow(to: scrollModel.maximumOffset, velocity: velocity)
     }
 
@@ -2214,7 +2219,6 @@ final class ThumbnailManager {
                                                    hubSize: geometry.hubSize,
                                                    margin: geometry.margin,
                                                    menuBarInset: menuBarInset(on: screen))
-        let wasStowedBeforeSync = scrollModel.isStowed
         applyStripMetrics(content: content, viewport: viewport, last: lengths.last ?? 0)
         // Пока идёт жест или пружинный возврат, смещение может законно жить за
         // границей — мгновенный clamp здесь и делал резинку невидимой.
@@ -2222,11 +2226,11 @@ final class ThumbnailManager {
             if !scrollModel.isScrollable { writeModel(0) }
             return
         }
-        // `TR-41`: третью фазу новый снимок НЕ прерывает — колода убрана
-        // намеренно, и возвращать её за пользователя нельзя. Меняется только
-        // счётчик, который живёт в панели шкатулки.
-        if wasStowedBeforeSync {
-            writeModel(scrollModel.stowedMaximumOffset)
+        // `TR-41`: третью фазу новый снимок НЕ прерывает. Фаза дискретна и
+        // живёт в модели, поэтому достаточно вернуть ленту к пределу фазы —
+        // он уже учитывает убранность.
+        if scrollModel.stowed {
+            writeModel(scrollModel.phaseLimit)
             scrollIntent = .none
             detent.sync(with: scrollModel)
             return

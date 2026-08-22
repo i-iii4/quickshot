@@ -267,6 +267,27 @@ struct ThumbnailMotionTests {
         // третьей фазе, возвращает колоду, но ленту не раскрывает.
         var strip = TrayScrollModel(contentLength: 800, viewportLength: 400,
                                     offset: 0, lastCardLength: 150)
+        // Фаза ДИСКРЕТНА и меняется только щелчком. Растяжение резинки её не
+        // трогает: подтяжка за собранную колоду не читается как убирание.
+        strip.offset = strip.maximumOffset + 40
+        try require(strip.stowProgress == 0,
+                    "Rubber band past the stop was read as partial stowing")
+        try require(abs(strip.settled().offset - strip.maximumOffset) < 0.001,
+                    "Settling did not return the stretched strip to its phase limit")
+
+        // Щелчок переключает фазу, и посадка исполняет её решение, а не
+        // тянет ленту обратно к упору.
+        strip.stowed = true
+        strip.offset = strip.stowedMaximumOffset
+        try require(strip.isStowed, "Phase switch did not stow the deck")
+        try require(abs(strip.settled().offset - strip.stowedMaximumOffset) < 0.001,
+                    "Settling cancelled the stow right after the click")
+        strip.offset = strip.stowedMaximumOffset + 40
+        try require(abs(strip.settled().offset - strip.stowedMaximumOffset) < 0.001,
+                    "Rubber band past the stow step was not returned")
+        strip.stowed = false
+        strip.offset = 0
+
         let openStrip = strip.scrolled(by: 5000, rubberBand: false, limit: strip.maximumOffset)
         try require(abs(openStrip.offset - strip.maximumOffset) < 0.001,
                     "Gesture from the open strip passed the gathered stop")
@@ -275,7 +296,11 @@ struct ThumbnailMotionTests {
 
         strip.offset = strip.maximumOffset
         let stowing = strip.scrolled(by: 5000, rubberBand: false, limit: strip.stowedMaximumOffset)
-        try require(stowing.isStowed, "Gesture from the stop did not stow the deck")
+        // Разрешённый жест доводит ленту до конца ступени, но ФАЗУ не
+        // меняет: это делает только щелчок.
+        try require(abs(stowing.offset - strip.stowedMaximumOffset) < 0.001,
+                    "Permitted gesture did not reach the end of the stow step")
+        try require(!stowing.isStowed, "Gesture alone switched the phase")
 
         var stowed = strip
         stowed.offset = strip.stowedMaximumOffset
@@ -283,18 +308,22 @@ struct ThumbnailMotionTests {
         try require(abs(recalled.offset) < 0.001 || recalled.offset <= stowed.maximumOffset + 0.001,
                     "Return gesture ran past the gathered deck")
 
-        // Ступень — участок ТОЙ ЖЕ координаты: степень убранности однозначно
-        // следует из положения, отдельного состояния нет.
+        // Внутри фазы убранность — чистая функция координаты, зажатой
+        // пределом фазы: своего состояния у неё нет.
         var midway = strip
+        midway.stowed = true
         midway.offset = strip.maximumOffset + TrayScrollModel.stowSpan / 2
         try require(abs(midway.stowProgress - 0.5) < 0.001,
-                    "Stow progress is not a pure function of the offset")
+                    "Stow progress is not a pure function of the offset inside its phase")
+        // Незавершённая ступень возвращается к пределу СВОЕЙ фазы.
+        midway.stowed = false
         try require(abs(midway.settled().offset - strip.maximumOffset) < 0.001,
                     "Half-open stow step did not settle back to the gathered deck")
 
         // Видимое натяжение — 8 pt из всей длины ступени: колода пружинит
         // «почти незаметно», а не уезжает за пальцем.
         var tense = strip
+        tense.stowed = true
         tense.offset = strip.maximumOffset + TrayStow.maxShift
         try require(tense.stowProgress < 0.1,
                     "Tension alone already stowed the deck: \(tense.stowProgress)")
