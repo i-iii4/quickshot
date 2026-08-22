@@ -26,6 +26,7 @@ struct TrayGestureRoutingTests {
         run("не взявшие пропускают событие дальше", testChainReachesStrip)
         run("каждый получатель — свой тип со своими методами", testPartiesAreSeparateTypes)
         run("каждый получатель сужает мир до своего", testPartiesNarrowTheirWorld)
+        run("цепочка настоящая: лента не зовёт границу напрямую", testChainIsNotFaked)
         run("следующий жест начинает счёт направления с нуля", testNoLeftoverState)
         run("обработчик не хранит полей состояния жеста", testHandlerHoldsNoState)
         run("обработчик остаётся коротким", testHandlerStaysShort)
@@ -124,16 +125,16 @@ struct TrayGestureRoutingTests {
     /// ось и границу, которым нужно по четыре.
     private static func testPartiesNarrowTheirWorld() throws {
         let source = try read("Sources/TrayGestureCore.swift")
-        for proto in ["TrayGestureIntake", "TrayAxisOutput",
+        for proto in ["TrayGestureIntake", "TrayAxisReader", "TrayAxisOutput",
                       "TrayBoundaryOutput", "TrayStripOutput"] {
-            try require(source.contains("protocol \(proto): AnyObject"),
+            try require(source.contains("protocol \(proto): "),
                         "Мир не разделён: нет протокола \(proto)")
         }
         try require(source.contains("let out: TrayAxisOutput = out"),
                     "Ось не сужает мир до своего")
         try require(source.contains("let out: TrayBoundaryOutput = out"),
                     "Граница не сужает мир до своего")
-        try require(source.contains("let strip: TrayStripOutput & TrayBoundaryOutput = out"),
+        try require(source.contains("let strip: TrayStripOutput = out"),
                     "Лента не сужает мир до своего")
         // Ось и граница не должны даже видеть методов ленты: компилятор это
         // гарантирует сужением, проверка ловит возврат к широкому миру.
@@ -142,6 +143,21 @@ struct TrayGestureRoutingTests {
             try require(!axis.contains(alien),
                         "Ось обращается к чужому методу \(alien)")
         }
+    }
+
+    /// Отскок принадлежит границе и берётся перебором, а не прямым вызовом из
+    /// ленты: иначе цепочка в этом месте фиктивна — порядок держится вызовом.
+    private static func testChainIsNotFaked() throws {
+        let source = try read("Sources/TrayGestureCore.swift")
+        let strip = try slice(source, from: "final class TrayStripParty", to: "\n}\n")
+        try require(!strip.contains("boundaryParty"),
+                    "Лента напрямую дёргает границу — цепочка фиктивна")
+        try require(!strip.contains("takeBounce"),
+                    "Отскок решается внутри ленты, а не у границы")
+        try require(source.contains("enum TrayGestureStage"),
+                    "Нет стадий прохода: перехват и применение неразличимы")
+        // Отскок по-прежнему берёт именно граница — проверено выше отдельным
+        // сценарием `testBounceTakenByBoundary`.
     }
 
     private static func slice(_ text: String, from: String, to: String) throws -> String {

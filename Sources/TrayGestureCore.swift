@@ -154,10 +154,16 @@ protocol TrayGestureIntake: AnyObject {
     var gestureModel: TrayScrollModel { get }
 }
 
+/// Активная ось: ход берётся вдоль неё, поэтому её читают все, кто считает
+/// дельту.
+@MainActor
+protocol TrayAxisReader: AnyObject {
+    var gestureActiveEdge: ThumbnailLayoutEdge { get }
+}
+
 /// Что нужно выбору оси (`TR-38`).
 @MainActor
-protocol TrayAxisOutput: AnyObject {
-    var gestureActiveEdge: ThumbnailLayoutEdge { get }
+protocol TrayAxisOutput: TrayAxisReader {
     var gestureAlternateEdge: ThumbnailLayoutEdge? { get }
     /// Ось, заданная положением трея; вторая ось — `gestureAlternateEdge`.
     var gestureBaseEdge: ThumbnailLayoutEdge { get }
@@ -166,7 +172,7 @@ protocol TrayAxisOutput: AnyObject {
 
 /// Что нужно границе ленты.
 @MainActor
-protocol TrayBoundaryOutput: AnyObject {
+protocol TrayBoundaryOutput: TrayAxisReader {
     var gestureModel: TrayScrollModel { get }
     var gestureDipAnimating: Bool { get }
     func gestureRunDetentSpringUnderFinger()
@@ -176,9 +182,8 @@ protocol TrayBoundaryOutput: AnyObject {
 /// Что нужно самой ленте: защёлка, прокрутка, посадка, отклик. Плюс активная
 /// ось — ход берётся вдоль неё.
 @MainActor
-protocol TrayStripOutput: AnyObject {
+protocol TrayStripOutput: TrayAxisReader {
     var gestureModel: TrayScrollModel { get }
-    var gestureActiveEdge: ThumbnailLayoutEdge { get }
     var gestureDetentEngaged: Bool { get }
     func gestureCancelSettleAnimation(bumpGeneration: Bool)
     func gesturePrepareHaptics()
@@ -232,7 +237,7 @@ struct TrayGestureEvent {
     /// Ход вдоль текущей оси, в точках. Колесо мыши шлёт дельту в строках, а
     /// не в точках: один щелчок — это единица, и лента ползла на пиксель за
     /// щелчок.
-    func delta(_ out: TrayStripOutput) -> CGFloat {
+    func delta(_ out: TrayAxisReader) -> CGFloat {
         let raw = out.gestureActiveEdge.isVertical
             ? input.deltaY
             : (abs(input.deltaX) > 0.01 ? input.deltaX : input.deltaY)
@@ -240,12 +245,28 @@ struct TrayGestureEvent {
     }
 }
 
+/// Стадия прохода цепочки.
+///
+/// Две стадии, а не одна, потому что между ними лежит общий кадр жеста:
+/// отмена отложенного возврата, взвод отклика, фильтр движения. Граница
+/// участвует в обеих — сперва съедает инерцию, отданную пружине, потом ловит
+/// отскок. Раньше второе участие выражалось прямым вызовом из ленты, и
+/// цепочка в этом месте была фиктивной.
+enum TrayGestureStage: String, CaseIterable {
+    /// До общего кадра: кому событие вообще не принадлежит.
+    case intercept
+    /// После общего кадра: кто применяет ход.
+    case apply
+}
+
 /// Участник цепочки. Событие идёт по участникам по порядку; вернувший
 /// получателя забирает событие себе и останавливает цепочку.
 @MainActor
 protocol TrayGestureParty: AnyObject {
     var kind: TrayGestureRecipient { get }
-    func receive(_ event: TrayGestureEvent, out: TrayGestureOutput) -> TrayGestureRecipient?
+    func receive(_ event: TrayGestureEvent,
+                 stage: TrayGestureStage,
+                 out: TrayGestureOutput) -> TrayGestureRecipient?
     /// Конец жеста доходит до КАЖДОГО участника, независимо от того, кто взял
     /// событие.
     func gestureEnded(_ event: TrayGestureEvent, out: TrayGestureOutput)
@@ -262,7 +283,10 @@ final class TrayAxisParty: TrayGestureParty {
     /// Была ли колода собрана на прошлом событии.
     private(set) var wasGathered = true
 
-    func receive(_ event: TrayGestureEvent, out: TrayGestureOutput) -> TrayGestureRecipient? {
+    func receive(_ event: TrayGestureEvent,
+                 stage: TrayGestureStage,
+                 out: TrayGestureOutput) -> TrayGestureRecipient? {
+        guard stage == .intercept else { return nil }
         let out: TrayAxisOutput = out
         defer { wasGathered = event.gathered }
         if event.gathered, !wasGathered {
@@ -313,8 +337,11 @@ final class TrayBoundaryParty: TrayGestureParty {
 
     init(core: TrayGestureCore) { self.core = core }
 
-    func receive(_ event: TrayGestureEvent, out: TrayGestureOutput) -> TrayGestureRecipient? {
+    func receive(_ event: TrayGestureEvent,
+                 stage: TrayGestureStage,
+                 out: TrayGestureOutput) -> TrayGestureRecipient? {
         let out: TrayBoundaryOutput = out
+        guard stage == .intercept else { return takeBounce(event, out: out) }
         if event.phase == .began { beginGesture(event, out: out) }
         // Инерцию, уже переданную пружине границы, не читаем вовсе — и до
         // общего блока, где события отменяют аниматоры: иначе первое же её
@@ -337,9 +364,12 @@ final class TrayBoundaryParty: TrayGestureParty {
     /// применения дельты, прямой проверкой края. Скорость — из текущего кадра,
     /// сглаженная оценка к этому моменту уже испорчена зажатыми кадрами
     /// (`TR-13`).
-    func takeBounce(_ event: TrayGestureEvent,
-                    delta: CGFloat,
-                    out: TrayBoundaryOutput) -> TrayGestureRecipient? {
+    private func takeBounce(_ event: TrayGestureEvent,
+                            out: TrayBoundaryOutput) -> TrayGestureRecipient? {
+        // Отскок бывает только у жеста с фазами: колесо упирается в край
+        // жёстко.
+        guard event.hasPhases else { return nil }
+        let delta = event.delta(out)
         guard TrayBoundaryHandoff.shouldBounce(model: out.gestureModel, delta: delta,
                                                fingersDown: event.fingersDown,
                                                isMomentum: event.momentumPhase != []) else { return nil }
@@ -368,18 +398,29 @@ final class TrayStripParty: TrayGestureParty {
 
     init(core: TrayGestureCore) { self.core = core }
 
-    func receive(_ event: TrayGestureEvent, out: TrayGestureOutput) -> TrayGestureRecipient? {
-        // Свой мир — лента и граница: отскок лента отдаёт границе. Полный
-        // мир нужен только рассылке конца жеста, она идёт по всем участникам.
-        let strip: TrayStripOutput & TrayBoundaryOutput = out
-        prepareFrame(event, out: strip)
-        let delta = event.delta(strip)
-        guard strip.gestureModel.isScrollable || abs(delta) > 0.01 else { return kind }
-        strip.gestureClearScrollIntent()
-        if let taker = apply(event, delta: delta, out: strip) { return taker }
+    func receive(_ event: TrayGestureEvent,
+                 stage: TrayGestureStage,
+                 out: TrayGestureOutput) -> TrayGestureRecipient? {
+        // Лента работает после общего кадра. Полный мир нужен только рассылке
+        // конца жеста — она идёт по всем участникам.
+        guard stage == .apply else { return nil }
+        let strip: TrayStripOutput = out
+        apply(event, delta: event.delta(strip), out: strip)
         strip.gestureApplyScrollOffset()
         settle(event, out: out)
         return kind
+    }
+
+    /// Общий кадр жеста и фильтр движения: выполняются между стадиями, до
+    /// того как кто-либо начнёт применять ход. Возвращает `false`, если ход
+    /// слишком мал и применять нечего.
+    func openFrame(_ event: TrayGestureEvent, out: TrayGestureOutput) -> Bool {
+        let strip: TrayStripOutput = out
+        prepareFrame(event, out: strip)
+        let delta = event.delta(strip)
+        guard strip.gestureModel.isScrollable || abs(delta) > 0.01 else { return false }
+        strip.gestureClearScrollIntent()
+        return true
     }
 
     /// Общий кадр жеста: отложенный возврат отменяется, актуатор взводится,
@@ -404,9 +445,7 @@ final class TrayStripParty: TrayGestureParty {
     }
 
     /// Применение хода. Возвращает получателя, если событие забрала граница.
-    private func apply(_ event: TrayGestureEvent,
-                       delta: CGFloat,
-                       out: TrayStripOutput & TrayBoundaryOutput) -> TrayGestureRecipient? {
+    private func apply(_ event: TrayGestureEvent, delta: CGFloat, out: TrayStripOutput) {
         // Резинка только у жестов с фазами: колесо упирается в край жёстко.
         // Содержимое идёт за пальцами: положительная дельта двигает карточки к
         // хабу. Жест никогда не прячет и не показывает трей — это делает
@@ -415,11 +454,7 @@ final class TrayStripParty: TrayGestureParty {
         // `TR-29`: дельты жеста идут через защёлку — у полного сбора лента
         // проходит точку напряжения и защёлкивается со щелчком.
         if TrayDetentModel.isNearDetent(out.gestureModel) { out.gestureArmHaptics() }
-        // Растягивает резинку только палец: инерция упирается в край, иначе
-        // после отпускания лента продолжает уезжать (приёмка 19.08.2026).
-        if let taker = core.boundaryParty.takeBounce(event, delta: delta, out: out) { return taker }
         applyDetent(event, delta: delta, out: out)
-        return nil
     }
 
     private func applyDetent(_ event: TrayGestureEvent, delta: CGFloat, out: TrayStripOutput) {
@@ -440,12 +475,11 @@ final class TrayStripParty: TrayGestureParty {
 
     /// Колесо шагает дискретно: защёлка следует за фактом без щелчка. Пружину
     /// границы колесо гасит — иначе позицию пишут двое сразу.
-    private func applyWheel(delta: CGFloat, out: TrayStripOutput) -> TrayGestureRecipient? {
+    private func applyWheel(delta: CGFloat, out: TrayStripOutput) {
         out.gestureCancelSettleAnimation(bumpGeneration: false)
         out.gestureWriteModel(out.gestureModel.scrolled(by: delta, rubberBand: false),
                               absorbJump: false)
         out.gestureSyncDetent()
-        return nil
     }
 
     /// Посадка после кадра: у колеса — сразу, у жеста — по виду завершения.
@@ -473,7 +507,7 @@ final class TrayStripParty: TrayGestureParty {
         // вся последующая инерция игнорируется — иначе её события отменяли
         // пружину и схлопывали растяжение телепортом (`TR-13`).
         guard abs(out.gestureModel.overshoot) <= 0.5 else {
-            core.boundaryParty.handOff()
+            core.handOffMomentumToSpring()
             return out.gestureSettleScrollAnimated()
         }
         // `TR-36`: уверенный бросок к сбору защёлкивает ПО НАМЕРЕНИЮ — по
@@ -554,13 +588,26 @@ final class TrayGestureCore {
     func handle(_ input: TrayGestureInput, out: TrayGestureOutput) {
         guard let event = intake(input, out: out) else { return }
         lastTaker = nil
+        for stage in TrayGestureStage.allCases {
+            if deliver(event, stage: stage, out: out) { break }
+        }
+    }
+
+    /// Один проход цепочки. Перед применением идёт общий кадр жеста: отмена
+    /// отложенного возврата, взвод отклика, фильтр движения — он общий и не
+    /// принадлежит никому из участников.
+    private func deliver(_ event: TrayGestureEvent,
+                         stage: TrayGestureStage,
+                         out: TrayGestureOutput) -> Bool {
+        if stage == .apply, !stripParty.openFrame(event, out: out) { return true }
         visitedRecipients = []
         for party in parties {
             visitedRecipients.append(party.kind)
-            guard let taker = party.receive(event, out: out) else { continue }
+            guard let taker = party.receive(event, stage: stage, out: out) else { continue }
             lastTaker = taker
-            break
+            return true
         }
+        return false
     }
 
     /// Разбор события: один раз, на входе в цепочку.
