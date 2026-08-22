@@ -141,10 +141,17 @@ struct TrayScrollModelTests {
                             for isGathered in gathered {
                                 var gate = Gate()
                                 var previousStowed = gate.stowed
-                                for kind in [k1, k2, k3] {
+                                var atStop = isGathered
+                                for (step, kind) in [k1, k2, k3].enumerated() {
+                                    // Признак «лента у упора» МЕНЯЕТСЯ внутри
+                                    // жеста: лента доезжает до упора по ходу
+                                    // движения. Заморозка его на всю тройку
+                                    // оставляла этот сценарий непроверенным
+                                    // вовсе (аудит 22.08.2026).
+                                    if step == 1 { atStop.toggle() }
                                     let input = Gate.Input(kind: kind, delta: delta,
                                                            velocity: 0, verticalAxis: vertical,
-                                                           deckGathered: isGathered)
+                                                           deckGathered: atStop)
                                     let outcome = gate.handle(input)
 
                                     // Фаза меняется ТОЛЬКО вместе со щелчком.
@@ -187,10 +194,10 @@ struct TrayScrollModelTests {
                                 var repeated = gate
                                 _ = repeated.handle(Gate.Input(kind: .ended, delta: 0, velocity: 0,
                                                                verticalAxis: vertical,
-                                                               deckGathered: isGathered))
+                                                               deckGathered: atStop))
                                 _ = repeated.handle(Gate.Input(kind: .ended, delta: 0, velocity: 0,
                                                                verticalAxis: vertical,
-                                                               deckGathered: isGathered))
+                                                               deckGathered: atStop))
                                 expect(repeated.stowed == settledGate.stowed,
                                        "повторный конец жеста сменил фазу")
                                 expect(repeated.strain == 0, "повторный конец оставил напряжение")

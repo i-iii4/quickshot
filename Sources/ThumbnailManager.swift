@@ -744,18 +744,23 @@ final class ThumbnailManager {
     }
 
     private func animateRemoval(_ removed: [ThumbnailWindow]) {
-        for item in removed {
-            sessions.discard(item.artifact.id)
-            editedImages.discard(item.artifact.id)
-            stateStore.discard(for: item.artifact.id)
-        }
         finishCollectionMotion()
         finishTrayMotion()
         cancelCollapsedPeekDismiss()
         cancelHoverExit()
         let removesVisiblePeek = removed.contains { $0 === collapsedPeekItem }
         if removesVisiblePeek { collapsedPeekItem = nil }
+        // Экран недоступен — уходим, НИЧЕГО не тронув. Освобождение сессий,
+        // запечённых изображений и дискового состояния стояло выше этой
+        // проверки: при недоступном экране карточки оставались в трее с
+        // уничтоженными правками, и вернуть их было нельзя (аудит
+        // 22.08.2026, единственная находка с необратимой потерей).
         guard let screen = anchorScreen ?? NSScreen.main else { return }
+        for item in removed {
+            sessions.discard(item.artifact.id)
+            editedImages.discard(item.artifact.id)
+            stateStore.discard(for: item.artifact.id)
+        }
         let oldVisibleIDs = Set(items.filter { !$0.hostView.isHidden }.map { ObjectIdentifier($0) })
         let oldFrames = Dictionary(uniqueKeysWithValues: items.map { (ObjectIdentifier($0), $0.layoutFrame) })
         let removedArtifactIDs = Set(removed.map { $0.artifact.id })

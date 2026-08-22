@@ -137,6 +137,10 @@ struct TrayScrollLayoutTests {
             return result
         }
 
+        // Низ в точке упора — эталон для ступени.
+        let baseAtStop = frames(at: model.maximumOffset).values
+            .reduce(CGRect.null) { $0.union($1) }.minY
+
         var previous: [Int: NSRect] = [:]
         var sawStowed = false
         var topAtStow: CGFloat = .greatestFiniteMagnitude
@@ -149,8 +153,17 @@ struct TrayScrollLayoutTests {
 
             if !list.isEmpty {
                 // Низ шкатулки НЕПОДВИЖЕН: колода стягивается к основанию.
+                // Низ не уходит НИЖЕ основания нигде.
                 expect(union.minY >= base - 0.5,
                        "низ колоды ушёл ниже основания при ходе \(offset): \(union.minY)")
+                // А НА СТУПЕНИ он неподвижен — это равенство, а не «не ниже».
+                // Односторонним неравенством проходила и колода, уехавшая
+                // вверх от основания (аудит 22.08.2026). До упора низ
+                // меняется законно: схлопывается резерв под ярусы.
+                if offset > model.maximumOffset + 0.5 {
+                    expect(abs(union.minY - baseAtStop) < 0.5,
+                           "низ шкатулки сместился на ступени при ходе \(offset): \(union.minY) вместо \(baseAtStop)")
+                }
                 // Ни одна карточка не выходит за экран.
                 for frame in list {
                     expect(frame.minY >= screen.minY - 0.5 && frame.maxY <= screen.maxY + 0.5,

@@ -35,47 +35,52 @@ struct EditorScanTests {
     ///
     /// Проверка читает исходник и требует, чтобы событие доходило до
     /// структуры из КАЖДОЙ ветки: начало, движение, конец, отмена, инерция.
-    @MainActor private static func stowGateIsWiredIntoEveryGesturePhase() throws {
+    /// `TR-41`: СТЫК структуры ступени с обработчиком жеста.
+    ///
+    /// Перебор последовательностей проверяет саму структуру и об обработчике
+    /// не знает ничего. На стыке ломалось дважды при зелёных тестах: сперва
+    /// потерялся вызов на начале жеста, потом оказалось, что из четырёх веток
+    /// завершения вызов стоит в одной.
+    ///
+    /// Проверка читает ЖИВОЙ КОД: тело обработчика прокрутки без комментариев.
+    /// Прежняя считала подстроки по всему файлу и потому проходила и на
+    /// закомментированном вызове, и на вызове, перенесённом в чужой метод
+    /// (аудит 22.08.2026).
+    private static func stowGateIsWiredIntoEveryGesturePhase() throws {
         let source = try String(contentsOfFile: "Sources/ThumbnailManager.swift", encoding: .utf8)
+        let live = liveCode(of: source)
+        let handler = try body(of: "func scrollTray(with event: NSEvent)", in: live)
 
+        // Каждая форма события доходит до ступени ИЗ ТЕЛА обработчика.
         for kind in ["began", "changed", "momentum"] {
-            guard source.contains("kind: .\(kind)") else {
-                throw Failure("форма события «\(kind)» не доходит до ступени")
+            guard handler.contains("kind: .\(kind)") || handler.contains("Kind.\(kind)") else {
+                throw Failure("форма события «\(kind)» не доходит до ступени из обработчика")
             }
         }
-        guard source.contains("TrayStowGate.Kind.cancelled"), source.contains(": .ended") else {
+        guard handler.contains("Kind.cancelled") || handler.contains("finishGestureForStep") else {
             throw Failure("конец и отмена жеста не доходят до ступени")
         }
 
-        // Вызовов ровно столько, сколько веток: меньше — ветка осталась без
-        // связи, больше — решение снова размазано по обработчику.
-        let calls = source.components(separatedBy: "deckStep.handle(").count - 1
-        guard calls == 4 else {
-            throw Failure("вызовов ступени \(calls) вместо четырёх: ветка осталась без связи")
-        }
-
-        // КАЖДАЯ ветка завершения жеста ведёт в ступень. Ветки считаются ПО
-        // КОДУ, а не по памяти: их три — конец инерции, отпускание за краем,
-        // обычное отпускание, — и вызов стоял лишь в одной. После
-        // срабатывания ступени жест уходит как раз во вторую ветку, поэтому
-        // структура о конце не узнавала и трей переставал реагировать
-        // (приёмка 22.08.2026).
-        let endings = source.components(separatedBy: "\n").filter {
+        // Все ветки завершения жеста ведут в ступень. Ветки считаются ПО КОДУ:
+        // каждое место, где снимается признак активного жеста.
+        let endings = live.components(separatedBy: "\n").filter {
             $0.contains("scrollGestureActive = false") && !$0.contains("private var")
         }.count
-        let finishes = source.components(separatedBy: "finishGestureForStep(").count - 2
+        let finishes = live.components(separatedBy: "\n").filter {
+            $0.contains("finishGestureForStep(") && !$0.contains("private func")
+        }.count
         guard finishes >= endings else {
             throw Failure("веток завершения жеста \(endings), а завершений ступени \(finishes)")
         }
-        guard !source.contains("private var stow") else {
+
+        // Состояние ступени не живёт в обработчике.
+        guard !live.contains("private var stow") else {
             throw Failure("обработчик снова держит своё состояние ступени")
         }
 
         // `TR-41`: новый снимок не меняет фазу ленты. Признак «была собрана»
-        // обязан смотреть на ФАКТИЧЕСКОЕ положение ленты у упора. Прежний
-        // проверял прокручиваемость — `maximumOffset > 0.5`, — и раскрытая
-        // лента собиралась от каждого снимка (приёмка 21.08.2026).
-        guard let line = source.components(separatedBy: "\n")
+        // обязан смотреть на ФАКТИЧЕСКОЕ положение ленты у упора.
+        guard let line = live.components(separatedBy: "\n")
             .first(where: { $0.contains("let wasCompressed") }) else {
             throw Failure("признак состояния ленты при вставке не найден")
         }
@@ -85,15 +90,39 @@ struct EditorScanTests {
         guard line.contains("offset >= scrollModel.maximumOffset") else {
             throw Failure("состояние ленты не читается по её положению у упора")
         }
-        // И убранная колода учитывается: иначе снимок вернёт её в собранную.
-        guard source.contains("let wasStowed = deckStep.stowed") else {
-            throw Failure("фаза ступени не читается до решения о ленте")
+        guard let readAt = live.range(of: "let wasStowed = deckStep.stowed"),
+              let decisionAt = live.range(of: "scrollIntent = wasCompressed"),
+              readAt.lowerBound < decisionAt.lowerBound else {
+            throw Failure("фаза ступени читается позже решения о ленте")
         }
-        let decisionAt = source.range(of: "scrollIntent = wasCompressed")
-        let readAt = source.range(of: "let wasStowed = deckStep.stowed")
-        guard let decisionAt, let readAt, readAt.lowerBound < decisionAt.lowerBound else {
-            throw Failure("фаза читается позже решения о ленте")
+    }
+
+    /// Исходник без комментариев: закомментированный вызов кодом не является.
+    private static func liveCode(of source: String) -> String {
+        source.components(separatedBy: "\n").map { line -> String in
+            guard let mark = line.range(of: "//") else { return line }
+            return String(line[line.startIndex..<mark.lowerBound])
+        }.joined(separator: "\n")
+    }
+
+    /// Тело метода по его сигнатуре: вызов, перенесённый в другой метод, сюда
+    /// не попадёт.
+    private static func body(of signature: String, in source: String) throws -> String {
+        guard let start = source.range(of: signature) else {
+            throw Failure("метод «\(signature)» не найден")
         }
+        var depth = 0
+        var started = false
+        var result = ""
+        for character in source[start.lowerBound...] {
+            result.append(character)
+            if character == "{" { depth += 1; started = true }
+            if character == "}" {
+                depth -= 1
+                if started && depth == 0 { break }
+            }
+        }
+        return result
     }
 
     @MainActor private static func emptyResultShowsNothing() throws {
