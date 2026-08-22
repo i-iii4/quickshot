@@ -107,6 +107,12 @@ final class ThumbnailManager {
     /// Разделение фаз выражено пределом хода для конкретного жеста, а не
     /// вторым состоянием: два независимых состояния некому согласовывать.
     private var stowGestureOpen = false
+    /// Напряжение второй ступени: сырой ход пальца за упором. Живёт ТОЛЬКО
+    /// внутри жеста и всегда отображается в координату ленты — источник для
+    /// раскладки по-прежнему один. Ровно так же устроена защёлка сбора.
+    private var stowStrain: CGFloat = 0
+    private var stowSettling = false
+    private lazy var stowSettleAnimator = CollectionProgressAnimator(hostView: hostContent)
     /// Контур колоды, запомненный до убирания: по его основанию встаёт
     /// полоска третьей фазы, когда видимых карточек не осталось.
     private var stowedBase: CGRect?
@@ -925,6 +931,13 @@ final class ThumbnailManager {
     /// ты находишься, и не позволяет остановиться между карточками.
     func scrollTray(with event: NSEvent) {
         guard !cardsAreCollapsed else { return }
+        // `TR-41`: в третьей фазе горизонтальный ход не делает НИЧЕГО — ни
+        // возврата колоды, ни раскрытия ленты, ни смены оси. Убирание живёт
+        // на вертикальной оси, и выход из него тоже только вертикальный.
+        if scrollModel.isStowed, !stowSettling {
+            let horizontal = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
+            if horizontal || !axisIsVertical { return }
+        }
         // `TR-38`: ось раскрытия выбирает ЖЕСТ. Пока колода собрана и ось не
         // выбрана, лента не двигается — копится ход пальца, и по нему
         // решается, вверх раскрывать или влево.
@@ -1044,11 +1057,50 @@ final class ThumbnailManager {
                 return
             }
             let before = scrollModel.offset
-            // `TR-41`: предел хода зависит от разрешения жеста. Без него лента
-            // упирается в сбор и пружинит, как раньше; с ним — уходит на
-            // ступень убирания.
-            let limit = stowGestureOpen ? scrollModel.stowedMaximumOffset : scrollModel.maximumOffset
-            let result = detent.apply(delta: delta, to: scrollModel, stretch: fingersDown, limit: limit)
+            // `TR-41`: у упора ход пальца копит НАПРЯЖЕНИЕ, а не ведёт ленту.
+            // Колода чуть пружинит — 8 pt на весь ход, — и только щелчок за
+            // порогом уводит её на ступень.
+            if stowGestureOpen, fingersDown, !scrollModel.isStowed,
+               scrollModel.offset >= scrollModel.maximumOffset - 0.5 {
+                if delta > 0 {
+                    if stowStrain > TrayStow.threshold * 0.5 { TrayHaptics.shared.arm() }
+                    stowStrain += delta
+                    if TrayStow.fires(strain: stowStrain, velocity: scrollVelocity) {
+                        fireStow(velocity: scrollVelocity)
+                    } else {
+                        writeModel(scrollModel.maximumOffset + TrayStow.shift(strain: stowStrain))
+                        applyScrollOffset()
+                    }
+                    trackVelocity(movement: delta, at: event.timestamp)
+                    return
+                }
+                if stowStrain > 0.0001 {
+                    stowStrain = max(0, stowStrain + delta)
+                    writeModel(scrollModel.maximumOffset + TrayStow.shift(strain: stowStrain))
+                    applyScrollOffset()
+                    trackVelocity(movement: delta, at: event.timestamp)
+                    return
+                }
+            }
+            // Обратный ход из третьей фазы — то же зеркально.
+            if stowGestureOpen, fingersDown, scrollModel.isStowed {
+                if delta < 0 {
+                    if stowStrain > TrayStow.threshold * 0.5 { TrayHaptics.shared.arm() }
+                    stowStrain += -delta
+                    if TrayStow.fires(strain: stowStrain, velocity: scrollVelocity) {
+                        recallStow(velocity: scrollVelocity)
+                    } else {
+                        writeModel(scrollModel.stowedMaximumOffset - TrayStow.shift(strain: stowStrain))
+                        applyScrollOffset()
+                    }
+                    trackVelocity(movement: delta, at: event.timestamp)
+                    return
+                }
+                // Убранной колоде за упором двигаться некуда.
+                return
+            }
+            let result = detent.apply(delta: delta, to: scrollModel, stretch: fingersDown,
+                                      limit: scrollModel.maximumOffset)
             // Щелчок ПЕРЕНАЦЕЛИВАЕТ движение: прыжок модели поглощается
             // подачей, видимая позиция остаётся непрерывной. Сдвиг больше
             // порога восприятия за один кадр запрещён (`TR-29`).
@@ -1093,6 +1145,11 @@ final class ThumbnailManager {
         } else if event.phase == .ended || event.phase == .cancelled {
             scrollGestureActive = false
             stowGestureOpen = false
+            if stowStrain > 0.0001 {
+                // Порог не пройден — напряжение снимается пружиной, без щелчка.
+                releaseStowStrain()
+                return
+            }
             // `TR-36`: уверенный бросок к сбору защёлкивает ПО НАМЕРЕНИЮ —
             // по точке, где лента остановилась бы сама, а не по факту
             // доезда. Иначе бросок, не дотянувший чуть-чуть, читается как
@@ -1132,6 +1189,65 @@ final class ThumbnailManager {
             guard let self, self.settleGeneration == generation else { return }
             self.settleScrollAnimated()
         }
+    }
+
+    /// Срабатывание ступени (`TR-41`): щелчок и уход колоды на ступень.
+    ///
+    /// После срабатывания колода идёт СВОЕЙ анимацией, не привязанной к
+    /// пальцу: палец сделал своё дело. Пружина стартует со скоростью жеста —
+    /// без передачи скорости на месте срыва виден шов.
+    private func fireStow(velocity: CGFloat) {
+        stowStrain = 0
+        stowGestureOpen = false
+        performStowClick(.snapIn)
+        animateStow(to: scrollModel.stowedMaximumOffset, velocity: velocity)
+    }
+
+    /// Возврат колоды: то же зеркально.
+    private func recallStow(velocity: CGFloat) {
+        stowStrain = 0
+        stowGestureOpen = false
+        performStowClick(.release)
+        animateStow(to: scrollModel.maximumOffset, velocity: velocity)
+    }
+
+    /// Щелчок ступени: тактильный импульс и визуальная отдача на одном кадре.
+    /// Отдача СВОЯ — подача ленты здесь не работает, ступень её не двигает.
+    private func performStowClick(_ click: TrayDetentModel.Click) {
+        performDetentHaptic(click)
+    }
+
+    /// Пружина ступени: без перелёта, отклик медленнее схлопывания колоды —
+    /// убирание отдельное событие, а не продолжение сбора.
+    private func animateStow(to target: CGFloat, velocity: CGFloat) {
+        let from = scrollModel.offset
+        guard abs(target - from) > 0.5 else {
+            writeModel(target)
+            applyScrollOffset()
+            return
+        }
+        stowSettling = true
+        let relative = min(4, abs(velocity) / max(1, TrayStow.threshold))
+        stowSettleAnimator.run(duration: TrayStowAnim.response, onFrame: { [weak self] progress in
+            guard let self else { return }
+            let eased = TrayStowAnim.curve(progress, initialVelocity: relative)
+            self.writeModel(from + (target - from) * eased)
+            self.applyScrollOffset()
+        }, onDone: { [weak self] in
+            guard let self else { return }
+            self.stowSettling = false
+            self.writeModel(target)
+            self.applyScrollOffset()
+        })
+    }
+
+    /// Снятие напряжения, когда порог не пройден: пружиной, без щелчка.
+    private func releaseStowStrain() {
+        guard stowStrain > 0.0001 else { return }
+        let target = scrollModel.isStowed ? scrollModel.stowedMaximumOffset
+                                          : scrollModel.maximumOffset
+        stowStrain = 0
+        animateStow(to: target, velocity: 0)
     }
 
     /// Оценка скорости ленты по событиям, pt/с. Сглаживание убирает выброс от
@@ -1413,7 +1529,12 @@ final class ThumbnailManager {
         // высоты у самого основания.
         if contour.isNull || contour.height <= 1 {
             guard scrollModel.stowProgress > 0.0001, let base = stowedBase else { return }
-            contour = CGRect(x: base.minX, y: base.minY, width: base.width, height: 1)
+            // Ширина в третьей фазе — по ПАНЕЛИ: карточек нет, и обнимать
+            // нечего, кроме ряда команд. Полоска встаёт правым краем там же,
+            // где стояла шкатулка, — по горизонтали ничего не скачет.
+            let panelWidth = max(1, casePanel.fittingSize.width)
+            contour = CGRect(x: base.maxX - panelWidth, y: base.minY,
+                             width: panelWidth, height: 1)
         } else if scrollModel.stowProgress < 0.0001 {
             stowedBase = contour
         }
@@ -2093,11 +2214,21 @@ final class ThumbnailManager {
                                                    hubSize: geometry.hubSize,
                                                    margin: geometry.margin,
                                                    menuBarInset: menuBarInset(on: screen))
+        let wasStowedBeforeSync = scrollModel.isStowed
         applyStripMetrics(content: content, viewport: viewport, last: lengths.last ?? 0)
         // Пока идёт жест или пружинный возврат, смещение может законно жить за
         // границей — мгновенный clamp здесь и делал резинку невидимой.
         if scrollGestureActive || scrollSettleAnimating {
             if !scrollModel.isScrollable { writeModel(0) }
+            return
+        }
+        // `TR-41`: третью фазу новый снимок НЕ прерывает — колода убрана
+        // намеренно, и возвращать её за пользователя нельзя. Меняется только
+        // счётчик, который живёт в панели шкатулки.
+        if wasStowedBeforeSync {
+            writeModel(scrollModel.stowedMaximumOffset)
+            scrollIntent = .none
+            detent.sync(with: scrollModel)
             return
         }
         switch scrollIntent {

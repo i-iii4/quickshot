@@ -29,6 +29,8 @@ struct TrayScrollModelTests {
         deeperLayersGoBehind()
         boundarySpringIsContinuousAtHandoff()
         boundarySpringBouncesProportionallyToSpeed()
+        stowTensionBuildsWithoutADeadZone()
+        stowClickAndSpringAreShaped()
         boundarySpringReturnsWithoutOscillation()
         boundarySpringStaysStillWithoutInput()
         bounceHandoffFiresOnlyAtRealEdges()
@@ -57,6 +59,96 @@ struct TrayScrollModelTests {
 
     /// Одна карточка: собирать нечего. Две карточки уже складываются в стопку
     /// у кнопки (`TR-4a`), даже если лента помещается целиком.
+    /// `TR-41`, натяжение: колода чуть пружинит, копится напряжение, за
+    /// порогом срабатывает.
+    ///
+    /// Главное, что сторожит тест, — отсутствие МЁРТВОЙ ЗОНЫ. Формула
+    /// сопротивления Apple на таком коротком ходу вырождается: первая
+    /// четверть забирает почти весь сдвиг, дальше глаз не видит прогресса,
+    /// и срабатывание читается взрывом.
+    /// `TR-41`: щелчок и пружина ухода. Отдача щелчка обязана быть нулевой
+    /// на обоих концах и иметь максимум внутри — иначе она не читается как
+    /// мгновенное событие.
+    private static func stowClickAndSpringAreShaped() {
+        expect(abs(TrayStowAnim.clickCurve(0)) < 0.0001, "отдача щелчка начинается не с нуля")
+        expect(abs(TrayStowAnim.clickCurve(1)) < 0.0001, "отдача щелчка не возвращается в ноль")
+        var peak: CGFloat = 0
+        var peakAt: CGFloat = 0
+        var t: CGFloat = 0
+        while t <= 1.0001 {
+            let value = TrayStowAnim.clickCurve(t)
+            if value > peak { peak = value; peakAt = t }
+            t += 0.01
+        }
+        expect(peak > 0.1, "у отдачи щелчка нет заметного максимума: \(peak)")
+        expect(peakAt > 0.05 && peakAt < 0.95, "максимум отдачи на краю хода: \(peakAt)")
+
+        expect(abs(TrayStowAnim.curve(1, initialVelocity: 0) - 1) < 0.001,
+               "пружина не доходит до цели")
+        expect(TrayStowAnim.curve(0.2, initialVelocity: 2) > TrayStowAnim.curve(0.2, initialVelocity: 0),
+               "скорость жеста не наследуется")
+
+        var previousOpacity: CGFloat = 2
+        var previousScale: CGFloat = 2
+        var step: CGFloat = 0
+        while step <= 1.0001 {
+            let opacity = TrayStow.stowedOpacity(progress: step)
+            let scale = TrayStow.stowedScale(progress: step, fromScale: TrayStow.tensionScale)
+            expect(opacity <= previousOpacity + 0.0001, "прозрачность ухода не монотонна")
+            expect(scale <= previousScale + 0.0001, "масштаб ухода не монотонен")
+            previousOpacity = opacity
+            previousScale = scale
+            step += 0.05
+        }
+        expect(previousOpacity <= 0.0001, "прозрачность не пришла в ноль")
+        expect(abs(previousScale - TrayStow.stowedScale) < 0.001, "масштаб не пришёл в свою точку")
+
+        // Натяжение не трогает прозрачность: растворение принадлежит
+        // срабатыванию и не должно начинаться раньше него.
+        let strip = [TrayCardBand(position: 0, length: 150, insetSteps: 0, contentFraction: 1,
+                                  sliceFromFarSide: false, opacity: 1, shadowFraction: 1,
+                                  zOrder: 0, hidden: false)]
+        let tensionProgress = TrayStow.maxShift / TrayScrollModel.stowSpan
+        let underTension = TrayStripLayout.stowed(strip, progress: tensionProgress)[0]
+        expect(underTension.opacity > 0.9,
+               "прозрачность падает уже в натяжении: \(underTension.opacity)")
+    }
+
+    private static func stowTensionBuildsWithoutADeadZone() {
+        let full = TrayStow.threshold
+        expect(TrayStow.shift(strain: 0) == 0, "покой уже сдвинут")
+        expect(abs(TrayStow.shift(strain: full) - TrayStow.maxShift) < 0.001,
+               "полный ход даёт не свои 8 pt: \(TrayStow.shift(strain: full))")
+
+        let q1 = TrayStow.shift(strain: full * 0.25)
+        let q4 = TrayStow.shift(strain: full) - TrayStow.shift(strain: full * 0.75)
+        expect(q1 > q4, "сдвиг растёт равномерно — связь читается свободной")
+        expect(q4 / TrayStow.maxShift > 0.1,
+               "к концу хода прогресс не виден: \(q4 / TrayStow.maxShift)")
+
+        var previous: CGFloat = -1
+        var strain: CGFloat = 0
+        while strain <= full {
+            let value = TrayStow.shift(strain: strain)
+            expect(value >= previous - 0.0001, "сдвиг не монотонен при \(strain)")
+            previous = value
+            strain += 2
+        }
+
+        expect(TrayStow.scale(strain: 0) == 1, "покой уже уменьшен")
+        expect(abs(TrayStow.scale(strain: full) - TrayStow.tensionScale) < 0.001,
+               "масштаб натяжения не дошёл")
+
+        // Порог: 112 pt срабатывает, 111 — нет; бросок засчитывается по
+        // намерению при вдвое меньшем ходе.
+        expect(!TrayStow.fires(strain: full - 1, velocity: 0), "сработало раньше порога")
+        expect(TrayStow.fires(strain: full, velocity: 0), "полный ход не сработал")
+        expect(TrayStow.fires(strain: full * 0.5, velocity: 2000),
+               "уверенный бросок не засчитан по намерению")
+        expect(!TrayStow.fires(strain: full * 0.5, velocity: 50),
+               "вялое движение засчитано как бросок")
+    }
+
     private static func singleCardHasNowhereToScroll() {
         let one = TrayScrollModel(contentLength: 150, viewportLength: 600,
                                   offset: 0, lastCardLength: 150)

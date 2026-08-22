@@ -261,32 +261,43 @@ struct ThumbnailMotionTests {
         try require(trayAxisPick(accumulatedX: 12, accumulatedY: 12, threshold: 10) == true,
                     "A clean diagonal did not fall back to the vertical axis")
 
-        // `TR-41`: разделение фаз выражено ПРЕДЕЛОМ ХОДА для конкретного
-        // жеста, а не вторым состоянием. Жест, начатый до упора, за упор не
-        // уходит; жест, начатый на упоре, уходит на ступень убирания.
+        // `TR-41`: КАЖДЫЙ переход между фазами требует отдельного жеста, в
+        // обе стороны. Жест, начатый при раскрытой ленте, не уходит за упор
+        // сбора; жест, начатый на упоре, уходит на ступень; жест, начатый в
+        // третьей фазе, возвращает колоду, но ленту не раскрывает.
         var strip = TrayScrollModel(contentLength: 800, viewportLength: 400,
                                     offset: 0, lastCardLength: 150)
+        let openStrip = strip.scrolled(by: 5000, rubberBand: false, limit: strip.maximumOffset)
+        try require(abs(openStrip.offset - strip.maximumOffset) < 0.001,
+                    "Gesture from the open strip passed the gathered stop")
+        try require(openStrip.stowProgress == 0,
+                    "Gesture from the open strip entered the stow step")
+
         strip.offset = strip.maximumOffset
-        let stopped = strip.scrolled(by: 200, rubberBand: false, limit: strip.maximumOffset)
-        try require(abs(stopped.offset - strip.maximumOffset) < 0.001,
-                    "Gesture without permission passed the gathered stop")
-        try require(stopped.stowProgress == 0, "Gesture without permission entered the stow step")
+        let stowing = strip.scrolled(by: 5000, rubberBand: false, limit: strip.stowedMaximumOffset)
+        try require(stowing.isStowed, "Gesture from the stop did not stow the deck")
 
-        let allowed = strip.scrolled(by: 200, rubberBand: false,
-                                     limit: strip.stowedMaximumOffset)
-        try require(abs(allowed.offset - strip.stowedMaximumOffset) < 0.001,
-                    "Permitted gesture did not reach the end of the stow step")
-        try require(allowed.isStowed, "Permitted gesture did not stow the deck")
+        var stowed = strip
+        stowed.offset = strip.stowedMaximumOffset
+        let recalled = stowed.scrolled(by: -5000, rubberBand: false, limit: stowed.stowedMaximumOffset)
+        try require(abs(recalled.offset) < 0.001 || recalled.offset <= stowed.maximumOffset + 0.001,
+                    "Return gesture ran past the gathered deck")
 
-        // Ступень — участок ТОЙ ЖЕ координаты: прогресс однозначно следует из
-        // положения, отдельного состояния нет и рассинхрону взяться неоткуда.
+        // Ступень — участок ТОЙ ЖЕ координаты: степень убранности однозначно
+        // следует из положения, отдельного состояния нет.
         var midway = strip
         midway.offset = strip.maximumOffset + TrayScrollModel.stowSpan / 2
         try require(abs(midway.stowProgress - 0.5) < 0.001,
                     "Stow progress is not a pure function of the offset")
-        // Незавершённая ступень возвращается к собранной колоде.
         try require(abs(midway.settled().offset - strip.maximumOffset) < 0.001,
                     "Half-open stow step did not settle back to the gathered deck")
+
+        // Видимое натяжение — 8 pt из всей длины ступени: колода пружинит
+        // «почти незаметно», а не уезжает за пальцем.
+        var tense = strip
+        tense.offset = strip.maximumOffset + TrayStow.maxShift
+        try require(tense.stowProgress < 0.1,
+                    "Tension alone already stowed the deck: \(tense.stowProgress)")
 
         // `TR-40`: ресайз переносит долю раскрытия, а не смещение.
         try require(trayOffsetPreservingShare(offset: 316, maximum: 316, newMaximum: 406) == 406,

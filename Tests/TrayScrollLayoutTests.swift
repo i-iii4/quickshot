@@ -230,6 +230,24 @@ struct TrayScrollLayoutTests {
             expect(sweep(count: count).isEmpty,
                    "при \(count) снимках убранная колода всё ещё видна")
         }
+
+        // `TR-41`: вставка снимка при убранной колоде оставляет смещение в
+        // конце ступени — третья фаза не прерывается, меняется только
+        // счётчик. Проверяется тем, что после удлинения ленты конец ступени
+        // по-прежнему держит колоду убранной.
+        let heights = Array(repeating: cardH, count: 3)
+        let content = heights.reduce(0, +) + gap * CGFloat(heights.count - 1)
+        var before = TrayScrollModel(contentLength: content, viewportLength: 844,
+                                     offset: 0, lastCardLength: cardH)
+        before.offset = before.stowedMaximumOffset
+        expect(before.isStowed, "исходная лента не убрана")
+
+        var after = before
+        after.contentLength = content + cardH + gap
+        after.offset = after.stowedMaximumOffset
+        expect(after.isStowed, "после вставки колода перестала быть убранной")
+        expect(after.stowProgress > 0.9999,
+               "после вставки степень убранности упала: \(after.stowProgress)")
     }
 
     private static func offsetMovesCards() {
