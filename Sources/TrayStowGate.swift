@@ -23,6 +23,15 @@ struct TrayStowGate: Equatable {
     /// Разрешён ли ТЕКУЩЕМУ жесту вход на ступень. Выдаётся в начале жеста и
     /// на следующий не переходит: одним движением через две фазы не пройти.
     private(set) var permitted = false
+    /// Жест ИЗРАСХОДОВАН срабатыванием: до самого его конца ни движение, ни
+    /// инерция никуда не идут.
+    ///
+    /// Без этого остаток жеста уходил ленте: щелчок вернул колоду, пальцы
+    /// продолжают движение — и лента раскрывалась, то есть из убранной
+    /// колоды в раскрытую ленту можно было попасть одним жестом (приёмка
+    /// 21.08.2026). Конец жеста при этом обязан проходить СКВОЗЬ блокировку,
+    /// иначе лента остаётся в состоянии «жест идёт» и не садится.
+    private(set) var spent = false
 
     /// Форма события жеста. Инерция отделена от движения пальцем: хвост,
     /// летящий после отрыва, ступень не двигает.
@@ -59,6 +68,7 @@ struct TrayStowGate: Equatable {
         switch input.kind {
         case .began:
             strain = 0
+            spent = false
             // Ступень открыта жесту, чьё НАЧАЛО пришлось на собранную колоду
             // или на убранную, и только по вертикали.
             permitted = input.verticalAxis && (input.deckGathered || stowed)
@@ -68,14 +78,15 @@ struct TrayStowGate: Equatable {
             let hadStrain = strain > 0.0001
             strain = 0
             permitted = false
+            spent = false
             // Любая форма завершения обнуляет напряжение: иначе остаток
             // доживает до следующего жеста и досчитывается до порога сам.
             return hadStrain ? .release : (stowed ? .ignore : .pass)
 
         case .momentum:
             // Инерция ступень не двигает: направление хвоста пользователь не
-            // показывал. Убранной колоде она тоже не нужна — за ступенью
-            // ленте идти некуда.
+            // показывал. Израсходованному жесту она тем более не нужна.
+            if spent { return .ignore }
             if permitted, strain > 0.0001 { return .ignore }
             return stowed ? .ignore : .pass
 
@@ -85,6 +96,9 @@ struct TrayStowGate: Equatable {
     }
 
     private mutating func handleMove(_ input: Input) -> Outcome {
+        // Сработавшая ступень забирает жест целиком: остаток хода никуда не
+        // идёт до самого его конца.
+        if spent { return .ignore }
         // В убранной фазе горизонтальный ход не делает НИЧЕГО: ни возврата,
         // ни раскрытия ленты, ни смены оси.
         if stowed, !input.verticalAxis { return .ignore }
@@ -104,6 +118,7 @@ struct TrayStowGate: Equatable {
             // поэтому разойтись им негде.
             strain = 0
             permitted = false
+            spent = true
             stowed.toggle()
             return stowed ? .fire(velocity: input.velocity) : .recall(velocity: input.velocity)
         }
@@ -120,5 +135,6 @@ struct TrayStowGate: Equatable {
         stowed = false
         strain = 0
         permitted = false
+        spent = false
     }
 }

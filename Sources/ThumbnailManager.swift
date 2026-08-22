@@ -524,8 +524,15 @@ final class ThumbnailManager {
         // собранная колода из одного элемента, а не раскрытая (`TR-39`).
         // Считая её раскрытой, второй снимок раскладывал ленту открыто, и
         // она поднималась на резерв под ярусы — 14 pt (приёмка 21.08.2026).
-        let wasCompressed = scrollModel.maximumOffset > 0.5 || items.count == 1
-            && scrollModel.offset >= scrollModel.maximumOffset - 1
+        // `TR-41`: фаза читается ДО решения о ленте — синхронизация модели
+        // происходит позже и к этому моменту про убранную колоду не знает.
+        //
+        // Признак смотрит на ФАКТИЧЕСКОЕ положение ленты у упора, а не на её
+        // прокручиваемость: прежний проверял `maximumOffset > 0.5`, то есть у
+        // любой ленты из двух и более снимков был истинным, и раскрытая лента
+        // собиралась от каждого нового снимка (приёмка 21.08.2026).
+        let wasStowed = deckStep.stowed
+        let wasCompressed = wasStowed || scrollModel.offset >= scrollModel.maximumOffset - 1
         finishCollectionMotion()
         finishTrayMotion()
         cancelCollapsedPeekDismiss()
@@ -546,6 +553,7 @@ final class ThumbnailManager {
         }
         collectionModel.insert(id: artifact.id, sequence: artifact.sequence)
         itemByID[artifact.id] = t
+        scrollModel.stowed = wasStowed
         scrollIntent = wasCompressed ? .stayCompressed : .revealNewest
         hostContent.addSubview(t.hostView, positioned: .below, relativeTo: casePanel)  // новейшая поверх старых, под панелью шкатулки
         for it in items { it.applyWidth(cardWidth, screenHeight: screen.frame.height) }

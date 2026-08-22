@@ -234,11 +234,30 @@ struct TrayScrollModelTests {
         expect(fired, "щелчок не пришёл на пороге")
         expect(gate.stowed, "фаза не сменилась после щелчка")
 
-        // Инерция ступень не двигает.
+        // Сработавшая ступень ИЗРАСХОДУЕТ жест до конца: ни движение, ни
+        // инерция дальше никуда не идут. Иначе остаток того же жеста
+        // раскрывал ленту, и из убранной колоды в раскрытую можно было
+        // попасть одним движением (приёмка 21.08.2026).
         var afterFire = gate
+        expect(afterFire.spent, "жест не помечен израсходованным после щелчка")
+        for delta in [CGFloat(-200), -40, 40, 200] {
+            let move = afterFire.handle(.init(kind: .changed, delta: delta, deckGathered: true))
+            expect(move == .ignore, "остаток жеста ушёл в ленту: \(move) при дельте \(delta)")
+        }
         let momentum = afterFire.handle(.init(kind: .momentum, delta: 200, deckGathered: true))
         expect(momentum == .ignore, "инерция после щелчка ушла в ленту: \(momentum)")
         expect(afterFire.stowed, "инерция сменила фазу")
+
+        // Но КОНЕЦ жеста проходит сквозь блокировку и очищает состояние —
+        // иначе лента остаётся в положении «жест идёт» и не садится.
+        _ = afterFire.handle(.init(kind: .ended))
+        expect(!afterFire.spent, "израсходованность пережила конец жеста")
+        expect(afterFire.strain == 0 && !afterFire.permitted,
+               "конец жеста не очистил состояние ступени")
+        // Новый жест снова работает.
+        _ = afterFire.handle(.init(kind: .began, deckGathered: true))
+        let fresh = afterFire.handle(.init(kind: .changed, delta: -10, deckGathered: true))
+        expect(fresh != .ignore, "новый жест после израсходованного не работает")
 
         // Обрыв посреди натяжения не оставляет следов.
         var broken = Gate()
