@@ -93,15 +93,11 @@ final class ThumbnailManager {
     /// Право сменить ось выражается СОСТОЯНИЕМ ленты, а не фазой жеста.
     private lazy var openAxis: ThumbnailLayoutEdge =
         ThumbnailLayoutEdge(rawValue: TrayPosition.current.rawValue) ?? .right
-    /// Была ли колода собрана на прошлом событии прокрутки: по переходу в
-    /// собранное состояние счёт направления начинается заново.
-    private var wasGathered = true
-    /// Ход пальца, накопленный до выбора оси.
-    private var axisPickupX: CGFloat = 0
-    private var axisPickupY: CGFloat = 0
-    /// Порог выбора оси. Столько же, сколько система тратит на распознавание
-    /// направления свайпа: меньше — ось скачет на дрожании руки.
-    private static let axisPickThreshold: CGFloat = 10
+    /// Механика жеста прокрутки (`TrayGestureCore`): ход выбора оси, оценка
+    /// скорости, признаки жеста и передачи инерции живут внутри неё. Раньше
+    /// они лежали отдельными полями менеджера, и правка обработчика обязана
+    /// была помнить их все.
+    private let gestureCore = TrayGestureCore()
 
     private var collapsed = false
     private var anchorScreen: NSScreen?
@@ -132,7 +128,6 @@ final class ThumbnailManager {
     private var activeDragPayloads: Set<ObjectIdentifier> = []
     private var viewportScrollAccumulator: CGFloat = 0
     private var scrollModel = TrayScrollModel(contentLength: 0, viewportLength: 0, offset: 0)
-    private var scrollGestureActive = false
     /// `TR-5`: как разместить ленту после вставки нового снимка. Сжатая стопка
     /// остаётся сжатой и молча получает новый верхний элемент; развёрнутая
     /// лента докручивается ровно настолько, чтобы показать новый снимок.
@@ -153,14 +148,6 @@ final class ThumbnailManager {
     private let caseView = TrayCaseView(frame: .zero)
     private let casePanel = NativeCasePanelView(frame: .zero)
     private var caseVisible = false
-    /// Скорость ленты в видимых координатах, pt/с: сглаженная оценка по
-    /// событиям. Нужна пружине границы — без передачи скорости движение
-    /// рвётся в момент отпускания (`TR-13`).
-    private var scrollVelocity: CGFloat = 0
-    private var lastScrollTimestamp: TimeInterval = 0
-    /// Инерция уже передана пружине границы: остальные её события
-    /// игнорируются, как это делает системный скролл.
-    private var momentumHandedToSpring = false
     /// Поколение отложенного возврата из-за края: новое событие жеста
     /// обесценивает ранее запланированный возврат.
     private var settleGeneration = 0
@@ -174,9 +161,6 @@ final class ThumbnailManager {
     /// (`CaptureWindowLevels.protectedInterface`) — это часть контракта
     /// захвата и к покою не относится.
     static let restingHostLevel: NSWindow.Level = .floating
-
-    /// Шаг колеса мыши в точках: дельта приходит в строках.
-    private static let wheelLineHeight: CGFloat = 40
 
     private let defaults = UserDefaults.standard
     private let widthKey = "thumbnailCardWidth"
@@ -832,45 +816,6 @@ final class ThumbnailManager {
         thumbnailCollectionOffset(vertical: axisIsVertical)
     }
 
-    /// Колода собрана: лента доехала до упора и стоит там.
-    private var deckIsGathered: Bool {
-        scrollModel.offset >= scrollModel.maximumOffset - 0.5
-    }
-
-    /// Выбирает ось раскрытия по ходу пальца.
-    ///
-    /// Ось меняется ТОЛЬКО из собранного состояния. Раскрытая лента
-    /// продолжает жить по своей оси до самого возврата — смена системы
-    /// координат под раскрытой лентой давала прыжки, случайные щелчки и
-    /// переходы в чужие состояния (приёмка 20.08.2026).
-    private func pickOpenAxis(with event: NSEvent) -> Bool {
-        if event.phase == .began {
-            axisPickupX = 0
-            axisPickupY = 0
-        }
-        axisPickupX += event.scrollingDeltaX
-        axisPickupY += event.scrollingDeltaY
-
-        // Движение ВДОЛЬ текущей оси не ждёт порога: это не заявка на смену
-        // направления, а обычная работа с лентой, и задерживать её нельзя —
-        // иначе первые точки хода в упор съедались бы и резинка начиналась с
-        // опозданием.
-        let along = activeEdge.isVertical ? abs(axisPickupY) : abs(axisPickupX)
-        let across = activeEdge.isVertical ? abs(axisPickupX) : abs(axisPickupY)
-        guard across > along else { return true }
-
-        // Заявка на смену: ждём порога, пока направление не станет явным.
-        guard let vertical = trayAxisPick(accumulatedX: axisPickupX,
-                                          accumulatedY: axisPickupY,
-                                          threshold: Self.axisPickThreshold) else { return false }
-        let base = ThumbnailLayoutEdge(rawValue: TrayPosition.current.rawValue) ?? .right
-        let chosen = vertical
-            ? (base.isVertical ? base : (alternateEdge ?? base))
-            : (base.isVertical ? (alternateEdge ?? base) : base)
-        guard chosen != activeEdge else { return true }
-        switchAxis(to: chosen)
-        return true
-    }
 
     /// Переводит ленту на другую ось. Вызывается только при собранной колоде:
     /// там обе оси дают одну и ту же картинку, поэтому переход невидим.
@@ -887,8 +832,7 @@ final class ThumbnailManager {
         // История скорости начинается с момента смены: прежние отсчёты сняты
         // с движения по другой оси. Обнулять её на каждом событии нельзя —
         // так ломается оценка скорости, а с ней проекция броска.
-        scrollVelocity = 0
-        lastScrollTimestamp = ProcessInfo.processInfo.systemUptime
+        gestureCore.resetVelocity(at: ProcessInfo.processInfo.systemUptime)
         if let screen = anchorScreen ?? NSScreen.main {
             // Размеры ленты пересчитываются СРАЗУ: обычная синхронизация
             // модели выходит рано, пока жив жест, и лента осталась бы со
@@ -916,178 +860,17 @@ final class ThumbnailManager {
     /// заменено на смещение, потому что ступенчатая лента не даёт понять, где
     /// ты находишься, и не позволяет остановиться между карточками.
     func scrollTray(with event: NSEvent) {
-        guard !cardsAreCollapsed else { return }
-        // `TR-38`: ось раскрытия выбирает ЖЕСТ. Пока колода собрана и ось не
-        // выбрана, лента не двигается — копится ход пальца, и по нему
-        // решается, вверх раскрывать или влево.
-        // Ось выбирает ПАЛЕЦ. Инерция оси не выбирает: события догона летят
-        // уже после отрыва, и хвост предыдущего жеста уводил ленту в
-        // направление, которого пользователь не показывал (приёмка
-        // 20.08.2026).
-        let gathered = deckIsGathered
-        defer { wasGathered = gathered }
-        if gathered, !wasGathered {
-            // Колода только что собралась: направление считаем с этой точки,
-            // иначе в счётчике остаётся ход, которым её и собирали, и он
-            // перевешивает новое направление (приёмка 21.08.2026).
-            axisPickupX = 0
-            axisPickupY = 0
-        }
-        if alternateEdge != nil, gathered, event.momentumPhase == [],
-           !pickOpenAxis(with: event) { return }
-        let vertical = axisIsVertical
-        // Ход, накопленный до выбора оси, лента НЕ наверстывает. Порог —
-        // мёртвая зона распознавания направления, как у системных жестов:
-        // после него движение идёт с текущей точки. Наверстывание давало
-        // скачок на старте и завышало оценку скорости, отчего ломались
-        // проекция броска и подача (приёмка 20.08.2026).
-        let raw = vertical
-            ? event.scrollingDeltaY
-            : (abs(event.scrollingDeltaX) > 0.01 ? event.scrollingDeltaX : event.scrollingDeltaY)
-        // Колесо мыши шлёт дельту в строках, а не в точках: один щелчок — это
-        // единица, и лента ползла на пиксель за щелчок.
-        let delta = event.hasPreciseScrollingDeltas ? raw : raw * Self.wheelLineHeight
-        // Трекпад шлёт фазы жеста и инерции; классическое колесо — нет.
-        let hasPhases = event.phase != [] || event.momentumPhase != []
-        // Пальцы на трекпаде: фаза самого жеста. Инерция приходит уже без них
-        // (`momentumPhase`) — и это разные режимы для анимации щелчка.
-        let fingersDown = event.phase != []
-
-        if event.phase == .began {
-            // Новый жест — новая история скорости.
-            scrollVelocity = 0
-            lastScrollTimestamp = event.timestamp
-            momentumHandedToSpring = false
-            // Палец коснулся во время догона: длинная инерционная подача
-            // пережимается в короткую от текущего значения — перенацеливание
-            // вместо среза (скилл, прерываемость).
-            if detentDipAnimating { runDetentSpring(profile: .underFinger) }
-        }
-        // Инерцию, уже переданную пружине границы, не читаем вовсе — и до
-        // общего блока, где события отменяют аниматоры: иначе первое же её
-        // событие глушило саму пружину (`TR-13`). Так же ведёт себя системный
-        // скролл: после передачи границе затухание не применяется.
-        if momentumHandedToSpring, event.momentumPhase != [] {
-            if event.momentumPhase == .ended { momentumHandedToSpring = false }
-            return
-        }
-        if hasPhases {
-            // Новое событие отменяет отложенный возврат: жест продолжается.
-            settleGeneration &+= 1
-            scrollSettleAnimator.cancel()
-            scrollSettleAnimating = false
-            // Открытие актуатора внешнего трекпада стоит сотни миллисекунд
-            // (Bluetooth): готовим дескриптор в фоне заранее, чтобы сам
-            // щелчок стоил доли миллисекунды.
-            TrayHaptics.logSink = { [weak self] line in self?.debugTrayLog("haptics: \(line)") }
-            TrayHaptics.shared.arm()
-            // Устройство берётся из самого события (`TR-29`). В инерции
-            // HID-нагрузки может не быть, поэтому источник запоминается на
-            // всё время жеста: защёлка часто срабатывает уже на инерции.
-            if let device = TrayHaptics.shared.device(of: event) {
-                if gestureDevice != device {
-                    debugTrayLog("источник жеста: устройство=\(device)")
-                }
-                gestureDevice = device
-            }
-            if !scrollGestureActive {
-                debugTrayLog("gesture offset=\(Int(scrollModel.offset)) max=\(Int(scrollModel.maximumOffset)) fits=\(TrayDetentModel.fits(scrollModel)) engaged=\(detent.engaged)")
-            }
-            scrollGestureActive = true
-        }
-
-        guard scrollModel.isScrollable || abs(delta) > 0.01 else { return }
-        scrollIntent = .none
-        // Резинка только у жестов с фазами: колесо упирается в край жёстко.
-        // Содержимое идёт за пальцами: положительная дельта двигает карточки к
-        // хабу. Обратный знак разворачивал ленту против жеста. Жест никогда не
-        // прячет и не показывает трей — это делает только клик по кнопке;
-        // перетягивание за край лишь пружинит и возвращается.
-        if hasPhases {
-            // `TR-29`: дельты жеста идут через защёлку — у полного сбора лента
-            // проходит точку напряжения и защёлкивается со щелчком.
-            if TrayDetentModel.isNearDetent(scrollModel) { TrayHaptics.shared.arm() }
-            // Растягивает резинку только палец: инерция упирается в край,
-            // иначе после отпускания лента продолжает уезжать, а возврат
-            // приходит с задержкой (приёмка 19.08.2026).
-            // Отскок решается ДО применения дельты, прямой проверкой края:
-            // лента на границе и инерция толкает наружу. Скорость — из
-            // текущего кадра (дельта/время), сглаженная оценка к этому
-            // моменту уже испорчена зажатыми кадрами (`TR-13`).
-            if TrayBoundaryHandoff.shouldBounce(model: scrollModel, delta: delta,
-                                                fingersDown: fingersDown,
-                                                isMomentum: event.momentumPhase != []) {
-                let dt = max(0.001, event.timestamp - lastScrollTimestamp)
-                let outward = delta / CGFloat(dt)
-                lastScrollTimestamp = event.timestamp
-                momentumHandedToSpring = true
-                let boundary = scrollModel.offset
-                runBoundarySpring(from: boundary, displacement: 0, velocity: outward) { [weak self] in
-                    guard let self else { return }
-                    self.detent.sync(with: self.scrollModel)
-                }
-                return
-            }
-            let before = scrollModel.offset
-            let result = detent.apply(delta: delta, to: scrollModel, stretch: fingersDown)
-            // Щелчок ПЕРЕНАЦЕЛИВАЕТ движение: прыжок модели поглощается
-            // подачей, видимая позиция остаётся непрерывной. Сдвиг больше
-            // порога восприятия за один кадр запрещён (`TR-29`).
-            writeModel(result.model, absorbJump: result.click != nil)
-            trackVelocity(movement: scrollModel.offset - before, at: event.timestamp)
-            if let click = result.click {
-                // Под пальцем догон короткий и без перелёта: палец сохраняет
-                // контроль над моделью, затухает только разница. На инерции —
-                // длиннее и с лёгкой осадкой.
-                performDetentClick(click, profile: fingersDown ? .underFinger : .inertia)
-            }
-        } else {
-            // Колесо шагает дискретно: защёлка следует за фактом без щелчка.
-            // Пружину границы колесо гасит — иначе позицию пишут двое сразу.
-            scrollSettleAnimator.cancel()
-            scrollSettleAnimating = false
-            writeModel(scrollModel.scrolled(by: delta, rubberBand: false))
-            detent.sync(with: scrollModel)
-        }
-
-        applyScrollOffset()
-
-        if !hasPhases {
-            writeModel(scrollModel.settled())
-            applyScrollOffset()
-            return
-        }
-        if event.momentumPhase == .ended {
-            // Инерция кончилась — жест завершён окончательно.
-            scrollGestureActive = false
-            settleScrollAnimated()
-        } else if (event.phase == .ended || event.phase == .cancelled),
-                  abs(scrollModel.overshoot) > 0.5 {
-            // Отпустили за краем: пружина возврата стартует со скоростью
-            // жеста, а вся последующая инерция игнорируется — иначе её
-            // события отменяли пружину и схлопывали растяжение телепортом.
-            // Системный скролл после отпускания за краем инерцию тоже не
-            // читает (`TR-13`).
-            scrollGestureActive = false
-            momentumHandedToSpring = true
-            settleScrollAnimated()
-        } else if event.phase == .ended || event.phase == .cancelled {
-            scrollGestureActive = false
-            // `TR-36`: уверенный бросок к сбору защёлкивает ПО НАМЕРЕНИЮ —
-            // по точке, где лента остановилась бы сама, а не по факту
-            // доезда. Иначе бросок, не дотянувший чуть-чуть, читается как
-            // «не сработало».
-            if !detent.engaged,
-               TrayFlickProjection.shouldSnap(model: scrollModel, velocity: scrollVelocity) {
-                snapByFlick()
-                return
-            }
-            // Пальцы сняты, но следом может пойти инерция. Возврат из-за края
-            // откладывается: запущенный сразу, он тут же отменялся первым же
-            // событием инерции, которое снова тянуло ленту наружу — старт,
-            // отмена, старт, и это читалось как дёрганье (приёмка 19.08.2026).
-            scheduleSettleAfterGesture()
-        }
+        // Событие разбирается ОДИН раз, здесь, на границе с AppKit. Дальше
+        // работает механика жеста: она об `NSEvent` не знает и потому
+        // проверяема тысячами шагов без окон.
+        let input = TrayGestureInput(deltaX: event.scrollingDeltaX,
+                                     deltaY: event.scrollingDeltaY,
+                                     hasPreciseDeltas: event.hasPreciseScrollingDeltas,
+                                     phase: event.phase,
+                                     momentumPhase: event.momentumPhase,
+                                     timestamp: event.timestamp,
+                                     deviceLookup: { TrayHaptics.shared.device(of: event) })
+        gestureCore.handle(input, out: self)
     }
 
     /// Защёлкивание по броску (`TR-36`): лента доводится до посадочного места
@@ -1095,12 +878,12 @@ final class ThumbnailManager {
     /// подачей, движение остаётся непрерывным. Последующая инерция
     /// игнорируется: намерение уже прочитано.
     private func snapByFlick() {
-        momentumHandedToSpring = true
+        gestureCore.handOffMomentumToSpring()
         writeModel(scrollModel.maximumOffset, absorbJump: true)
         detent.sync(with: scrollModel)
         performDetentClick(.snapIn, profile: .inertia)
         applyScrollOffset()
-        debugTrayLog("защёлка по броску: скорость=\(Int(scrollVelocity)) pt/с")
+        debugTrayLog("защёлка по броску: скорость=\(Int(gestureCore.state.scrollVelocity)) pt/с")
     }
 
     /// Отложенный возврат: любое следующее событие жеста или инерции его
@@ -1112,17 +895,6 @@ final class ThumbnailManager {
             guard let self, self.settleGeneration == generation else { return }
             self.settleScrollAnimated()
         }
-    }
-
-    /// Оценка скорости ленты по событиям, pt/с. Сглаживание убирает выброс от
-    /// одиночного рваного кадра, иначе он задал бы скорость передачи пружине.
-    private func trackVelocity(movement: CGFloat, at timestamp: TimeInterval) {
-        defer { lastScrollTimestamp = timestamp }
-        let dt = timestamp - lastScrollTimestamp
-        guard dt > 0.0005, dt < 0.2 else { return }
-        let instant = movement / CGFloat(dt)
-        let alpha: CGFloat = 0.3
-        scrollVelocity = scrollVelocity * (1 - alpha) + instant * alpha
     }
 
     /// Возврат из-за края после отпускания: не мгновенный clamp, а короткий
@@ -1163,8 +935,8 @@ final class ThumbnailManager {
         // Пружина стартует со скоростью жеста. Оценка скорости протухает,
         // когда палец замер: событий нет, значение остаётся старым, и после
         // паузы пружина дёргала ленту. Пауза длиннее 0.1 с обнуляет передачу.
-        let sinceLastEvent = ProcessInfo.processInfo.systemUptime - lastScrollTimestamp
-        let releaseVelocity = sinceLastEvent < 0.1 ? scrollVelocity : 0
+        let sinceLastEvent = ProcessInfo.processInfo.systemUptime - gestureCore.state.lastScrollTimestamp
+        let releaseVelocity = sinceLastEvent < 0.1 ? gestureCore.state.scrollVelocity : 0
         runBoundarySpring(from: target, displacement: from - target, velocity: releaseVelocity,
                           onDone: { [weak self] in
             guard let self else { return }
@@ -1846,7 +1618,7 @@ final class ThumbnailManager {
     private func animateScroll(to target: CGFloat, detentClick: TrayDetentModel.Click? = nil) {
         scrollSettleAnimator.cancel()
         scrollSettleAnimating = false
-        scrollGestureActive = false
+        gestureCore.endGesture()
         let from = scrollModel.offset
         guard abs(target - from) > 0.5 else {
             writePresented(target)
@@ -2066,7 +1838,7 @@ final class ThumbnailManager {
         applyStripMetrics(content: content, viewport: viewport, last: lengths.last ?? 0)
         // Пока идёт жест или пружинный возврат, смещение может законно жить за
         // границей — мгновенный clamp здесь и делал резинку невидимой.
-        if scrollGestureActive || scrollSettleAnimating {
+        if gestureCore.state.scrollGestureActive || scrollSettleAnimating {
             if !scrollModel.isScrollable { writeModel(0) }
             return
         }
@@ -2180,4 +1952,79 @@ final class ThumbnailManager {
             maximum: min(ThumbStyle.maxWidth,
                          CardSizing.maxWidth(screenHeight: screen.frame.height)))
     }
+}
+
+// MARK: - Мир механики жеста
+
+/// Всё, что механике жеста нужно от менеджера. Каждый метод — один эффект,
+/// без решений: решения принимает `TrayGestureCore`.
+extension ThumbnailManager: TrayGestureOutput {
+    var gestureCardsAreCollapsed: Bool { cardsAreCollapsed }
+    var gestureModel: TrayScrollModel { scrollModel }
+    var gestureDetentEngaged: Bool { detent.engaged }
+    var gestureActiveEdge: ThumbnailLayoutEdge { activeEdge }
+    var gestureAlternateEdge: ThumbnailLayoutEdge? { alternateEdge }
+    var gestureBaseEdge: ThumbnailLayoutEdge {
+        ThumbnailLayoutEdge(rawValue: TrayPosition.current.rawValue) ?? .right
+    }
+    var gestureDipAnimating: Bool { detentDipAnimating }
+
+    func gestureSwitchAxis(to edge: ThumbnailLayoutEdge) { switchAxis(to: edge) }
+
+    func gestureRunDetentSpringUnderFinger() { runDetentSpring(profile: .underFinger) }
+
+    func gestureCancelSettleAnimation(bumpGeneration: Bool) {
+        if bumpGeneration { settleGeneration &+= 1 }
+        scrollSettleAnimator.cancel()
+        scrollSettleAnimating = false
+    }
+
+    func gesturePrepareHaptics() {
+        TrayHaptics.logSink = { [weak self] line in self?.debugTrayLog("haptics: \(line)") }
+        TrayHaptics.shared.arm()
+    }
+
+    func gestureArmHaptics() { TrayHaptics.shared.arm() }
+
+    func gestureAdoptDevice(_ device: UInt64?) {
+        guard let device else { return }
+        if gestureDevice != device {
+            debugTrayLog("источник жеста: устройство=\(device)")
+        }
+        gestureDevice = device
+    }
+
+    func gestureLog(_ line: String) { debugTrayLog(line) }
+
+    func gestureClearScrollIntent() { scrollIntent = .none }
+
+    func gestureWriteModel(_ model: TrayScrollModel, absorbJump: Bool) {
+        writeModel(model, absorbJump: absorbJump)
+    }
+
+    func gestureApplyDetent(delta: CGFloat,
+                            stretch: Bool) -> (model: TrayScrollModel, click: TrayDetentModel.Click?) {
+        detent.apply(delta: delta, to: scrollModel, stretch: stretch)
+    }
+
+    func gestureSyncDetent() { detent.sync(with: scrollModel) }
+
+    func gesturePerformDetentClick(_ click: TrayDetentModel.Click, underFinger: Bool) {
+        performDetentClick(click, profile: underFinger ? .underFinger : .inertia)
+    }
+
+    func gestureRunBoundarySpring(from boundary: CGFloat, velocity: CGFloat) {
+        runBoundarySpring(from: boundary, displacement: 0, velocity: velocity) { [weak self] in
+            guard let self else { return }
+            self.detent.sync(with: self.scrollModel)
+        }
+    }
+
+    func gestureApplyScrollOffset() { applyScrollOffset() }
+
+    func gestureSettleScrollAnimated() { settleScrollAnimated() }
+
+    func gestureSnapByFlick() { snapByFlick() }
+
+    func gestureScheduleSettleAfterGesture() { scheduleSettleAfterGesture() }
 }
