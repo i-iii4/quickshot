@@ -138,28 +138,49 @@ struct TrayBoundaryGate: Equatable {
     }
 }
 
-/// Мир, с которым работает механика жеста: позиция ленты, защёлка, анимации,
-/// тактильный отклик. Всё, что требует окон и экрана, живёт за этим
-/// интерфейсом, поэтому механику можно прогнать без них.
+/// Мир механики жеста, разделённый по получателям. Всё, что требует окон и
+/// экрана, живёт за этими интерфейсами, поэтому механику можно прогнать без
+/// них.
+///
+/// Разделение не косметика: раньше единый протокол на 25 членов видели все,
+/// включая ось и границу, которым нужно по четыре. Теперь каждый получатель
+/// сужает мир до своего в первой же строке, и компилятор не даст залезть в
+/// чужое.
+
+/// Предусловие входа: механика молчит, пока карточки схлопнуты.
 @MainActor
-protocol TrayGestureOutput: AnyObject {
+protocol TrayGestureIntake: AnyObject {
     var gestureCardsAreCollapsed: Bool { get }
     var gestureModel: TrayScrollModel { get }
-    var gestureDetentEngaged: Bool { get }
+}
+
+/// Что нужно выбору оси (`TR-38`).
+@MainActor
+protocol TrayAxisOutput: AnyObject {
     var gestureActiveEdge: ThumbnailLayoutEdge { get }
     var gestureAlternateEdge: ThumbnailLayoutEdge? { get }
     /// Ось, заданная положением трея; вторая ось — `gestureAlternateEdge`.
     var gestureBaseEdge: ThumbnailLayoutEdge { get }
-    var gestureDipAnimating: Bool { get }
-
     func gestureSwitchAxis(to edge: ThumbnailLayoutEdge)
+}
+
+/// Что нужно границе ленты.
+@MainActor
+protocol TrayBoundaryOutput: AnyObject {
+    var gestureModel: TrayScrollModel { get }
+    var gestureDipAnimating: Bool { get }
     func gestureRunDetentSpringUnderFinger()
-    /// `bumpGeneration` — поднять поколение отложенного возврата, отменив
-    /// запланированный. Колесо гасит только аниматор: отложенного возврата у
-    /// него нет.
+    func gestureRunBoundarySpring(from boundary: CGFloat, velocity: CGFloat)
+}
+
+/// Что нужно самой ленте: защёлка, прокрутка, посадка, отклик. Плюс активная
+/// ось — ход берётся вдоль неё.
+@MainActor
+protocol TrayStripOutput: AnyObject {
+    var gestureModel: TrayScrollModel { get }
+    var gestureActiveEdge: ThumbnailLayoutEdge { get }
+    var gestureDetentEngaged: Bool { get }
     func gestureCancelSettleAnimation(bumpGeneration: Bool)
-    /// Взвод актуатора вместе с подпиской на журнал: делается один раз за
-    /// событие жеста.
     func gesturePrepareHaptics()
     func gestureArmHaptics()
     func gestureAdoptDevice(_ device: UInt64?)
@@ -169,12 +190,15 @@ protocol TrayGestureOutput: AnyObject {
     func gestureApplyDetent(delta: CGFloat, stretch: Bool) -> (model: TrayScrollModel, click: TrayDetentModel.Click?)
     func gestureSyncDetent()
     func gesturePerformDetentClick(_ click: TrayDetentModel.Click, underFinger: Bool)
-    func gestureRunBoundarySpring(from boundary: CGFloat, velocity: CGFloat)
     func gestureApplyScrollOffset()
     func gestureSettleScrollAnimated()
     func gestureSnapByFlick()
     func gestureScheduleSettleAfterGesture()
 }
+
+/// Полный мир — объединение. Его реализует менеджер; получатели видят только
+/// свою часть.
+typealias TrayGestureOutput = TrayGestureIntake & TrayAxisOutput & TrayBoundaryOutput & TrayStripOutput
 
 /// Получатели события жеста, в порядке прохождения. Первый взявший
 /// останавливает цепочку — раньше это выражалось восемью ранними выходами, и
@@ -208,7 +232,7 @@ struct TrayGestureEvent {
     /// Ход вдоль текущей оси, в точках. Колесо мыши шлёт дельту в строках, а
     /// не в точках: один щелчок — это единица, и лента ползла на пиксель за
     /// щелчок.
-    func delta(_ out: TrayGestureOutput) -> CGFloat {
+    func delta(_ out: TrayStripOutput) -> CGFloat {
         let raw = out.gestureActiveEdge.isVertical
             ? input.deltaY
             : (abs(input.deltaX) > 0.01 ? input.deltaX : input.deltaY)
@@ -239,6 +263,7 @@ final class TrayAxisParty: TrayGestureParty {
     private(set) var wasGathered = true
 
     func receive(_ event: TrayGestureEvent, out: TrayGestureOutput) -> TrayGestureRecipient? {
+        let out: TrayAxisOutput = out
         defer { wasGathered = event.gathered }
         if event.gathered, !wasGathered {
             // Колода только что собралась: направление считаем с этой точки,
@@ -289,6 +314,7 @@ final class TrayBoundaryParty: TrayGestureParty {
     init(core: TrayGestureCore) { self.core = core }
 
     func receive(_ event: TrayGestureEvent, out: TrayGestureOutput) -> TrayGestureRecipient? {
+        let out: TrayBoundaryOutput = out
         if event.phase == .began { beginGesture(event, out: out) }
         // Инерцию, уже переданную пружине границы, не читаем вовсе — и до
         // общего блока, где события отменяют аниматоры: иначе первое же её
@@ -297,7 +323,7 @@ final class TrayBoundaryParty: TrayGestureParty {
         return gate.swallows(momentumPhase: event.momentumPhase) ? kind : nil
     }
 
-    private func beginGesture(_ event: TrayGestureEvent, out: TrayGestureOutput) {
+    private func beginGesture(_ event: TrayGestureEvent, out: TrayBoundaryOutput) {
         // Новый жест — новая история скорости.
         core.velocity.restart(at: event.timestamp)
         gate.reset()
@@ -313,7 +339,7 @@ final class TrayBoundaryParty: TrayGestureParty {
     /// (`TR-13`).
     func takeBounce(_ event: TrayGestureEvent,
                     delta: CGFloat,
-                    out: TrayGestureOutput) -> TrayGestureRecipient? {
+                    out: TrayBoundaryOutput) -> TrayGestureRecipient? {
         guard TrayBoundaryHandoff.shouldBounce(model: out.gestureModel, delta: delta,
                                                fingersDown: event.fingersDown,
                                                isMomentum: event.momentumPhase != []) else { return nil }
@@ -343,19 +369,22 @@ final class TrayStripParty: TrayGestureParty {
     init(core: TrayGestureCore) { self.core = core }
 
     func receive(_ event: TrayGestureEvent, out: TrayGestureOutput) -> TrayGestureRecipient? {
-        prepareFrame(event, out: out)
-        let delta = event.delta(out)
-        guard out.gestureModel.isScrollable || abs(delta) > 0.01 else { return kind }
-        out.gestureClearScrollIntent()
-        if let taker = apply(event, delta: delta, out: out) { return taker }
-        out.gestureApplyScrollOffset()
+        // Свой мир — лента и граница: отскок лента отдаёт границе. Полный
+        // мир нужен только рассылке конца жеста, она идёт по всем участникам.
+        let strip: TrayStripOutput & TrayBoundaryOutput = out
+        prepareFrame(event, out: strip)
+        let delta = event.delta(strip)
+        guard strip.gestureModel.isScrollable || abs(delta) > 0.01 else { return kind }
+        strip.gestureClearScrollIntent()
+        if let taker = apply(event, delta: delta, out: strip) { return taker }
+        strip.gestureApplyScrollOffset()
         settle(event, out: out)
         return kind
     }
 
     /// Общий кадр жеста: отложенный возврат отменяется, актуатор взводится,
     /// источник отклика запоминается на всё время жеста.
-    private func prepareFrame(_ event: TrayGestureEvent, out: TrayGestureOutput) {
+    private func prepareFrame(_ event: TrayGestureEvent, out: TrayStripOutput) {
         guard event.hasPhases else { return }
         // Новое событие отменяет отложенный возврат: жест продолжается.
         out.gestureCancelSettleAnimation(bumpGeneration: true)
@@ -377,7 +406,7 @@ final class TrayStripParty: TrayGestureParty {
     /// Применение хода. Возвращает получателя, если событие забрала граница.
     private func apply(_ event: TrayGestureEvent,
                        delta: CGFloat,
-                       out: TrayGestureOutput) -> TrayGestureRecipient? {
+                       out: TrayStripOutput & TrayBoundaryOutput) -> TrayGestureRecipient? {
         // Резинка только у жестов с фазами: колесо упирается в край жёстко.
         // Содержимое идёт за пальцами: положительная дельта двигает карточки к
         // хабу. Жест никогда не прячет и не показывает трей — это делает
@@ -393,7 +422,7 @@ final class TrayStripParty: TrayGestureParty {
         return nil
     }
 
-    private func applyDetent(_ event: TrayGestureEvent, delta: CGFloat, out: TrayGestureOutput) {
+    private func applyDetent(_ event: TrayGestureEvent, delta: CGFloat, out: TrayStripOutput) {
         let before = out.gestureModel.offset
         let result = out.gestureApplyDetent(delta: delta, stretch: event.fingersDown)
         // Щелчок ПЕРЕНАЦЕЛИВАЕТ движение: прыжок модели поглощается подачей,
@@ -411,7 +440,7 @@ final class TrayStripParty: TrayGestureParty {
 
     /// Колесо шагает дискретно: защёлка следует за фактом без щелчка. Пружину
     /// границы колесо гасит — иначе позицию пишут двое сразу.
-    private func applyWheel(delta: CGFloat, out: TrayGestureOutput) -> TrayGestureRecipient? {
+    private func applyWheel(delta: CGFloat, out: TrayStripOutput) -> TrayGestureRecipient? {
         out.gestureCancelSettleAnimation(bumpGeneration: false)
         out.gestureWriteModel(out.gestureModel.scrolled(by: delta, rubberBand: false),
                               absorbJump: false)

@@ -25,6 +25,7 @@ struct TrayGestureRoutingTests {
         run("взявший останавливает перебор: за границей нет ленты", testBoundaryStopsChain)
         run("не взявшие пропускают событие дальше", testChainReachesStrip)
         run("каждый получатель — свой тип со своими методами", testPartiesAreSeparateTypes)
+        run("каждый получатель сужает мир до своего", testPartiesNarrowTheirWorld)
         run("следующий жест начинает счёт направления с нуля", testNoLeftoverState)
         run("обработчик не хранит полей состояния жеста", testHandlerHoldsNoState)
         run("обработчик остаётся коротким", testHandlerStaysShort)
@@ -116,6 +117,38 @@ struct TrayGestureRoutingTests {
                     "Метод приёма есть не у всех трёх получателей")
         try require(source.components(separatedBy: "func gestureEnded(_ event: TrayGestureEvent").count == 5,
                     "Метод конца жеста есть не у всех трёх получателей")
+    }
+
+    /// Протокол мира разделён по получателям, и каждый сужает его до своего в
+    /// первой же строке. Единый интерфейс на 25 членов видели все, включая
+    /// ось и границу, которым нужно по четыре.
+    private static func testPartiesNarrowTheirWorld() throws {
+        let source = try read("Sources/TrayGestureCore.swift")
+        for proto in ["TrayGestureIntake", "TrayAxisOutput",
+                      "TrayBoundaryOutput", "TrayStripOutput"] {
+            try require(source.contains("protocol \(proto): AnyObject"),
+                        "Мир не разделён: нет протокола \(proto)")
+        }
+        try require(source.contains("let out: TrayAxisOutput = out"),
+                    "Ось не сужает мир до своего")
+        try require(source.contains("let out: TrayBoundaryOutput = out"),
+                    "Граница не сужает мир до своего")
+        try require(source.contains("let strip: TrayStripOutput & TrayBoundaryOutput = out"),
+                    "Лента не сужает мир до своего")
+        // Ось и граница не должны даже видеть методов ленты: компилятор это
+        // гарантирует сужением, проверка ловит возврат к широкому миру.
+        let axis = try slice(source, from: "final class TrayAxisParty", to: "\n}\n")
+        for alien in ["gestureWriteModel", "gestureApplyDetent", "gestureSnapByFlick"] {
+            try require(!axis.contains(alien),
+                        "Ось обращается к чужому методу \(alien)")
+        }
+    }
+
+    private static func slice(_ text: String, from: String, to: String) throws -> String {
+        guard let a = text.range(of: from), let b = text.range(of: to, range: a.upperBound..<text.endIndex) else {
+            throw Failure("Не найден фрагмент \(from)")
+        }
+        return String(text[a.lowerBound..<b.lowerBound])
     }
 
     // MARK: - Конец жеста
