@@ -17,16 +17,19 @@ import re
 import sys
 
 DECL = re.compile(r'^(\s*)(?:@\w+\s+)*(?:public |private |internal |fileprivate |static |mutating |final )*func\s+(\w+)')
+# Zig: `fn name(`, возможно с `pub`, `export`, `inline`.
+DECL_ZIG = re.compile(r'^(\s*)(?:pub\s+|export\s+|inline\s+|extern\s+)*fn\s+(\w+)')
 BRANCH = re.compile(r'(?:^|\s)(if|guard|else|while|for)(?:\s|\()')
 CASE = re.compile(r'^\s*case\s')
 
 
 def metrics(path):
     lines = open(path).read().split('\n')
+    decl = DECL_ZIG if path.endswith('.zig') else DECL
     rows = []
     i = 0
     while i < len(lines):
-        m = DECL.match(lines[i])
+        m = decl.match(lines[i])
         if not m:
             i += 1
             continue

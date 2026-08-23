@@ -708,11 +708,14 @@ final class ThumbnailManager {
 
     /// План удаления: кто переезжает на новое место, кто влетает, кто уезжает
     /// с анимацией. Собирается один раз и дальше только исполняется.
-    private struct RemovalPlan {
+    /// План перекладки карточек: кто переезжает на новое место, кто влетает,
+    /// кто уходит. Один на оба сценария — удаление карточки и смена окна
+    /// просмотра отличаются не движением, а тем, что делать в конце.
+    private struct ReflowPlan {
         var reflowing: [(ThumbnailWindow, NSRect)] = []
         var entering: [ThumbnailWindow] = []
-        var animatedRemoved: [ThumbnailWindow] = []
-        var animateCards = false
+        var leaving: [ThumbnailWindow] = []
+        var animateCards = true
         var reduceMotion = false
     }
 
@@ -730,7 +733,7 @@ final class ThumbnailManager {
                                oldVisibleIDs: oldVisibleIDs,
                                oldFrames: oldFrames,
                                removesVisiblePeek: removesVisiblePeek)
-        startRemovalMotion(plan)
+        runReflowMotion(plan) { [weak self] in self?.finishRemovalMotion(plan) }
     }
 
     /// Снимок, черновик и сохранённое состояние удалённых карточек живут не
@@ -769,8 +772,8 @@ final class ThumbnailManager {
                              screen: NSScreen,
                              oldVisibleIDs: Set<ObjectIdentifier>,
                              oldFrames: [ObjectIdentifier: NSRect],
-                             removesVisiblePeek: Bool) -> RemovalPlan {
-        var plan = RemovalPlan()
+                             removesVisiblePeek: Bool) -> ReflowPlan {
+        var plan = ReflowPlan()
         plan.reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         plan.animateCards = !cardsAreCollapsed || removesVisiblePeek
 
@@ -778,12 +781,13 @@ final class ThumbnailManager {
         for item in hidden { item.hide() }
         if plan.animateCards {
             for (item, slot) in visible {
-                assignRole(item, slot: slot, oldVisibleIDs: oldVisibleIDs,
-                           oldFrames: oldFrames, plan: &plan)
+                assignRole(item, slot: slot, oldFrames: oldFrames,
+                           wasVisible: oldVisibleIDs, tracksEnteringTarget: true,
+                           plan: &plan)
             }
             // Уезжает с анимацией только та карточка, которую было видно:
             // скрытую анимировать нечем.
-            plan.animatedRemoved = removed.filter {
+            plan.leaving = removed.filter {
                 oldVisibleIDs.contains(ObjectIdentifier($0)) || $0 === collapsedPeekItem
             }
         } else {
@@ -791,35 +795,45 @@ final class ThumbnailManager {
         }
         // Закрываются ВСЕ, кто не уезжает с анимацией, — в том числе когда
         // карточки схлопнуты и не анимируется никто.
-        for item in removed where !plan.animatedRemoved.contains(where: { $0 === item }) {
+        for item in removed where !plan.leaving.contains(where: { $0 === item }) {
             closeAndRelease(item)
         }
-        for item in plan.animatedRemoved {
+        for item in plan.leaving {
             item.prepareRemoval(toward: collectionDirectionalOffset(), reduceMotion: plan.reduceMotion)
         }
         return plan
     }
 
     /// Роль одной карточки в перекладке: встать сразу, влететь или переехать.
+    /// Роль одной карточки в перекладке: встать сразу, влететь или переехать.
+    ///
+    /// `wasVisible` — что было видно до перекладки. При удалении невидимая
+    /// карточка влетает заново, а не переезжает; при смене окна просмотра
+    /// видимость не важна, там решает наличие старой рамки.
     private func assignRole(_ item: ThumbnailWindow,
                             slot: ThumbnailLayoutSlot,
-                            oldVisibleIDs: Set<ObjectIdentifier>,
                             oldFrames: [ObjectIdentifier: NSRect],
-                            plan: inout RemovalPlan) {
+                            wasVisible: Set<ObjectIdentifier>?,
+                            tracksEnteringTarget: Bool,
+                            plan: inout ReflowPlan) {
         let identifier = ObjectIdentifier(item)
-        // Слои стопки не анимируются полными карточками: полоса встаёт сразу в
-        // своё место.
+        // Слои стопки не анимируются полными карточками: полоса встаёт сразу
+        // в своё место.
         guard slot.isFullCard else {
             place(item, at: slot)
             return
         }
-        guard oldVisibleIDs.contains(identifier), let oldFrame = oldFrames[identifier] else {
+        let seen = wasVisible?.contains(identifier) ?? true
+        guard seen, let oldFrame = oldFrames[identifier] else {
             item.prepareInsertion(at: toLocal(slot.origin),
                                   from: collectionDirectionalOffset(),
                                   reduceMotion: plan.reduceMotion)
-            enteringTargets[identifier] = thumbnailVisibleFrame(
-                slot: slot, cardSize: item.cardSize,
-                vertical: axisIsVertical)
+            if tracksEnteringTarget {
+                // Новая карточка влетает сбоку: контур шкатулки берёт её
+                // будущее место, а не текущее положение.
+                enteringTargets[identifier] = thumbnailVisibleFrame(
+                    slot: slot, cardSize: item.cardSize, vertical: axisIsVertical)
+            }
             plan.entering.append(item)
             return
         }
@@ -834,7 +848,9 @@ final class ThumbnailManager {
         plan.reflowing.append((item, oldFrame))
     }
 
-    private func startRemovalMotion(_ plan: RemovalPlan) {
+    /// Кадры перекладки: переезд, влёт и уход идут одной анимацией. Чем она
+    /// завершится — решает вызывающий.
+    private func runReflowMotion(_ plan: ReflowPlan, completion: @escaping () -> Void) {
         runCollectionMotion(duration: plan.reduceMotion ? TrayAnim.reducedTransition : TrayAnim.removalAndReflow,
                             onFrame: { progress in
             for (item, oldFrame) in plan.reflowing {
@@ -843,18 +859,16 @@ final class ThumbnailManager {
             for item in plan.entering {
                 item.applyInsertion(progress: progress, reduceMotion: plan.reduceMotion)
             }
-            for item in plan.animatedRemoved {
+            for item in plan.leaving {
                 item.applyRemoval(progress: progress, reduceMotion: plan.reduceMotion)
             }
-        }, completion: { [weak self] in
-            self?.finishRemovalMotion(plan)
-        })
+        }, completion: completion)
     }
 
-    private func finishRemovalMotion(_ plan: RemovalPlan) {
+    private func finishRemovalMotion(_ plan: ReflowPlan) {
         for (item, _) in plan.reflowing { item.finishCollectionMotion() }
         for item in plan.entering { item.finishCollectionMotion() }
-        for item in plan.animatedRemoved { closeAndRelease(item) }
+        for item in plan.leaving { closeAndRelease(item) }
         enteringTargets.removeAll()
         // Итоговый кадр — ИЗ РАСКЛАДКИ, как и при вставке. Переезд держит
         // координату поперёк оси по старой рамке (`thumbnailAxisLockedOrigin`),
@@ -1342,83 +1356,38 @@ final class ThumbnailManager {
 
     /// План перекладки окна просмотра: кто переезжает, кто влетает, кто
     /// уходит за край.
-    private struct ViewportPlan {
-        var reflowing: [(ThumbnailWindow, NSRect)] = []
-        var entering: [ThumbnailWindow] = []
-        var outgoing: [ThumbnailWindow] = []
-        var reduceMotion = false
-    }
 
     private func animateViewportChange(on screen: NSScreen,
                                        oldVisibleIDs: Set<ObjectIdentifier>,
                                        oldFrames: [ObjectIdentifier: NSRect]) {
         let (visible, hidden) = cardLayout(on: screen)
         let visibleIDs = Set(visible.map { ObjectIdentifier($0.0) })
-        var plan = ViewportPlan()
+        var plan = ReflowPlan()
         plan.reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         // Уходит за край с анимацией только та карточка, которую было видно;
         // остальные скрытые просто гаснут.
-        plan.outgoing = hidden.filter { oldVisibleIDs.contains(ObjectIdentifier($0)) }
-        for item in hidden where !plan.outgoing.contains(where: { $0 === item }) { item.hide() }
+        plan.leaving = hidden.filter { oldVisibleIDs.contains(ObjectIdentifier($0)) }
+        for item in hidden where !plan.leaving.contains(where: { $0 === item }) { item.hide() }
 
         for (item, slot) in visible {
-            assignViewportRole(item, slot: slot, oldFrames: oldFrames, plan: &plan)
+            assignRole(item, slot: slot, oldFrames: oldFrames,
+                       wasVisible: nil, tracksEnteringTarget: false, plan: &plan)
         }
-        for item in plan.outgoing {
+        for item in plan.leaving {
             item.prepareRemoval(toward: collectionDirectionalOffset(), reduceMotion: plan.reduceMotion)
         }
-        startViewportMotion(plan, visibleIDs: visibleIDs)
+        runReflowMotion(plan) { [weak self] in
+            self?.finishViewportMotion(plan, visibleIDs: visibleIDs)
+        }
     }
 
     /// Роль одной карточки в перекладке окна просмотра.
-    private func assignViewportRole(_ item: ThumbnailWindow,
-                                    slot: ThumbnailLayoutSlot,
-                                    oldFrames: [ObjectIdentifier: NSRect],
-                                    plan: inout ViewportPlan) {
-        // Слои стопки встают полосами сразу, без анимации полной рамкой.
-        guard slot.isFullCard else {
-            place(item, at: slot)
-            return
-        }
-        guard let oldFrame = oldFrames[ObjectIdentifier(item)] else {
-            item.prepareInsertion(at: toLocal(slot.origin),
-                                  from: collectionDirectionalOffset(),
-                                  reduceMotion: plan.reduceMotion)
-            plan.entering.append(item)
-            return
-        }
-        item.prepareReflow(
-            from: oldFrame,
-            to: thumbnailReflowOrigin(candidate: toLocal(slot.origin),
-                                              oldOuterFrame: oldFrame,
-                                              targetOuterSize: outerSize(of: item),
-                                              resizeBand: ThumbStyle.resizeBand,
-                                              vertical: axisIsVertical),
-            reduceMotion: plan.reduceMotion)
-        plan.reflowing.append((item, oldFrame))
-    }
 
-    private func startViewportMotion(_ plan: ViewportPlan, visibleIDs: Set<ObjectIdentifier>) {
-        runCollectionMotion(duration: plan.reduceMotion ? TrayAnim.reducedTransition : TrayAnim.removalAndReflow,
-                            onFrame: { progress in
-            for (item, oldFrame) in plan.reflowing {
-                item.applyReflow(progress: progress, from: oldFrame, reduceMotion: plan.reduceMotion)
-            }
-            for item in plan.entering {
-                item.applyInsertion(progress: progress, reduceMotion: plan.reduceMotion)
-            }
-            for item in plan.outgoing {
-                item.applyRemoval(progress: progress, reduceMotion: plan.reduceMotion)
-            }
-        }, completion: { [weak self] in
-            self?.finishViewportMotion(plan, visibleIDs: visibleIDs)
-        })
-    }
 
-    private func finishViewportMotion(_ plan: ViewportPlan, visibleIDs: Set<ObjectIdentifier>) {
+    private func finishViewportMotion(_ plan: ReflowPlan, visibleIDs: Set<ObjectIdentifier>) {
         for (item, _) in plan.reflowing { item.finishCollectionMotion() }
         for item in plan.entering { item.finishCollectionMotion() }
-        for item in plan.outgoing { item.finishCollectionMotion(hidden: true) }
+        for item in plan.leaving { item.finishCollectionMotion(hidden: true) }
         for item in items where !visibleIDs.contains(ObjectIdentifier(item)) { item.hide() }
     }
 
