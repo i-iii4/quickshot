@@ -126,7 +126,6 @@ final class ThumbnailManager {
     private var pointerInsideHoverIsland = false
     private var capturePresentationSessions: Set<UUID> = []
     private var activeDragPayloads: Set<ObjectIdentifier> = []
-    private var viewportScrollAccumulator: CGFloat = 0
     private var scrollModel = TrayScrollModel(contentLength: 0, viewportLength: 0, offset: 0)
     /// `TR-5`: как разместить ленту после вставки нового снимка. Сжатая стопка
     /// остаётся сжатой и молча получает новый верхний элемент; развёрнутая
@@ -334,15 +333,6 @@ final class ThumbnailManager {
         hoverExitWorkItem = nil
     }
 
-    private func hubHoverChanged(entered: Bool) {
-        guard !items.isEmpty else { return }
-        if entered {
-            cancelHoverExit()
-            beginTrayHoverSession()
-        } else if trayHoverActive {
-            scheduleCollapsedPresentationExit()
-        }
-    }
 
     /// Наведение на ЛЮБУЮ карточку разворачивает нижнюю панель кнопок хаба —
     /// так же, как наведение на саму кнопку (`TR-27`). Состояние ленты роли
