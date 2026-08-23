@@ -130,10 +130,6 @@ pub const Model = struct {
         return if (model.collapsed) "chevron-left" else "chevron-right";
     }
 
-    pub fn thumbnailSurface(model: *const Model) bool {
-        return model.surface == .thumbnail;
-    }
-
     pub fn thumbnailCopySurface(model: *const Model) bool {
         return model.surface == .thumbnail_copy;
     }
@@ -144,18 +140,6 @@ pub const Model = struct {
 
     pub fn casePanelSurface(model: *const Model) bool {
         return model.surface == .case_panel;
-    }
-
-    pub fn hubBubbleSurface(model: *const Model) bool {
-        return model.surface == .hub_bubble;
-    }
-
-    pub fn hubCoreBackgroundSurface(model: *const Model) bool {
-        return model.surface == .hub_core_background;
-    }
-
-    pub fn hubCoreForegroundSurface(model: *const Model) bool {
-        return model.surface == .hub_core_foreground;
     }
 
     pub fn pinnedSurface(model: *const Model) bool {
@@ -238,10 +222,6 @@ pub const Model = struct {
 
 pub const Surface = enum {
     hub,
-    hub_bubble,
-    hub_core_background,
-    hub_core_foreground,
-    thumbnail,
     // Кнопки карточки разнесены по углам (`TR-28`): каждая живёт в своей
     // поверхности, иначе их не поставить в противоположные углы одним рядом.
     thumbnail_copy,
@@ -481,7 +461,7 @@ fn designTokens(model: *const Model) canvas.DesignTokens {
         .contrast = if (model.high_contrast) .high else .standard,
         .reduce_motion = model.reduce_motion,
     });
-    if (model.surface == .hub or model.surface == .hub_bubble or model.surface == .hub_core_background or model.surface == .hub_core_foreground or model.surface == .thumbnail or model.surface == .thumbnail_copy or model.surface == .thumbnail_dismiss or model.surface == .case_panel or model.surface == .pinned) {
+    if (model.surface == .hub or model.surface == .thumbnail_copy or model.surface == .thumbnail_dismiss or model.surface == .case_panel or model.surface == .pinned) {
         tokens.colors.background = canvas.Color.rgba8(0, 0, 0, 0);
     }
     // Кнопки карточки лежат прямо на скриншоте (`TR-28`): их фон обязан быть
@@ -656,10 +636,6 @@ fn onCommand(name: []const u8) ?Msg {
     if (std.mem.startsWith(u8, name, command_surface_prefix)) {
         const raw = name[command_surface_prefix.len..];
         if (std.mem.eql(u8, raw, "hub")) return .{ .set_surface = .hub };
-        if (std.mem.eql(u8, raw, "hub_bubble")) return .{ .set_surface = .hub_bubble };
-        if (std.mem.eql(u8, raw, "hub_core_background")) return .{ .set_surface = .hub_core_background };
-        if (std.mem.eql(u8, raw, "hub_core_foreground")) return .{ .set_surface = .hub_core_foreground };
-        if (std.mem.eql(u8, raw, "thumbnail")) return .{ .set_surface = .thumbnail };
         if (std.mem.eql(u8, raw, "thumbnail_copy")) return .{ .set_surface = .thumbnail_copy };
         if (std.mem.eql(u8, raw, "thumbnail_dismiss")) return .{ .set_surface = .thumbnail_dismiss };
 

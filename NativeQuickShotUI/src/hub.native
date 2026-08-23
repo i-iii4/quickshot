@@ -1,41 +1,4 @@
-<template name="hub-core-fixed">
-  <button width="{core_width}" size="sm" variant="secondary" icon="{chevronIcon}" icon-placement="trailing" label="{coreLabel}" on-press="toggle">{coreText}</button>
-</template>
-
-<template name="hub-core-auto">
-  <button size="sm" variant="secondary" icon="{chevronIcon}" icon-placement="trailing" label="{coreLabel}" on-press="toggle">{coreText}</button>
-</template>
-
-<template name="hub-core-foreground-fixed">
-  <button width="{core_width}" size="sm" variant="ghost" icon="{chevronIcon}" icon-placement="trailing" label="{coreLabel}" on-press="toggle">{coreText}</button>
-</template>
-
-<template name="hub-core-foreground-auto">
-  <button size="sm" variant="ghost" icon="{chevronIcon}" icon-placement="trailing" label="{coreLabel}" on-press="toggle">{coreText}</button>
-</template>
-
 <row gap="8" cross="center" padding="0" label="QuickShot controls">
-  <if test="{hubCoreForegroundSurface}">
-    <row padding="6" label="QuickShot core foreground">
-      <if test="{coreWidthSet}">
-        <use template="hub-core-foreground-fixed" />
-      </if>
-      <else>
-        <use template="hub-core-foreground-auto" />
-      </else>
-    </row>
-  </if>
-  <else>
-    <if test="{hubCoreBackgroundSurface}">
-      <row padding="6" label="QuickShot core surface">
-        <button width="{core_width}" size="sm" variant="secondary" label="{coreLabel}" on-press="toggle"></button>
-      </row>
-    </if>
-    <else>
-      <if test="{hubBubbleSurface}">
-        <panel width="{bubbleWidth}" height="40" background="surface" radius="xl" label="QuickShot hub bubble"></panel>
-      </if>
-      <else>
         <if test="{thumbnailCopySurface}">
           <row label="Copy screenshot action">
             <if test="{compact}">
@@ -192,46 +155,9 @@
               <if test="{pinnedSurface}">
                 <button size="sm" variant="secondary" icon="{copyIcon}" label="{copyLabel}" on-press="copy">{copyText}</button>
               </if>
-              <else>
-                <row gap="8" cross="center" padding="6" label="QuickShot hub commands">
-                  <if test="{actions_after}">
-                    <if test="{coreWidthSet}">
-                      <use template="hub-core-fixed" />
-                    </if>
-                    <else>
-                      <use template="hub-core-auto" />
-                    </else>
-                    <if test="{expanded}">
-                      <row gap="8" cross="center" label="Screenshot actions">
-                        <button size="sm" variant="destructive" icon="x" label="Close" on-press="delete"></button>
-                        <button size="sm" variant="secondary" icon="download" label="Save As" on-press="save_as"></button>
-                        <button size="sm" variant="secondary" icon="copy" label="Copy All" on-press="copy_all"></button>
-                      </row>
-                    </if>
-                  </if>
-                  <else>
-                    <if test="{expanded}">
-                      <row gap="8" cross="center" label="Screenshot actions">
-                        <button size="sm" variant="destructive" icon="x" label="Close" on-press="delete"></button>
-                        <button size="sm" variant="secondary" icon="download" label="Save As" on-press="save_as"></button>
-                        <button size="sm" variant="secondary" icon="copy" label="Copy All" on-press="copy_all"></button>
-                      </row>
-                    </if>
-                    <if test="{coreWidthSet}">
-                      <use template="hub-core-fixed" />
-                    </if>
-                    <else>
-                      <use template="hub-core-auto" />
-                    </else>
-                  </else>
-                </row>
-              </else>
-            </else>
-        </else>
-      </else>
-    </else>
   </else>
-        </else>
-        </else>
-          </else>
+  </else>
+  </else>
+  </else>
+  </else>
 </row>

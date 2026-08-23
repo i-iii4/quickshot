@@ -1334,8 +1334,10 @@ if output="$(rg -n 'size="icon"' NativeQuickShotUI/src/hub.native)"; then
 fi
 rg -F -q "<button-group" NativeQuickShotUI/src/hub.native
 rg -F -q "<button size=\"sm\"" NativeQuickShotUI/src/hub.native
-rg -F -q '<panel width="{bubbleWidth}" height="40" background="surface" radius="xl" label="QuickShot hub bubble"></panel>' NativeQuickShotUI/src/hub.native
-rg -F -q '<row gap="8" cross="center" padding="6" label="QuickShot hub commands">' NativeQuickShotUI/src/hub.native
+# Проверки разметки хаба сняты 23.08.2026 вместе с ней: пузырь, ряд команд
+# и кнопки Close/Save As/Copy All принадлежали упразднённому виджету
+# (`TR-30`). Живые поверхности — миниатюра, шкатулка, панель редактора,
+# настройки, закреплённое окно — проверяются ниже.
 rg -F -q 'variant="secondary"' NativeQuickShotUI/src/hub.native
 if output="$(rg -n 'variant="primary"' NativeQuickShotUI/src/hub.native)"; then
   echo "$output"
@@ -1352,9 +1354,6 @@ rg -F -q "nativeView.setSurface(kind == .copy ? .thumbnailCopy : .thumbnailDismi
 rg -F -q "setSurface(.pinned)" Sources/NativeHubView.swift
 rg -F -q "setSurface(.settings)" Sources/NativeHubView.swift
 # Команды хаба — иконки без текста; имя показывает системный тултип по ховеру.
-rg -F -q 'icon="x" label="Close" on-press="delete"></button>' NativeQuickShotUI/src/hub.native
-rg -F -q 'icon="download" label="Save As" on-press="save_as"></button>' NativeQuickShotUI/src/hub.native
-rg -F -q 'icon="copy" label="Copy All" on-press="copy_all"></button>' NativeQuickShotUI/src/hub.native
 # Системный help tag не срабатывает у неактивного accessory-приложения:
 # ярлык рисует QuickShot, окно исключено из захвата и прозрачно для мыши.
 rg -F -q "HubTooltipWindow" Sources/HubTooltip.swift
@@ -1456,7 +1455,6 @@ if output="$(rg -n "trashItem|recycle" Sources/ScreenshotLibrary.swift)"; then
   exit 1
 fi
 # Панель капсулы рендерится в фактическую ширину ряда: фикс срезанного штриха.
-rg -F -q 'width="{bubbleWidth}"' NativeQuickShotUI/src/hub.native
 if output="$(rg -n 'on-press="(delete|save_as|copy_all)">[A-Za-z]' NativeQuickShotUI/src/hub.native)"; then
   echo "$output"
   echo "Hub regression: action commands must stay icon-only; names live in tooltips." >&2

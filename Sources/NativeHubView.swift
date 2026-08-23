@@ -36,19 +36,6 @@ struct NativeHubSpringSample {
     let velocity: CGFloat
 }
 
-func nativeHubSpringStep(value: CGFloat,
-                         velocity: CGFloat,
-                         target: CGFloat,
-                         angularFrequency: CGFloat,
-                         deltaTime: CGFloat) -> NativeHubSpringSample {
-    let displacement = value - target
-    let c2 = velocity + angularFrequency * displacement
-    let decay = exp(-angularFrequency * deltaTime)
-    let nextDisplacement = (displacement + c2 * deltaTime) * decay
-    let nextVelocity = (c2 - angularFrequency * (displacement + c2 * deltaTime)) * decay
-    return NativeHubSpringSample(value: target + nextDisplacement,
-                                 velocity: nextVelocity)
-}
 
 /// A finite, critically damped reveal. Retargeting keeps the presentation
 /// velocity, while the House fast token remains a hard perceptual deadline.
@@ -106,10 +93,6 @@ private enum NativeHubPressedButton: Int32 {
 
 private enum NativeControlSurface: String {
     case hub
-    case hubBubble = "hub_bubble"
-    case hubCoreBackground = "hub_core_background"
-    case hubCoreForeground = "hub_core_foreground"
-    case thumbnail
     case thumbnailCopy = "thumbnail_copy"
     case thumbnailDismiss = "thumbnail_dismiss"
     case casePanel = "case_panel"
@@ -210,13 +193,6 @@ private final class NativeHubRenderView: NSView {
     private(set) var renderPassCount = 0
     private(set) var totalRenderDuration: CFTimeInterval = 0
     private var count = -1
-    private var collapsed = false
-    private var vertical = true
-    private var expanded = false
-    private var coreRevealed = false
-    private var coreWidth: CGFloat?
-    private var bubbleWidth: CGFloat?
-    private var actionsAfter = false
     private var surface: NativeControlSurface = .hub
     private var compact = false
     private var copied = false
@@ -289,53 +265,8 @@ private final class NativeHubRenderView: NSView {
         trackingArea = area
     }
 
-    func setState(count: Int,
-                  collapsed: Bool,
-                  vertical: Bool,
-                  expanded: Bool,
-                  coreRevealed: Bool,
-                  actionsAfter: Bool) {
-        setSurface(.hub)
-        if self.count != count {
-            self.count = count
-            sendCommand("hub.count:\(max(0, count))")
-        }
-        if self.collapsed != collapsed {
-            self.collapsed = collapsed
-            sendCommand("hub.collapsed:\(collapsed ? 1 : 0)")
-        }
-        if self.vertical != vertical {
-            self.vertical = vertical
-            sendCommand("hub.vertical:\(vertical ? 1 : 0)")
-        }
-        if self.expanded != expanded {
-            self.expanded = expanded
-            sendCommand("hub.expanded:\(expanded ? 1 : 0)")
-        }
-        if self.coreRevealed != coreRevealed {
-            self.coreRevealed = coreRevealed
-            sendCommand("hub.core_revealed:\(coreRevealed ? 1 : 0)")
-        }
-        if self.actionsAfter != actionsAfter {
-            self.actionsAfter = actionsAfter
-            sendCommand("hub.actions_after:\(actionsAfter ? 1 : 0)")
-        }
-    }
 
-    func setCoreWidth(_ width: CGFloat?) {
-        let normalized = width.flatMap { $0 > 0 ? $0 : nil }
-        guard coreWidth != normalized else { return }
-        coreWidth = normalized
-        sendCommand("hub.core_width:\(normalized ?? 0)")
-    }
 
-    /// Панель капсулы обязана совпадать по ширине с кадром рендера: всё, что
-    /// шире кадра, срезается вместе с правым штрихом обводки.
-    func setBubbleWidth(_ width: CGFloat) {
-        guard width > 0, bubbleWidth != width else { return }
-        bubbleWidth = width
-        sendCommand("hub.bubble_width:\(width)")
-    }
 
     func setSurface(_ surface: NativeControlSurface) {
         guard self.surface != surface else { return }
@@ -454,23 +385,7 @@ private final class NativeHubRenderView: NSView {
         onRendered?()
     }
 
-    func currentRenderedImage() -> CGImage? {
-        renderNow()
-        return retainedCGImage
-    }
 
-    func renderedCrop(in rect: NSRect) -> CGImage? {
-        renderNow()
-        guard let image = retainedCGImage else { return nil }
-        let scale = CGFloat(image.width) / max(1, bounds.width)
-        let pixelRect = CGRect(x: rect.minX * scale,
-                               y: rect.minY * scale,
-                               width: rect.width * scale,
-                               height: rect.height * scale).integral
-            .intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        guard pixelRect.width > 0, pixelRect.height > 0 else { return nil }
-        return image.cropping(to: pixelRect)
-    }
 
     /// Счётчик снимков для панели шкатулки (`TR-30`).
     func setCount(_ count: Int) {
@@ -617,11 +532,6 @@ private final class NativeHubRenderView: NSView {
         hoverClearWorkItem = nil
     }
 
-    /// Немедленно отпустить подсветку: трей скрывается или выходит из hover.
-    func clearPointerHover() {
-        cancelHoverClear()
-        clearHoverNow()
-    }
 
     private func clearHoverNow() {
         guard hoveredNodeID != nil else { return }
@@ -684,12 +594,6 @@ private final class NativeHubRenderView: NSView {
         invalidateRender()
     }
 
-    /// Внешняя подача позиции указателя (мониторы трея). Тот же путь, что и
-    /// у событий tracking area, поэтому повторные вызовы с той же целью дёшевы.
-    func syncPointer(at point: NSPoint) {
-        guard acceptsPointerInteraction else { return }
-        forwardPointerMove(point)
-    }
 
     private func forwardPointerMove(_ point: NSPoint) {
         guard let target = button(at: point) else {
@@ -713,10 +617,6 @@ private final class NativeHubRenderView: NSView {
         onInteractionChanged?(channel, action)
     }
 
-    func mirrorInteraction(_ channel: NativeInteractionChannel, action: NativeHubPressedButton) {
-        sendInteraction(channel, action: action)
-        renderNow()
-    }
 
     private func actionForButton(identifier: String, title: String) -> NativeHubPressedButton {
         switch identifier {
@@ -809,31 +709,6 @@ private final class NativeHubRenderView: NSView {
         surfacePixel(at: point)
     }
 
-    func debugInkPixelCount(in rect: NSRect) -> Int {
-        renderNow()
-        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
-        let width = Int((bounds.width * scale).rounded())
-        let height = Int((bounds.height * scale).rounded())
-        guard width > 0, height > 0 else { return 0 }
-        let pixelRect = CGRect(x: rect.minX * scale,
-                               y: rect.minY * scale,
-                               width: rect.width * scale,
-                               height: rect.height * scale).integral
-            .intersection(CGRect(x: 0, y: 0, width: width, height: height))
-        guard !pixelRect.isNull, pixelRect.width > 0, pixelRect.height > 0 else { return 0 }
-        var count = 0
-        for y in Int(pixelRect.minY)..<Int(pixelRect.maxY) {
-            for x in Int(pixelRect.minX)..<Int(pixelRect.maxX) {
-                let index = (y * width + x) * 4
-                guard index + 3 < rgbaBytes.count else { continue }
-                let luminance = max(rgbaBytes[index], rgbaBytes[index + 1], rgbaBytes[index + 2])
-                if rgbaBytes[index + 3] > 0, luminance > 96 {
-                    count += 1
-                }
-            }
-        }
-        return count
-    }
 #endif
 
     private func logNativeError(_ stage: String) {
