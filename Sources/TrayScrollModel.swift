@@ -222,7 +222,6 @@ enum TrayStripLayout {
                       deckProgress: CGFloat = 0) -> [TrayCardBand] {
         guard !cardLengths.isEmpty else { return [] }
         let count = cardLengths.count
-        let e = edgeLength
         let farPark = max(parkLevel + 1, viewportLength - parkLevel)
 
         // Лента размечена от яруса парковки: при нулевом смещении первая
@@ -296,13 +295,38 @@ enum TrayStripLayout {
         // Срез нужен только торчащему НАД верхом вышележащего слоя куску:
         // линия среза прячется за его прямым верхним краем, потому что
         // перспектива делает нижнюю карточку уже сильнее радиуса углов.
+        fillNearStack(into: &bands, cardLengths: cardLengths, raws: raws, tops: top,
+                      nearCount: nearCount, count: count, phase: nearPhase,
+                      park: park, tierCollapse: tierCollapse)
+        fillFarStack(into: &bands, cardLengths: cardLengths, raws: raws,
+                     farStart: farStart, count: count, phase: farPhase,
+                     farPark: farPark, viewportLength: viewportLength)
+        return bands
+    }
+
+    /// Ближняя стопка: низы на ярусах 14/7/0 минус осадка. Карточка рисуется
+    /// ЦЕЛОЙ и уходит под вышележащий слой — перекрытие делает видимой
+    /// полоску-кромку само, включая скруглённые углы соседки. Срез нужен
+    /// только торчащему НАД верхом вышележащего слоя куску: линия среза
+    /// прячется за его прямым верхним краем, потому что перспектива делает
+    /// нижнюю карточку уже сильнее радиуса углов.
+    private static func fillNearStack(into bands: inout [TrayCardBand],
+                                      cardLengths: [CGFloat],
+                                      raws: [CGFloat],
+                                      tops: (Int) -> CGFloat,
+                                      nearCount: Int,
+                                      count: Int,
+                                      phase: CGFloat,
+                                      park: CGFloat,
+                                      tierCollapse: CGFloat) {
+        let e = edgeLength
         var coverTop: CGFloat = .greatestFiniteMagnitude
         if nearCount < count {
-            coverTop = top(nearCount)      // верх прибывающей: над ним не торчать
+            coverTop = tops(nearCount)      // верх прибывающей: над ним не торчать
         }
         for index in stride(from: nearCount - 1, through: 0, by: -1) {
             let depth = nearCount - 1 - index
-            let liveDepth = CGFloat(depth) + nearPhase
+            let liveDepth = CGFloat(depth) + phase
             let scale = depthScale(liveDepth)
             // Нижний ярус упирается в базу и НЕ уезжает за неё: карточка
             // растворяется на месте. Уход за виртуальную линию срезал её низ
@@ -310,7 +334,7 @@ enum TrayStripLayout {
             // Схлопывание: расстояния между слоями сходятся к нулю, вся
             // стопка едет вниз вместе — на ту же величину, что и основание
             // ленты выше.
-            let bottom = max(0, (park - e * CGFloat(depth) - e * nearPhase) * tierCollapse)
+            let bottom = max(0, (park - e * CGFloat(depth) - e * phase) * tierCollapse)
             let cardTop = bottom + cardLengths[index] * scale
             let visibleFrom = bottom
             let visibleTo = min(cardTop, coverTop)
@@ -320,27 +344,37 @@ enum TrayStripLayout {
                                       visibleTo: visibleTo,
                                       cardStart: bottom,
                                       depth: depth,
-                                      fade: depth == 2 ? nearPhase : 0,
+                                      fade: depth == 2 ? phase : 0,
                                       sliceFromFarSide: false,
                                       roundsStart: visibleFrom <= bottom + 0.001,
                                       roundsEnd: visibleTo >= cardTop - 0.001)
             coverTop = min(coverTop, visibleTo)
         }
+    }
 
-        // Дальняя стопка — зеркало: верхи на ярусах, карточка целая, из-под
-        // накрывшей её снизу соседки торчит верхняя кромка; срезается только
-        // свисающий НИЖЕ низа соседки кусок, клип краем окна — сверху.
+    /// Дальняя стопка — зеркало ближней: верхи на ярусах, карточка целая, из-под
+    /// накрывшей её снизу соседки торчит верхняя кромка; срезается только
+    /// свисающий НИЖЕ низа соседки кусок, клип краем окна — сверху.
+    private static func fillFarStack(into bands: inout [TrayCardBand],
+                                     cardLengths: [CGFloat],
+                                     raws: [CGFloat],
+                                     farStart: Int,
+                                     count: Int,
+                                     phase: CGFloat,
+                                     farPark: CGFloat,
+                                     viewportLength: CGFloat) {
+        let e = edgeLength
         var coverBottom: CGFloat = -.greatestFiniteMagnitude
         if farStart > 0 {
             coverBottom = raws[farStart - 1]   // низ прибывающей
         }
         for index in farStart..<count {
             let depth = index - farStart
-            let liveDepth = CGFloat(depth) + farPhase
+            let liveDepth = CGFloat(depth) + phase
             let scale = depthScale(liveDepth)
             // Верхний ярус упирается в край окна и НЕ выезжает за него:
             // кромка тает на месте, её верх — всегда настоящий край.
-            let topEdge = min(viewportLength, farPark + e * CGFloat(depth) + e * farPhase)
+            let topEdge = min(viewportLength, farPark + e * CGFloat(depth) + e * phase)
             let cardBottom = topEdge - cardLengths[index] * scale
             let visibleFrom = max(cardBottom, coverBottom)
             let visibleTo = topEdge
@@ -350,14 +384,12 @@ enum TrayStripLayout {
                                       visibleTo: visibleTo,
                                       cardStart: cardBottom,
                                       depth: depth,
-                                      fade: depth == 2 ? farPhase : 0,
+                                      fade: depth == 2 ? phase : 0,
                                       sliceFromFarSide: true,
                                       roundsStart: visibleFrom <= cardBottom + 0.001,
                                       roundsEnd: visibleTo >= topEdge - 0.001)
             coverBottom = max(coverBottom, visibleFrom)
         }
-
-        return bands
     }
 
     /// Полоса запаркованной карточки: целая карточка в масштабе глубины минус
