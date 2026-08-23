@@ -162,7 +162,6 @@ xcrun swiftc \
   -D TESTING \
   -framework AppKit \
   -framework CoreGraphics \
-  Tests/HubWindowTestSupport.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
   Sources/TrayHoverRegion.swift \
@@ -172,33 +171,6 @@ xcrun swiftc \
   Sources/NativeHubView.swift \
   Sources/HubTooltip.swift \
   Sources/WindowCaptureProtection.swift \
-  Sources/HubWindow.swift \
-  Tests/HubWindowBehaviorTests.swift \
-  "$NATIVE_UI_LIB" \
-  -o "$OUT"
-
-"$OUT"
-
-xcrun swiftc \
-  -sdk "$SDK" \
-  -target "${ARCH}-apple-macos${DEPLOY}" \
-  -swift-version 6 \
-  -strict-concurrency=complete \
-  -warnings-as-errors \
-  -D TESTING \
-  -framework AppKit \
-  -framework CoreGraphics \
-  Tests/HubWindowTestSupport.swift \
-  Sources/MotionCurves.swift \
-  Sources/NativeSDKBridge.swift \
-  Sources/TrayHoverRegion.swift \
-  Sources/AnnotationDocument.swift \
-  Sources/AnnotationToolModel.swift \
-  Sources/AnnotationToolbar.swift \
-  Sources/NativeHubView.swift \
-  Sources/HubTooltip.swift \
-  Sources/WindowCaptureProtection.swift \
-  Sources/HubWindow.swift \
   Tests/NativeSurfaceBehaviorTests.swift \
   "$NATIVE_UI_LIB" \
   -o "$SURFACE_OUT"
@@ -390,7 +362,6 @@ xcrun swiftc \
   -framework CoreGraphics \
   -framework ImageIO \
   -framework IOKit \
-  Tests/HubWindowTestSupport.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
   Sources/TrayHoverRegion.swift \
@@ -405,7 +376,6 @@ xcrun swiftc \
   Sources/NativeHubView.swift \
   Sources/HubTooltip.swift \
   Sources/WindowCaptureProtection.swift \
-  Sources/HubWindow.swift \
   Sources/AnnotationCanvasView.swift \
   Tests/EditorToolbarLiveTests.swift \
   "$NATIVE_UI_LIB" \
@@ -424,7 +394,6 @@ xcrun swiftc \
   -framework CoreGraphics \
   -framework ImageIO \
   -framework IOKit \
-  Tests/HubWindowTestSupport.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
   Sources/TrayHoverRegion.swift \
@@ -439,7 +408,6 @@ xcrun swiftc \
   Sources/NativeHubView.swift \
   Sources/HubTooltip.swift \
   Sources/WindowCaptureProtection.swift \
-  Sources/HubWindow.swift \
   Sources/AnnotationCanvasView.swift \
   Tests/EditorTransformTests.swift \
   "$NATIVE_UI_LIB" \
@@ -458,7 +426,6 @@ xcrun swiftc \
   -framework CoreGraphics \
   -framework ImageIO \
   -framework IOKit \
-  Tests/HubWindowTestSupport.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
   Sources/TrayHoverRegion.swift \
@@ -473,7 +440,6 @@ xcrun swiftc \
   Sources/NativeHubView.swift \
   Sources/HubTooltip.swift \
   Sources/WindowCaptureProtection.swift \
-  Sources/HubWindow.swift \
   Sources/AnnotationCanvasView.swift \
   Tests/EditorDrawingTests.swift \
   "$NATIVE_UI_LIB" \
@@ -492,7 +458,6 @@ xcrun swiftc \
   -framework CoreGraphics \
   -framework ImageIO \
   -framework IOKit \
-  Tests/HubWindowTestSupport.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
   Sources/TrayHoverRegion.swift \
@@ -507,7 +472,6 @@ xcrun swiftc \
   Sources/NativeHubView.swift \
   Sources/HubTooltip.swift \
   Sources/WindowCaptureProtection.swift \
-  Sources/HubWindow.swift \
   Sources/AnnotationCanvasView.swift \
   Tests/EditorHistoryTests.swift \
   "$NATIVE_UI_LIB" \
@@ -526,7 +490,6 @@ xcrun swiftc \
   -framework CoreGraphics \
   -framework ImageIO \
   -framework IOKit \
-  Tests/HubWindowTestSupport.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
   Sources/TrayHoverRegion.swift \
@@ -541,7 +504,6 @@ xcrun swiftc \
   Sources/NativeHubView.swift \
   Sources/HubTooltip.swift \
   Sources/WindowCaptureProtection.swift \
-  Sources/HubWindow.swift \
   Sources/AnnotationCanvasView.swift \
   Tests/EndToEndScenarioTests.swift \
   "$NATIVE_UI_LIB" \
@@ -561,7 +523,6 @@ xcrun swiftc \
   -framework ImageIO \
   -framework IOKit \
   -framework Vision \
-  Tests/HubWindowTestSupport.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
   Sources/TrayHoverRegion.swift \
@@ -583,7 +544,6 @@ xcrun swiftc \
   Sources/NativeHubView.swift \
   Sources/HubTooltip.swift \
   Sources/WindowCaptureProtection.swift \
-  Sources/HubWindow.swift \
   Sources/AnnotationCanvasView.swift \
   Sources/AnnotationEditor.swift \
   Tests/EditorSessionTests.swift \
@@ -642,7 +602,6 @@ xcrun swiftc \
   Sources/CoordinateMath.swift \
   Sources/CardSizing.swift \
   Sources/TrayHostContentView.swift \
-  Sources/HubWindow.swift \
   Sources/PinnedWindow.swift \
   Sources/ThumbnailMotion.swift \
   Sources/ThumbnailWindow.swift \
@@ -723,7 +682,6 @@ xcrun swiftc \
   -framework ImageIO \
   -framework IOKit \
   -framework Vision \
-  Tests/HubWindowTestSupport.swift \
   Sources/MotionCurves.swift \
   Sources/NativeSDKBridge.swift \
   Sources/TrayHoverRegion.swift \
@@ -749,7 +707,6 @@ xcrun swiftc \
   Sources/NativeHubView.swift \
   Sources/HubTooltip.swift \
   Sources/WindowCaptureProtection.swift \
-  Sources/HubWindow.swift \
   Sources/AnnotationCanvasView.swift \
   Sources/AnnotationEditor.swift \
   Tests/RemainingRequirementsTests.swift \
@@ -831,7 +788,6 @@ xcrun swiftc \
   Sources/CoordinateMath.swift \
   Sources/CardSizing.swift \
   Sources/TrayHostContentView.swift \
-  Sources/HubWindow.swift \
   Sources/PinnedWindow.swift \
   Sources/ThumbnailMotion.swift \
   Sources/ThumbnailWindow.swift \
@@ -884,8 +840,6 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/NativeHubView.swift \
   Sources/HubTooltip.swift \
   Sources/WindowCaptureProtection.swift \
-  Tests/HubWindowLiveClickTests.swift \
-  Sources/HubWindow.swift \
   "$NATIVE_UI_LIB" \
     -o "$HUB_LIVE_OUT"
 
@@ -917,7 +871,6 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
 	  Sources/CoordinateMath.swift \
   Sources/CardSizing.swift \
   Sources/TrayHostContentView.swift \
-  Sources/HubWindow.swift \
   Sources/PinnedWindow.swift \
   Sources/ThumbnailMotion.swift \
   Sources/ThumbnailWindow.swift \
@@ -972,8 +925,6 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/NativeHubView.swift \
   Sources/HubTooltip.swift \
   Sources/WindowCaptureProtection.swift \
-  Tests/HubWindowLiveClickTests.swift \
-  Sources/HubWindow.swift \
   "$NATIVE_UI_LIB" \
     -o "$HUB_LIVE_OUT"
 
@@ -1005,7 +956,6 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
 	  Sources/CoordinateMath.swift \
   Sources/CardSizing.swift \
   Sources/TrayHostContentView.swift \
-  Sources/HubWindow.swift \
   Sources/PinnedWindow.swift \
   Sources/ThumbnailMotion.swift \
   Sources/ThumbnailWindow.swift \
@@ -1248,8 +1198,9 @@ rg -F -q "thumbnailAxisLockedOrigin" Sources/ThumbnailManager.swift
 # недостижима (новейшая карточка всегда видима, `TR-4a`). Записано в
 # PLAN.md, WP10.
 rg -U -q 'inserted\.hide\(\)\n\s*return' Sources/ThumbnailManager.swift
-rg -F -q "class NativeOdometerView" Sources/NativeHubView.swift
-rg -F -q "odometerView.debugClips" Sources/NativeHubView.swift
+# Проверки одометра, ярлыка, ховер-мониторинга и пузыря хаба сняты
+# 23.08.2026 вместе с самим хабом: он упразднён `TR-30`, оболочка
+# `NativeHubShellView` и окно `HubWindow` удалены как мёртвый код.
 if output="$(rg -n "outgoingCountView|compactCountClipView|outgoingCountMaskLayer" Sources/NativeHubView.swift)"; then
   echo "$output"
   echo "Odometer regression: full Native button renders must not return as rolling layers." >&2
@@ -1339,12 +1290,12 @@ if output="$(rg -n "ScreenFrameCache|CachedFrame|validatedAt|preparedFrozenScree
   echo "Capture architecture regression: old stale-cache vocabulary must not remain in active contracts or code." >&2
   exit 1
 fi
-if output="$(rg -n "GlassButton|DesignSystemButton|DesignSystemButtonGroup" Sources/ThumbnailWindow.swift Sources/PinnedWindow.swift Sources/HubWindow.swift)"; then
+if output="$(rg -n "GlassButton|DesignSystemButton|DesignSystemButtonGroup" Sources/ThumbnailWindow.swift Sources/PinnedWindow.swift)"; then
   echo "$output"
   echo "Native controls regression: floating controls must use Native SDK controls, not AppKit button replicas." >&2
   exit 1
 fi
-if output="$(rg -n "NSImage\\(systemSymbolName|GlassButton|bezelStyle = \\.glass" Sources/HubWindow.swift Sources/ThumbnailWindow.swift Sources/PinnedWindow.swift)"; then
+if output="$(rg -n "NSImage\\(systemSymbolName|GlassButton|bezelStyle = \\.glass" Sources/ThumbnailWindow.swift Sources/PinnedWindow.swift)"; then
   echo "$output"
   echo "Design-system regression: floating controls must use Native SDK-rendered icons and buttons." >&2
   exit 1
@@ -1359,7 +1310,6 @@ if output="$(rg -n "NSSegmentedControl|NSButton\\b|DesignSystemButton|DesignSyst
   echo "Status item regression: the menu bar entry uses a system NSMenu; custom control replicas are prohibited." >&2
   exit 1
 fi
-rg -F -q "NativeHubShellView(frame: .zero)" Sources/HubWindow.swift
 rg -F -q "NativePinnedCopyButtonView(frame: .zero)" Sources/PinnedWindow.swift
 rg -F -q "NativeSettingsContentView(frame:" Sources/SettingsWindow.swift
 # Меню строки меню — системное NSMenu, а не собственная поверхность:
@@ -1401,9 +1351,6 @@ rg -F -q "command_surface_prefix = \"surface:\"" NativeQuickShotUI/src/main.zig
 rg -F -q "nativeView.setSurface(kind == .copy ? .thumbnailCopy : .thumbnailDismiss)" Sources/NativeHubView.swift
 rg -F -q "setSurface(.pinned)" Sources/NativeHubView.swift
 rg -F -q "setSurface(.settings)" Sources/NativeHubView.swift
-rg -F -q "targetProgress" Sources/NativeHubView.swift
-rg -F -q "addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged])" Sources/NativeHubView.swift
-rg -F -q "stopHoverMonitoring()" Sources/NativeHubView.swift
 # Команды хаба — иконки без текста; имя показывает системный тултип по ховеру.
 rg -F -q 'icon="x" label="Close" on-press="delete"></button>' NativeQuickShotUI/src/hub.native
 rg -F -q 'icon="download" label="Save As" on-press="save_as"></button>' NativeQuickShotUI/src/hub.native
@@ -1413,7 +1360,6 @@ rg -F -q 'icon="copy" label="Copy All" on-press="copy_all"></button>' NativeQuic
 rg -F -q "HubTooltipWindow" Sources/HubTooltip.swift
 rg -F -q "WindowCaptureProtection.excludeFromScreenCapture(panel)" Sources/HubTooltip.swift
 rg -F -q "panel.ignoresMouseEvents = true" Sources/HubTooltip.swift
-rg -F -q "handleTooltipInteraction" Sources/NativeHubView.swift
 # Холодная задержка — именованный токен, тёплое перенацеливание мгновенно,
 # семантика кнопок на пути каждого движения мыши кэшируется.
 rg -F -q "TrayHover.tooltipDelay" Sources/NativeHubView.swift
@@ -1511,7 +1457,6 @@ if output="$(rg -n "trashItem|recycle" Sources/ScreenshotLibrary.swift)"; then
 fi
 # Панель капсулы рендерится в фактическую ширину ряда: фикс срезанного штриха.
 rg -F -q 'width="{bubbleWidth}"' NativeQuickShotUI/src/hub.native
-rg -F -q "setBubbleWidth(width)" Sources/NativeHubView.swift
 if output="$(rg -n 'on-press="(delete|save_as|copy_all)">[A-Za-z]' NativeQuickShotUI/src/hub.native)"; then
   echo "$output"
   echo "Hub regression: action commands must stay icon-only; names live in tooltips." >&2

@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
-"""Метрики методов Swift-файла: строк кода и ветвлений.
+"""Метрики методов Swift-файла: строк кода, ветвлений, вложенности.
 
-Строки кода — без пустых и без строк-комментариев. Ветвления — `if`, `guard`,
-`else`, `while`, `for`, `case` внутри `switch`. Нужен как приёмка разбора:
-монолит, переехавший в приватный метод, виден здесь так же, как и в исходном.
+Строки кода — без пустых и без строк-комментариев.
+
+Ветвления — `if`, `guard`, `while`, `for`. `case` СЧИТАЕТСЯ ОТДЕЛЬНО: плоская
+таблица `switch` из полусотни строк-соответствий читается лучше именно как
+таблица, и резать её на части — портить код ради числа.
+
+Вложенность — максимальная глубина блоков внутри тела. Она и есть мера
+запутанности: тридцать строк с глубиной 5 тяжелее ста линейных.
+
+Нужен как приёмка разбора: монолит, переехавший в приватный метод, виден
+здесь так же, как и в исходном.
 """
 import re
 import sys
 
 DECL = re.compile(r'^(\s*)(?:@\w+\s+)*(?:public |private |internal |fileprivate |static |mutating |final )*func\s+(\w+)')
-BRANCH = re.compile(r'(?:^|\s)(if|guard|else|while|for|case)(?:\s|\()')
+BRANCH = re.compile(r'(?:^|\s)(if|guard|else|while|for)(?:\s|\()')
+CASE = re.compile(r'^\s*case\s')
 
 
 def metrics(path):
@@ -30,10 +39,11 @@ def metrics(path):
                 break
             head += 1
         if head >= len(lines) or '{' not in lines[head]:
-            rows.append((name, 0, 0))
+            rows.append((name, 0, 0, 0, 0))
             i += 1
             continue
-        code = branches = 0
+        code = branches = cases = 0
+        depth_max = 0
         j = head + 1
         depth = lines[head].count('{') - lines[head].count('}')
         while j < len(lines) and depth > 0:
@@ -47,22 +57,26 @@ def metrics(path):
                 if 'guard' in found and 'else' in found:
                     found.remove('else')
                 branches += len(found)
+                if CASE.match(line):
+                    cases += 1
             depth += line.count('{') - line.count('}')
+            depth_max = max(depth_max, depth)
             j += 1
-        rows.append((name, code, branches))
+        rows.append((name, code, branches, cases, depth_max))
         i = j
     return rows
 
 
 def main():
     path = sys.argv[1] if len(sys.argv) > 1 else 'Sources/TrayGestureCore.swift'
-    rows = sorted(metrics(path), key=lambda r: (-r[1], -r[2]))
-    print(f"{'метод':<34}{'строк':>7}{'ветвлений':>12}")
-    print('-' * 53)
-    for name, code, branches in rows:
-        print(f"{name:<34}{code:>7}{branches:>12}")
-    print('-' * 53)
-    print(f"{'максимум':<34}{max(r[1] for r in rows):>7}{max(r[2] for r in rows):>12}")
+    rows = sorted(metrics(path), key=lambda r: (-r[4], -r[2], -r[1]))
+    print(f"{'метод':<32}{'строк':>7}{'ветвл':>7}{'case':>6}{'вложенность':>13}")
+    print('-' * 65)
+    for name, code, branches, cases, depth in rows:
+        print(f"{name:<32}{code:>7}{branches:>7}{cases:>6}{depth:>13}")
+    print('-' * 65)
+    print(f"{'максимум':<32}{max(r[1] for r in rows):>7}{max(r[2] for r in rows):>7}"
+          f"{max(r[3] for r in rows):>6}{max(r[4] for r in rows):>13}")
 
 
 if __name__ == '__main__':

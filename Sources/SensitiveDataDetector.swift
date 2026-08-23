@@ -92,22 +92,7 @@ enum SensitiveDataDetector {
         await withCheckedContinuation { continuation in
             let request = VNRecognizeTextRequest { request, _ in
                 let observations = request.results as? [VNRecognizedTextObservation] ?? []
-                var matches: [SensitiveMatch] = []
-                for observation in observations {
-                    guard let candidate = observation.topCandidates(1).first else { continue }
-                    let text = candidate.string
-                    for (kind, range) in SensitivePatterns.matches(in: text) {
-                        // Прямоугольник именно найденного фрагмента, а не всей
-                        // строки: закрывать строку целиком значит прятать
-                        // лишнее.
-                        let box = (try? candidate.boundingBox(for: range))?.boundingBox
-                            ?? observation.boundingBox
-                        matches.append(SensitiveMatch(kind: kind,
-                                                      text: String(text[range]),
-                                                      normalizedRect: box))
-                    }
-                }
-                continuation.resume(returning: matches)
+                continuation.resume(returning: sensitiveMatches(in: observations))
             }
             request.recognitionLevel = .accurate
             request.usesLanguageCorrection = false
@@ -117,6 +102,28 @@ enum SensitiveDataDetector {
             } catch {
                 continuation.resume(returning: [])
             }
+        }
+    }
+
+    /// Совпадения по всем распознанным строкам.
+    private static func sensitiveMatches(in observations: [VNRecognizedTextObservation]) -> [SensitiveMatch] {
+        observations.flatMap { observation -> [SensitiveMatch] in
+            guard let candidate = observation.topCandidates(1).first else { return [] }
+            return sensitiveMatches(in: candidate, fallbackBox: observation.boundingBox)
+        }
+    }
+
+    /// Совпадения в одной строке. Прямоугольник берётся именно у найденного
+    /// фрагмента, а не у всей строки: закрывать строку целиком значит прятать
+    /// лишнее.
+    private static func sensitiveMatches(in candidate: VNRecognizedText,
+                                         fallbackBox: CGRect) -> [SensitiveMatch] {
+        let text = candidate.string
+        return SensitivePatterns.matches(in: text).map { kind, range in
+            let box = (try? candidate.boundingBox(for: range))?.boundingBox ?? fallbackBox
+            return SensitiveMatch(kind: kind,
+                                  text: String(text[range]),
+                                  normalizedRect: box)
         }
     }
 

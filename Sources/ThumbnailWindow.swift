@@ -319,40 +319,51 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     private func setControlsVisible(_ visible: Bool, animated: Bool = true) {
         // Верх карточки перекрыт — кнопкам негде стоять, показывать нечего
         // (`TR-28`).
-        if visible && topIsCovered { return }
+        guard !(visible && topIsCovered) else { return }
         if visible {
-            makeControlsIfNeeded()
-            let views = controlViews
-            for control in views { control.isHidden = false }
-            guard animated else {
-                for control in views { control.alphaValue = 1 }
-                return
-            }
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = Self.fade
-                for control in views { control.animator().alphaValue = 1 }
-            }
+            showControls(animated: animated)
         } else {
-            let views = controlViews
-            guard !views.isEmpty else { return }
-            guard animated else {
-                for control in views {
-                    control.alphaValue = 0
-                    control.isHidden = true
-                }
-                return
+            hideControls(animated: animated)
+        }
+    }
+
+    private func showControls(animated: Bool) {
+        makeControlsIfNeeded()
+        let views = controlViews
+        for control in views { control.isHidden = false }
+        guard animated else {
+            for control in views { control.alphaValue = 1 }
+            return
+        }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = Self.fade
+            for control in views { control.animator().alphaValue = 1 }
+        }
+    }
+
+    private func hideControls(animated: Bool) {
+        let views = controlViews
+        guard !views.isEmpty else { return }
+        guard animated else {
+            for control in views {
+                control.alphaValue = 0
+                control.isHidden = true
             }
-            NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = Self.fade
-                for control in views { control.animator().alphaValue = 0 }
-            }, completionHandler: { [weak self] in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    for control in self.controlViews where control.alphaValue == 0 {
-                        control.isHidden = true
-                    }
-                }
-            })
+            return
+        }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = Self.fade
+            for control in views { control.animator().alphaValue = 0 }
+        }, completionHandler: { [weak self] in
+            Task { @MainActor [weak self] in self?.unmountFadedControls() }
+        })
+    }
+
+    /// Прятать можно только то, что доехало до нуля: за время затухания
+    /// кнопки могли снова понадобиться, и тогда их альфа уже не ноль.
+    private func unmountFadedControls() {
+        for control in controlViews where control.alphaValue == 0 {
+            control.isHidden = true
         }
     }
 
