@@ -108,8 +108,5 @@ final class HubTooltipWindow {
     }
 
 #if TESTING
-    var debugVisibleText: String? { panel.isVisible ? label.stringValue : nil }
-    var debugSharingIsNone: Bool { panel.sharingType == .none }
-    var debugIgnoresMouse: Bool { panel.ignoresMouseEvents }
 #endif
 }

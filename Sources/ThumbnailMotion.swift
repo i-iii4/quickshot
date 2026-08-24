@@ -217,7 +217,6 @@ final class TrayProgressAnimator: NSObject {
     }
 
     var presentationValue: CGFloat { trayClampedUnit(value) }
-    var presentationVelocity: CGFloat { velocity }
 
     func synchronize(_ value: CGFloat) {
         cancel()

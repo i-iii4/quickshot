@@ -31,10 +31,6 @@ private enum NativeHubMetrics {
     }
 }
 
-struct NativeHubSpringSample {
-    let value: CGFloat
-    let velocity: CGFloat
-}
 
 
 /// A finite, critically damped reveal. Retargeting keeps the presentation

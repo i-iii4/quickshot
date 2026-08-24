@@ -83,7 +83,3 @@ func odometerPresentationState(progress: CGFloat,
         : odometerMotionState(progress: progress, increasing: increasing, distance: distance)
 }
 
-/// cubic-bezier(0.32, 0.72, 0, 1): iOS-like drawer response with a finite landing.
-func motionDrawerEase(_ progress: CGFloat) -> CGFloat {
-    motionCubicBezier(progress, x1: 0.32, y1: 0.72, x2: 0, y2: 1)
-}

@@ -1647,59 +1647,9 @@ final class ThumbnailManager {
 
     // MARK: сворачивание/разворачивание (растворение в хаб)
 
-    /// Клик по кнопке хаба ведёт по ступеням (`TR-27`): развёрнутая лента
-    /// сначала собирается в стопку у кнопки, и только повторный клик по уже
-    /// собранной стопке прячет трей. Скрытый трей клик разворачивает.
-    func toggleCollapse() {
-        if collapsed {
-            expand()
-        } else if stackIsGatheredAtHub || !scrollModel.isScrollable {
-            collapse()
-        } else {
-            gatherStackAtHub()
-        }
-    }
 
-    /// Собрать ленту в стопку у кнопки.
-    private func gatherStackAtHub() { animateScroll(to: scrollModel.maximumOffset, detentClick: .snapIn) }
 
-    /// Программная прокрутка тем же пружинным возвратом, что и жест:
-    /// отдельной кривой у программного сбора нет (`TR-26`).
-    private func animateScroll(to target: CGFloat, detentClick: TrayDetentModel.Click? = nil) {
-        scrollSettleAnimator.cancel()
-        scrollSettleAnimating = false
-        gestureCore.endGesture()
-        let from = scrollModel.offset
-        guard abs(target - from) > 0.5 else {
-            writePresented(target)
-            detent.sync(with: scrollModel)
-            applyScrollOffset()
-            return
-        }
-        scrollSettleAnimating = true
-        scrollSettleAnimator.run(duration: 0.32, onFrame: { [weak self] progress in
-            guard let self else { return }
-            let eased = 1 - pow(1 - progress, 3)
-            self.writePresented(from + (target - from) * eased)
-            self.applyScrollOffset()
-        }, onDone: { [weak self] in
-            guard let self else { return }
-            self.scrollSettleAnimating = false
-            self.writePresented(target)
-            self.detent.sync(with: self.scrollModel)
-            self.applyScrollOffset()
-            // Кнопочный сбор садится своим ease: осадка вдогонку читалась бы
-            // вторым движением, остаётся только тактильная посадка.
-            if let detentClick { self.performDetentHaptic(detentClick) }
-        })
-    }
 
-    /// Лента полностью собрана в стопку у кнопки: смещение на максимуме и
-    /// ход реальный (`TR-27`).
-    var stackIsGatheredAtHub: Bool {
-        scrollModel.maximumOffset > 0.5
-            && scrollModel.offset >= scrollModel.maximumOffset - 1
-    }
 
     func collapse() {
         // Сворачиваем при любом count >= 1 (хаб теперь виден и при одном снимке — клик должен работать).
@@ -1713,15 +1663,6 @@ final class ThumbnailManager {
         runTrayTransition(to: 1, on: screen)
     }
 
-    func expand() {
-        guard collapsed, let screen = anchorScreen ?? NSScreen.main else { return }
-        cancelCollapsedPeekDismiss()
-        cancelHoverExit()
-        finishCollectionMotion()
-        collapsedPeekItem = nil
-        collapsed = false
-        runTrayTransition(to: 0, on: screen)
-    }
 
     private func runTrayTransition(to target: CGFloat, on screen: NSScreen) {
         let travelOffset = thumbnailTrayTravelOffset(vertical: axisIsVertical)

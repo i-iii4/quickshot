@@ -1220,7 +1220,9 @@ if output="$(rg -n "\bdissolve\(|\bemerge\(|TrayAnim\.(stagger|maxStagger|delay)
   echo "Motion architecture regression: tray collapse must keep one coordinator and one master progress." >&2
   exit 1
 fi
-if output="$(awk 'index($0, "func collapse()") { active = 1 } active { print } index($0, "func expand()") { exit }' Sources/ThumbnailManager.swift | rg -n "setCollapsed\(")"; then
+# Участок ограничен самим методом: `expand()` удалён 23.08.2026 как мёртвый,
+# и без новой границы awk читал файл до конца.
+if output="$(awk 'index($0, "func collapse()") { active = 1 } active { print } active && $0 == "    }" { exit }' Sources/ThumbnailManager.swift | rg -n "setCollapsed\(")"; then
   echo "$output"
   echo "Thumbnail controls regression: collapse must not hide card controls before fade completion." >&2
   exit 1

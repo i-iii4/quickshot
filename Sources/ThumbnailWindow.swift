@@ -749,7 +749,6 @@ final class ThumbnailWindow {
     /// Видимая рамка карточки в координатах хоста: контейнер шире неё на поля
     /// ресайза, и зазор между карточками лежит именно между этими рамками.
     var debugCardFrame: NSRect { container.convert(view.frame, to: container.superview) }
-    var debugStackOrder: CGFloat { stackOrder }
     /// Ширина превью в пикселях: источник показа карточки.
     var debugPreviewPixelWidth: Int { artifact.previewImage.width }
 
