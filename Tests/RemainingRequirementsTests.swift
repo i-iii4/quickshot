@@ -37,7 +37,7 @@ struct RemainingRequirementsTests {
 
     /// `A-6`: новый снимок во время сессии не разрушает её молча.
     @MainActor private static func captureDuringSessionKeepsWork() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         canvas.document.add(rectangle())
         let before = canvas.document.objects.count
         // Смена изображения под открытым документом сохраняет объекты:
@@ -227,7 +227,7 @@ struct RemainingRequirementsTests {
 
     /// `L-3`, `L-4`, `L-6`: бюджет применения, памяти и больших изображений.
     @MainActor private static func applyAndMemoryBudgets() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         canvas.image = image(width: 3840, height: 2160)   // склеенный скролл-снимок
         canvas.zoomToFit()
         for index in 0..<20 { canvas.document.add(rectangle(x: CGFloat(index) * 20), select: false) }
@@ -309,13 +309,6 @@ struct RemainingRequirementsTests {
     }
 
     // MARK: помощники
-
-    @MainActor private static func makeCanvas() -> AnnotationCanvasView {
-        let canvas = AnnotationCanvasView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
-        canvas.image = image(width: 400, height: 300)
-        canvas.zoomToActualSize()
-        return canvas
-    }
 
     @MainActor private static func makeLibrary() -> ScreenshotLibrary {
         let library = ScreenshotLibrary(defaults: freshDefaults(), fileManager: .default,

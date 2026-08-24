@@ -28,7 +28,7 @@ struct EndToEndScenarioTests {
     /// С-1: обвести проблему, поставить стрелку, подписать, забрать в буфер.
     /// `A-1`, `A-4`, `D-7`, `D-9`, `D-13`, `D-23`, `D-26`, `J-1`, `J-4`
     @MainActor private static func bugReport() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         try drag(canvas, tool: .box, from: CGPoint(x: 60, y: 60), to: CGPoint(x: 220, y: 160))
         try drag(canvas, tool: .arrow, from: CGPoint(x: 300, y: 40), to: CGPoint(x: 230, y: 110))
         addText(canvas, "Broken", at: CGPoint(x: 250, y: 200))
@@ -51,7 +51,7 @@ struct EndToEndScenarioTests {
     /// С-2: пронумерованные метки, каждая со своим номером.
     /// `D-34`, `D-35`, `D-36`, `D-37`
     @MainActor private static func stepByStepGuide() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         for point in [CGPoint(x: 80, y: 80), CGPoint(x: 180, y: 120), CGPoint(x: 280, y: 180)] {
             try click(canvas, tool: .step, at: point)
         }
@@ -94,7 +94,7 @@ struct EndToEndScenarioTests {
     /// С-4: кружок и стрелка за три действия.
     /// `D-3`, `D-4`, `D-14`, `D-15`, `D-17`, `D-18`
     @MainActor private static func quickReply() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         try drag(canvas, tool: .ellipse, from: CGPoint(x: 100, y: 100), to: CGPoint(x: 180, y: 180))
         try drag(canvas, tool: .arrow, from: CGPoint(x: 260, y: 60), to: CGPoint(x: 190, y: 130))
 
@@ -107,13 +107,6 @@ struct EndToEndScenarioTests {
     }
 
     // MARK: помощники
-
-    @MainActor private static func makeCanvas() -> AnnotationCanvasView {
-        let canvas = AnnotationCanvasView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
-        canvas.image = blankImage()
-        canvas.zoomToActualSize()
-        return canvas
-    }
 
     @MainActor private static func addText(_ canvas: AnnotationCanvasView,
                                            _ value: String,

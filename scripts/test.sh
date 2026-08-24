@@ -413,6 +413,7 @@ xcrun swiftc \
   Sources/AnnotationCanvasView.swift \
   Sources/ImageContext.swift \
   Tests/EditorTransformTests.swift \
+  Tests/EditorTestSupport.swift \
   "$NATIVE_UI_LIB" \
   -o "$TRANSFORM_OUT"
 
@@ -446,6 +447,7 @@ xcrun swiftc \
   Sources/AnnotationCanvasView.swift \
   Sources/ImageContext.swift \
   Tests/EditorDrawingTests.swift \
+  Tests/EditorTestSupport.swift \
   "$NATIVE_UI_LIB" \
   -o "$DRAWING_OUT"
 
@@ -479,6 +481,7 @@ xcrun swiftc \
   Sources/AnnotationCanvasView.swift \
   Sources/ImageContext.swift \
   Tests/EditorHistoryTests.swift \
+  Tests/EditorTestSupport.swift \
   "$NATIVE_UI_LIB" \
   -o "$HISTORY_OUT"
 
@@ -512,6 +515,7 @@ xcrun swiftc \
   Sources/AnnotationCanvasView.swift \
   Sources/ImageContext.swift \
   Tests/EndToEndScenarioTests.swift \
+  Tests/EditorTestSupport.swift \
   "$NATIVE_UI_LIB" \
   -o "$SCENARIO_OUT"
 
@@ -554,6 +558,7 @@ xcrun swiftc \
   Sources/AnnotationCanvasView.swift \
   Sources/AnnotationEditor.swift \
   Tests/EditorSessionTests.swift \
+  Tests/EditorTestSupport.swift \
   "$NATIVE_UI_LIB" \
   -o "$SESSION_EDITOR_OUT"
 
@@ -719,6 +724,7 @@ xcrun swiftc \
   Sources/AnnotationCanvasView.swift \
   Sources/AnnotationEditor.swift \
   Tests/RemainingRequirementsTests.swift \
+  Tests/EditorTestSupport.swift \
   "$NATIVE_UI_LIB" \
   -o "$REMAINING_OUT"
 

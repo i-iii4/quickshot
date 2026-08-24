@@ -36,7 +36,7 @@ struct EditorSessionTests {
 
     /// `H-1`, `H-2`, `M-1`: полный цикл без мыши.
     @MainActor private static func keyboardCycleWorksWithoutMouse() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         canvas.createObjectAtCentre(kind: .rectangle)
         canvas.createObjectAtCentre(kind: .ellipse)
         guard canvas.document.objects.count == 2 else {
@@ -82,7 +82,7 @@ struct EditorSessionTests {
 
     /// `G-3`, `G-4`: рамка выделяет несколько объектов.
     @MainActor private static func marqueeSelectsMultiple() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         for x in [CGFloat(40), 120, 200] {
             canvas.document.add(AnnotationObject(kind: .rectangle,
                                                  geometry: .rect(CGRect(x: x, y: 40, width: 50, height: 50),
@@ -102,7 +102,7 @@ struct EditorSessionTests {
 
     /// `G-11`, `G-12`: выравнивание и показ размеров.
     @MainActor private static func alignmentAndMetrics() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         for y in [CGFloat(40), 90, 140] {
             canvas.document.add(AnnotationObject(kind: .rectangle,
                                                  geometry: .rect(CGRect(x: 40 + y, y: y, width: 40, height: 30),
@@ -124,7 +124,7 @@ struct EditorSessionTests {
 
     /// `ED-8`, `A-5`: отмена в редакторе возвращает к последнему сохранению.
     @MainActor private static func escapeDiscardsUnsavedEdits() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         canvas.document.add(AnnotationObject(kind: .rectangle,
                                              geometry: .rect(CGRect(x: 10, y: 10, width: 20, height: 20),
                                                              cornerRadius: 0)))
@@ -143,7 +143,7 @@ struct EditorSessionTests {
 
     /// `ED-11`: несохранённые изменения видны.
     @MainActor private static func unsavedFlagIsVisible() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         guard !canvas.hasUnsavedChanges else { throw Failure("пустой документ не изменён") }
         canvas.document.add(AnnotationObject(kind: .line,
                                              geometry: .segment(from: .zero,
@@ -163,7 +163,7 @@ struct EditorSessionTests {
 
     /// `J-2`, `J-3`, `J-6`: форматы выдачи объявлены и доступны.
     @MainActor private static func exportFormatsAreAvailable() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         canvas.document.add(AnnotationObject(kind: .rectangle,
                                              geometry: .rect(CGRect(x: 10, y: 10, width: 40, height: 40),
                                                              cornerRadius: 0)))
@@ -236,7 +236,7 @@ struct EditorSessionTests {
 
     /// `Q-5`: объект за границей кадра не теряется.
     @MainActor private static func objectOutsideFrameIsRecoverable() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         canvas.document.add(AnnotationObject(kind: .rectangle,
                                              geometry: .rect(CGRect(x: 5000, y: 5000, width: 30, height: 30),
                                                              cornerRadius: 0)),
@@ -254,7 +254,7 @@ struct EditorSessionTests {
 
     /// `L-1`, `L-2`, `L-5`: бюджеты отклика.
     @MainActor private static func performanceBudgets() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         let openStart = Date()
         canvas.image = image(width: 2560, height: 1600)
         canvas.zoomToFit()
@@ -278,13 +278,6 @@ struct EditorSessionTests {
     }
 
     // MARK: помощники
-
-    @MainActor private static func makeCanvas() -> AnnotationCanvasView {
-        let canvas = AnnotationCanvasView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
-        canvas.image = image(width: 400, height: 300)
-        canvas.zoomToActualSize()
-        return canvas
-    }
 
     private static func image(width: Int, height: Int) -> CGImage {
         let context = CGContext(data: nil, width: width, height: height,

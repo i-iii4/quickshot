@@ -578,7 +578,6 @@ final class AnnotationCanvasView: NSView {
         onDocumentChanged?()
     }
 
-
     // MARK: клавиатурные операции (`H-1`, `H-2`)
 
     /// Создание объекта в центре кадра: путь без мыши обязан быть полным.

@@ -333,7 +333,6 @@ final class ThumbnailManager {
         hoverExitWorkItem = nil
     }
 
-
     /// Наведение на ЛЮБУЮ карточку разворачивает нижнюю панель кнопок хаба —
     /// так же, как наведение на саму кнопку (`TR-27`). Состояние ленты роли
     /// не играет: панель кнопок и положение ленты — разные вещи, и ховер
@@ -882,7 +881,6 @@ final class ThumbnailManager {
         thumbnailCollectionOffset(vertical: axisIsVertical)
     }
 
-
     /// Переводит ленту на другую ось. Вызывается только при собранной колоде:
     /// там обе оси дают одну и ту же картинку, поэтому переход невидим.
     ///
@@ -1100,7 +1098,6 @@ final class ThumbnailManager {
             self.applyScrollOffset()
         })
     }
-
 
     nonisolated private static let trayLogEnabled =
         ProcessInfo.processInfo.environment["QUICKSHOT_LOG_TRAY"] == "1"
@@ -1372,7 +1369,6 @@ final class ThumbnailManager {
     }
 
     /// Роль одной карточки в перекладке окна просмотра.
-
 
     private func finishViewportMotion(_ plan: ReflowPlan, visibleIDs: Set<ObjectIdentifier>) {
         for (item, _) in plan.reflowing { item.finishCollectionMotion() }
@@ -1647,10 +1643,6 @@ final class ThumbnailManager {
 
     // MARK: сворачивание/разворачивание (растворение в хаб)
 
-
-
-
-
     func collapse() {
         // Сворачиваем при любом count >= 1 (хаб теперь виден и при одном снимке — клик должен работать).
         guard !collapsed, !items.isEmpty, let screen = anchorScreen ?? NSScreen.main else { return }
@@ -1662,7 +1654,6 @@ final class ThumbnailManager {
         collapsed = true
         runTrayTransition(to: 1, on: screen)
     }
-
 
     private func runTrayTransition(to target: CGFloat, on screen: NSScreen) {
         let travelOffset = thumbnailTrayTravelOffset(vertical: axisIsVertical)
@@ -1806,8 +1797,6 @@ final class ThumbnailManager {
         }
         finishLayoutPass()
     }
-
-
 
     /// Позиции видимых карточек в порядке добавления + список переполнения. Существующие карточки
     /// сохраняют свои слоты, новый снимок занимает следующий свободный слот по направлению от хаба.

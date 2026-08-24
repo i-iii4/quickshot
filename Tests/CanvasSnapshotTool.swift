@@ -12,7 +12,7 @@ struct CanvasSnapshotTool {
             let directory = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "/tmp"
 
             let canvas = AnnotationCanvasView(frame: NSRect(x: 0, y: 0, width: 120, height: 48))
-            canvas.image = white(width: 120, height: 48)
+            canvas.image = whiteTestImage(width: 120, height: 48)
             canvas.zoomToActualSize()
 
             var style = AnnotationStyle.default
@@ -23,7 +23,6 @@ struct CanvasSnapshotTool {
                                         style: style)
             text.text = "T"
             canvas.document.add(text)
-
 
             if let rep = canvas.bitmapImageRepForCachingDisplay(in: canvas.bounds) {
                 canvas.cacheDisplay(in: canvas.bounds, to: rep)
@@ -46,15 +45,5 @@ struct CanvasSnapshotTool {
             UTType.png.identifier as CFString, 1, nil) else { return }
         CGImageDestinationAddImage(destination, image, nil)
         CGImageDestinationFinalize(destination)
-    }
-
-    private static func white(width: Int, height: Int) -> CGImage {
-        let context = CGContext(data: nil, width: width, height: height,
-                                bitsPerComponent: 8, bytesPerRow: 0,
-                                space: CGColorSpaceCreateDeviceRGB(),
-                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-        context.setFillColor(NSColor.white.cgColor)
-        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-        return context.makeImage()!
     }
 }

@@ -519,7 +519,6 @@ final class OverlayController {
         windows.append(chromeWindow)
     }
 
-
     func beginFrozenSelection(screens: [NSScreen],
                               pendingGesture: @escaping () -> CaptureGestureResolution,
                               onReady: @escaping () -> Void,
@@ -715,7 +714,6 @@ final class OverlayController {
         }
         Self.log.info("overlay backdrops added count=\(added.count, privacy: .public)")
     }
-
 
     private static func activationRestore(for source: NSRunningApplication?) -> () -> Void {
         let quickShotPID = ProcessInfo.processInfo.processIdentifier

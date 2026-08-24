@@ -32,7 +32,7 @@ struct EditorDrawingTests {
     /// Буква «T» несёт почти все чернила в верхней части. Если контекст
     /// зеркалит, перекладина оказывается внизу — это и видно в продукте.
     @MainActor private static func textIsUprightOnScreen() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         let object = textObject(at: CGPoint(x: 40, y: 40))
         canvas.document.add(object)
         // Новый объект остаётся выделенным, а ручки выделения — тоже пиксели:
@@ -58,7 +58,7 @@ struct EditorDrawingTests {
 
     /// Экспорт обязан совпадать с экраном: то же изображение, та же ориентация.
     @MainActor private static func textIsUprightInExport() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         let object = textObject(at: CGPoint(x: 40, y: 40))
         canvas.document.add(object)
 
@@ -73,7 +73,7 @@ struct EditorDrawingTests {
     /// Клик инструментом текста обязан дать пригодное поле ввода: не точку в
     /// девять пикселей и не улетевшее за пределы холста.
     @MainActor private static func textFieldIsUsableAfterClick() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         let host = hostWindow(for: canvas)
         var editingFrame: NSRect?
         canvas.onRequestTextEditing = { [weak canvas] id in
@@ -95,7 +95,7 @@ struct EditorDrawingTests {
     // MARK: метки
 
     @MainActor private static func counterDigitIsUpright() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         var style = AnnotationStyle.default
         style.fontSize = 40
         var object = AnnotationObject(kind: .counter,
@@ -119,7 +119,7 @@ struct EditorDrawingTests {
 
     /// Двойной клик — одна метка, а не две наложенные.
     @MainActor private static func doublePressCreatesOneCounter() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         canvas.tool = .step
         let host = hostWindow(for: canvas)
         let point = CGPoint(x: 120, y: 90)
@@ -133,7 +133,7 @@ struct EditorDrawingTests {
 
     /// Метку выделяют кликом по её кругу, а не по центральной точке.
     @MainActor private static func counterIsSelectableByItsCircle() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         canvas.tool = .step
         let host = hostWindow(for: canvas)
         click(canvas, at: CGPoint(x: 120, y: 90), in: host)
@@ -150,13 +150,6 @@ struct EditorDrawingTests {
     }
 
     // MARK: помощники
-
-    @MainActor private static func makeCanvas() -> AnnotationCanvasView {
-        let canvas = AnnotationCanvasView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
-        canvas.image = whiteImage(width: 400, height: 300)
-        canvas.zoomToActualSize()
-        return canvas
-    }
 
     @MainActor private static func textObject(at point: CGPoint) -> AnnotationObject {
         var style = AnnotationStyle.default
@@ -240,7 +233,6 @@ struct EditorDrawingTests {
 
     nonisolated(unsafe) private static var lastProfile = ""
 
-
     private static func inkRatio(image: CGImage,
                                  in imageRect: CGRect,
                                  colour: Ink = .dark) throws -> CGFloat {
@@ -281,16 +273,6 @@ struct EditorDrawingTests {
             y += 1
         }
         return try ratio(ofRows: rows)
-    }
-
-    private static func whiteImage(width: Int, height: Int) -> CGImage {
-        let context = CGContext(data: nil, width: width, height: height,
-                                bitsPerComponent: 8, bytesPerRow: 0,
-                                space: CGColorSpaceCreateDeviceRGB(),
-                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-        context.setFillColor(NSColor.white.cgColor)
-        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-        return context.makeImage()!
     }
 
     private struct Failure: Error, CustomStringConvertible {

@@ -29,7 +29,7 @@ struct EditorTransformTests {
 
     /// `D-40`, `D-41`, `D-43`
     @MainActor private static func cropChangesResultSize() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         try drag(canvas, from: CGPoint(x: 40, y: 30), to: CGPoint(x: 200, y: 130), tool: .crop)
 
         guard let result = canvas.flattenedImage() else { throw Failure("нет результата") }
@@ -41,7 +41,7 @@ struct EditorTransformTests {
     /// `D-42`: обрезка отменяема до применения — отрезанное не потеряно.
     /// `D-42`, `C-2`
     @MainActor private static func cropIsReversible() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         try drag(canvas, from: CGPoint(x: 10, y: 10), to: CGPoint(x: 60, y: 60), tool: .crop)
         guard canvas.flattenedImage()?.width == 50 else { throw Failure("обрезка не применилась") }
 
@@ -55,7 +55,7 @@ struct EditorTransformTests {
     /// Случайный клик инструментом обрезки не должен обрезать снимок в точку.
     /// `D-5`
     @MainActor private static func tinyCropIsIgnored() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         try drag(canvas, from: CGPoint(x: 100, y: 100), to: CGPoint(x: 102, y: 101), tool: .crop)
         guard let result = canvas.flattenedImage() else { throw Failure("нет результата") }
         guard result.width == 400 else {
@@ -65,7 +65,7 @@ struct EditorTransformTests {
 
     /// `D-44`
     @MainActor private static func rotationSwapsOrientation() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         canvas.rotateQuarterTurn()
         guard let result = canvas.flattenedImage() else { throw Failure("нет результата") }
         guard result.width == 300, result.height == 400 else {
@@ -74,7 +74,7 @@ struct EditorTransformTests {
     }
 
     @MainActor private static func rotationReturnsAfterFourTurns() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         for _ in 0..<4 { canvas.rotateQuarterTurn() }
         guard let result = canvas.flattenedImage() else { throw Failure("нет результата") }
         guard result.width == 400, result.height == 300 else {
@@ -84,7 +84,7 @@ struct EditorTransformTests {
 
     /// Обрезка и поворот применяются вместе и в предсказуемом порядке.
     @MainActor private static func cropAndRotationCompose() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         try drag(canvas, from: CGPoint(x: 0, y: 0), to: CGPoint(x: 200, y: 100), tool: .crop)
         canvas.rotateQuarterTurn()
         guard let result = canvas.flattenedImage() else { throw Failure("нет результата") }
@@ -140,13 +140,6 @@ struct EditorTransformTests {
     }
 
     // MARK: помощники
-
-    @MainActor private static func makeCanvas() -> AnnotationCanvasView {
-        let canvas = AnnotationCanvasView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
-        canvas.image = sampleImage(width: 400, height: 300)
-        canvas.zoomToActualSize()
-        return canvas
-    }
 
     /// Протяжка мышью в координатах вью: тест идёт тем же путём, что и рука
     /// пользователя, а не вызывает внутренние методы.

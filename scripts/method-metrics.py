@@ -16,6 +16,35 @@
 import re
 import sys
 
+
+def braces(line):
+    """Скобки вне строковых литералов и комментариев.
+
+    Без этого `case "{"` считался открытием блока, и метрика приписывала
+    методу чужую глубину.
+    """
+    out = []
+    in_string = False
+    escaped = False
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif c == '\\':
+                escaped = True
+            elif c == '"':
+                in_string = False
+        elif c == '"':
+            in_string = True
+        elif line[i:i + 2] == '//':
+            break
+        elif c in '{}':
+            out.append(c)
+        i += 1
+    return out.count('{'), out.count('}')
+
 DECL = re.compile(r'^(\s*)(?:@\w+\s+)*(?:public |private |internal |fileprivate |static |mutating |final )*func\s+(\w+)')
 # Zig: `fn name(`, возможно с `pub`, `export`, `inline`.
 DECL_ZIG = re.compile(r'^(\s*)(?:pub\s+|export\s+|inline\s+|extern\s+)*fn\s+(\w+)')
@@ -48,7 +77,7 @@ def metrics(path):
         code = branches = cases = 0
         depth_max = 0
         j = head + 1
-        depth = lines[head].count('{') - lines[head].count('}')
+        depth = braces(lines[head])[0] - braces(lines[head])[1]
         while j < len(lines) and depth > 0:
             line = lines[j]
             stripped = line.strip()
@@ -62,7 +91,8 @@ def metrics(path):
                 branches += len(found)
                 if CASE.match(line):
                     cases += 1
-            depth += line.count('{') - line.count('}')
+            opens, closes = braces(line)
+            depth += opens - closes
             depth_max = max(depth_max, depth)
             j += 1
         rows.append((name, code, branches, cases, depth_max))

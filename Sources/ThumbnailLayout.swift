@@ -160,7 +160,6 @@ func thumbnailLayoutShowingNewest(screenFrame: NSRect,
     return .init(firstVisibleIndex: newestIndex, layout: fallback)
 }
 
-
 /// Раскладка ленты по непрерывному смещению прокрутки (`TR-1`…`TR-3`).
 ///
 /// Отличие от `thumbnailLayout`: карточки не выпадают из ленты по индексу, а

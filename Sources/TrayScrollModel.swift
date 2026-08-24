@@ -797,7 +797,6 @@ enum TrayDeckClosure {
         return min(1, max(0, travelled / span))
     }
 
-
     /// Степень схлопывания для раскладки: та же величина, проведённая через
     /// кривую.
     /// Степень схождения ПРОМЕЖУТКОВ СТОПКИ.
@@ -805,8 +804,4 @@ enum TrayDeckClosure {
         tierCurve(value(presented: presented, model: model))
     }
 
-    /// Степень опускания ПОТОКА карточек.
-    static func flow(presented: CGFloat, model: TrayScrollModel) -> CGFloat {
-        flowCurve(value(presented: presented, model: model))
-    }
 }

@@ -27,7 +27,7 @@ struct EditorHistoryTests {
 
     /// Перетаскивание объекта — ровно один шаг истории.
     @MainActor private static func dragIsOneStep() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         let host = hostWindow(for: canvas)
         let object = box(at: CGPoint(x: 100, y: 100))
         canvas.document.add(object)
@@ -45,7 +45,7 @@ struct EditorHistoryTests {
 
     /// Протяжка рамки выделения меняет только выделение: истории она не пишет.
     @MainActor private static func marqueeIsNotHistory() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         let host = hostWindow(for: canvas)
         canvas.document.add(box(at: CGPoint(x: 100, y: 100)))
         canvas.document.clearSelection()
@@ -63,7 +63,7 @@ struct EditorHistoryTests {
     /// Повторно открытый редактор восстанавливает объекты как исходное
     /// состояние: первое же Undo не должно их стирать.
     @MainActor private static func restoredEditorHasNothingToUndo() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         canvas.restoreObjects([box(at: CGPoint(x: 50, y: 50)), box(at: CGPoint(x: 150, y: 90))])
         guard !canvas.document.canUndo else {
             throw Failure("восстановление объектов попало в историю")
@@ -72,7 +72,7 @@ struct EditorHistoryTests {
 
     /// Клик по объекту после Undo не должен убивать Redo.
     @MainActor private static func clickAfterUndoKeepsRedo() throws {
-        let canvas = makeCanvas()
+        let canvas = makeTestCanvas()
         let host = hostWindow(for: canvas)
         canvas.document.add(box(at: CGPoint(x: 100, y: 100)))
         _ = canvas.document.undo()
@@ -87,13 +87,6 @@ struct EditorHistoryTests {
     }
 
     // MARK: помощники
-
-    @MainActor private static func makeCanvas() -> AnnotationCanvasView {
-        let canvas = AnnotationCanvasView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
-        canvas.image = whiteImage(width: 400, height: 300)
-        canvas.zoomToActualSize()
-        return canvas
-    }
 
     private static func box(at point: CGPoint) -> AnnotationObject {
         AnnotationObject(kind: .rectangle,
@@ -148,16 +141,6 @@ struct EditorHistoryTests {
                            eventNumber: 0,
                            clickCount: 1,
                            pressure: 1)!
-    }
-
-    private static func whiteImage(width: Int, height: Int) -> CGImage {
-        let context = CGContext(data: nil, width: width, height: height,
-                                bitsPerComponent: 8, bytesPerRow: 0,
-                                space: CGColorSpaceCreateDeviceRGB(),
-                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-        context.setFillColor(NSColor.white.cgColor)
-        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-        return context.makeImage()!
     }
 
     private struct Failure: Error, CustomStringConvertible {

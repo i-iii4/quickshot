@@ -36,6 +36,7 @@ final class BaselineRun {
     private var lines: [String] = []
     private var step = 0
     private var rng = Deterministic(seed: 0x5EED_1234_ABCD_0001)
+    private var shapeIndex = 0
 
     var recorded: [String] { lines }
     var stepCount: Int { step }
@@ -84,34 +85,54 @@ final class BaselineRun {
     }
 
     /// Формы жеста: палец, инерция, отмена, колесо, бросок, смена оси.
+    /// Все сочетания состава ленты, пары осей, исходного состояния и формы
+    /// жеста — дважды, чтобы эталон покрывал не единственную траекторию, а их
+    /// семейство. Порядок обхода менять нельзя: от него зависят числа хода.
     func buildAll() {
-        let layouts: [(Int, CGFloat)] = [(1, 180), (2, 180), (3, 220), (8, 160)]
-        let axes: [(ThumbnailLayoutEdge, ThumbnailLayoutEdge?)] = [
-            (.right, .bottom), (.bottom, .right), (.right, nil)
-        ]
-        var shapeIndex = 0
-        // Два прохода: тот же набор форм с другими числами хода — эталон
-        // должен покрывать не единственную траекторию, а их семейство.
         for _ in 0..<2 {
-        for (cards, length) in layouts {
-            for (base, alternate) in axes {
-                for gathered in [false, true] {
-                    for shape in 0..<7 {
-                        shapeIndex += 1
-                        let name = "shape\(shape)-\(shapeIndex)"
-                        scenario(name: name,
-                                 cards: cards,
-                                 cardLength: length,
-                                 base: base,
-                                 alternate: alternate,
-                                 startGathered: gathered,
-                                 events: events(shape: shape, vertical: base.isVertical))
-                    }
-                }
+            for (cards, length) in Self.layouts {
+                buildAxes(cards: cards, cardLength: length)
             }
         }
+    }
+
+    private func buildAxes(cards: Int, cardLength: CGFloat) {
+        for (base, alternate) in Self.axes {
+            buildStates(cards: cards, cardLength: cardLength, base: base, alternate: alternate)
         }
     }
+
+    private func buildStates(cards: Int,
+                             cardLength: CGFloat,
+                             base: ThumbnailLayoutEdge,
+                             alternate: ThumbnailLayoutEdge?) {
+        for gathered in [false, true] {
+            buildShapes(cards: cards, cardLength: cardLength,
+                        base: base, alternate: alternate, gathered: gathered)
+        }
+    }
+
+    private func buildShapes(cards: Int,
+                             cardLength: CGFloat,
+                             base: ThumbnailLayoutEdge,
+                             alternate: ThumbnailLayoutEdge?,
+                             gathered: Bool) {
+        for shape in 0..<7 {
+            shapeIndex += 1
+            scenario(name: "shape\(shape)-\(shapeIndex)",
+                     cards: cards,
+                     cardLength: cardLength,
+                     base: base,
+                     alternate: alternate,
+                     startGathered: gathered,
+                     events: events(shape: shape, vertical: base.isVertical))
+        }
+    }
+
+    private static let layouts: [(Int, CGFloat)] = [(1, 180), (2, 180), (3, 220), (8, 160)]
+    private static let axes: [(ThumbnailLayoutEdge, ThumbnailLayoutEdge?)] = [
+        (.right, .bottom), (.bottom, .right), (.right, nil)
+    ]
 
     private func events(shape: Int, vertical: Bool) -> [TrayGestureInput] {
         var out: [TrayGestureInput] = []
