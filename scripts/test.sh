@@ -264,6 +264,7 @@ xcrun swiftc \
   Sources/AnnotationDocument.swift \
   Sources/AnnotationRenderer.swift \
   Tests/AnnotationRendererTests.swift \
+  Tests/ImageTestSupport.swift \
   -o "$ANNOTATION_RENDER_OUT"
 
 "$ANNOTATION_RENDER_OUT"
@@ -413,6 +414,7 @@ xcrun swiftc \
   Sources/AnnotationCanvasView.swift \
   Sources/ImageContext.swift \
   Tests/EditorTransformTests.swift \
+  Tests/ImageTestSupport.swift \
   Tests/EditorTestSupport.swift \
   "$NATIVE_UI_LIB" \
   -o "$TRANSFORM_OUT"
@@ -447,6 +449,7 @@ xcrun swiftc \
   Sources/AnnotationCanvasView.swift \
   Sources/ImageContext.swift \
   Tests/EditorDrawingTests.swift \
+  Tests/ImageTestSupport.swift \
   Tests/EditorTestSupport.swift \
   "$NATIVE_UI_LIB" \
   -o "$DRAWING_OUT"
@@ -481,6 +484,7 @@ xcrun swiftc \
   Sources/AnnotationCanvasView.swift \
   Sources/ImageContext.swift \
   Tests/EditorHistoryTests.swift \
+  Tests/ImageTestSupport.swift \
   Tests/EditorTestSupport.swift \
   "$NATIVE_UI_LIB" \
   -o "$HISTORY_OUT"
@@ -515,6 +519,7 @@ xcrun swiftc \
   Sources/AnnotationCanvasView.swift \
   Sources/ImageContext.swift \
   Tests/EndToEndScenarioTests.swift \
+  Tests/ImageTestSupport.swift \
   Tests/EditorTestSupport.swift \
   "$NATIVE_UI_LIB" \
   -o "$SCENARIO_OUT"
@@ -558,6 +563,7 @@ xcrun swiftc \
   Sources/AnnotationCanvasView.swift \
   Sources/AnnotationEditor.swift \
   Tests/EditorSessionTests.swift \
+  Tests/ImageTestSupport.swift \
   Tests/EditorTestSupport.swift \
   "$NATIVE_UI_LIB" \
   -o "$SESSION_EDITOR_OUT"
@@ -659,6 +665,7 @@ xcrun swiftc \
   -framework UniformTypeIdentifiers \
   Sources/Clipboard.swift \
   Tests/ClipboardDeliveryTests.swift \
+  Tests/ImageTestSupport.swift \
   -o "$CLIPBOARD_OUT"
 
 xcrun swiftc \
@@ -724,6 +731,7 @@ xcrun swiftc \
   Sources/AnnotationCanvasView.swift \
   Sources/AnnotationEditor.swift \
   Tests/RemainingRequirementsTests.swift \
+  Tests/ImageTestSupport.swift \
   Tests/EditorTestSupport.swift \
   "$NATIVE_UI_LIB" \
   -o "$REMAINING_OUT"
@@ -914,6 +922,8 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/TrayCaseView.swift \
   Sources/TrayHaptics.swift \
   Tests/ThumbnailWindowLiveClickTests.swift \
+  Tests/ImageTestSupport.swift \
+  Tests/EditorTestSupport.swift \
   "$NATIVE_UI_LIB" \
     -o "$THUMBNAIL_LIVE_OUT"
 

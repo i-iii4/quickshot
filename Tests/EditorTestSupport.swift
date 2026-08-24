@@ -1,21 +1,9 @@
 import AppKit
-import CoreGraphics
 
-/// Общая оснастка тестов редактора.
+/// Оснастка тестов редактора: холст поверх белого изображения.
 ///
-/// Белый холст и его вью заводились дословно одинаково в семи наборах —
-/// от снимков полотна до сквозного сценария.
-
-/// Белое изображение заданного размера: основа для всех проверок рисования.
-func whiteTestImage(width: Int, height: Int) -> CGImage {
-    let context = CGContext(data: nil, width: width, height: height,
-                            bitsPerComponent: 8, bytesPerRow: 0,
-                            space: CGColorSpaceCreateDeviceRGB(),
-                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-    context.setFillColor(NSColor.white.cgColor)
-    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-    return context.makeImage()!
-}
+/// Отдельно от `ImageTestSupport`, потому что тянет за собой сам редактор, а
+/// изображения нужны и наборам, которые его не собирают.
 
 /// Холст аннотаций поверх белого изображения, в масштабе один к одному.
 @MainActor

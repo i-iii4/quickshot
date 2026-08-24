@@ -9,6 +9,51 @@ import CoreGraphics
 /// считают арифметику и раскладку. Они не заметили, что смещение никогда не
 /// сбрасывается к новым снимкам, что карточки в стопке перестают принимать
 /// мышь и что событие прокрутки вообще не доходит до менеджера.
+/// Обходит область с заданным шагом и считает, сколько её пикселей закрашено
+/// синим фикстуры. Оба живых прогона трея сканировали её одинаково, а
+/// вложенные циклы с проверкой границ давали пять уровней вложенности.
+@MainActor
+private func sampleFixtureBlue(rep: NSBitmapImageRep,
+                               host: NSView,
+                               rect: NSRect,
+                               step: CGFloat) -> (sampled: Int, painted: Int) {
+    let scaleX = CGFloat(rep.pixelsWide) / host.bounds.width
+    let scaleY = CGFloat(rep.pixelsHigh) / host.bounds.height
+    var sampled = 0
+    var painted = 0
+    var y = rect.minY
+    while y < rect.maxY {
+        var x = rect.minX
+        while x < rect.maxX {
+            let px = Int(x * scaleX)
+            // rep хранит строки сверху вниз, host не перевёрнут.
+            let py = Int((host.bounds.height - y) * scaleY)
+            if let colour = pixel(rep, x: px, y: py) {
+                sampled += 1
+                if isFixtureBlue(colour) { painted += 1 }
+            }
+            x += step
+        }
+        y += step
+    }
+    return (sampled, painted)
+}
+
+/// Цвет пикселя, если он внутри буфера.
+@MainActor
+private func pixel(_ rep: NSBitmapImageRep, x: Int, y: Int) -> NSColor? {
+    guard x >= 0, y >= 0, x < rep.pixelsWide, y < rep.pixelsHigh else { return nil }
+    return rep.colorAt(x: x, y: y)
+}
+
+/// Снимок в фикстуре — синяя заливка: пиксель карточки обязан быть заметно
+/// синим и непрозрачным. Проверка повторялась в двух прогонах дословно.
+private func isFixtureBlue(_ colour: NSColor) -> Bool {
+    colour.alphaComponent > 0.5
+        && colour.blueComponent > 0.4
+        && colour.blueComponent > colour.redComponent + 0.1
+}
+
 @MainActor
 private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
     private var failures: [String] = []
@@ -317,31 +362,7 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
             return
         }
         host.cacheDisplay(in: host.bounds, to: rep)
-        let scaleX = CGFloat(rep.pixelsWide) / host.bounds.width
-        let scaleY = CGFloat(rep.pixelsHigh) / host.bounds.height
-        var sampled = 0
-        var painted = 0
-        var y = inner.minY
-        while y < inner.maxY {
-            var x = inner.minX
-            while x < inner.maxX {
-                let px = Int(x * scaleX)
-                // rep хранит строки сверху вниз, host не перевёрнут.
-                let py = Int((host.bounds.height - y) * scaleY)
-                if px >= 0, py >= 0, px < rep.pixelsWide, py < rep.pixelsHigh,
-                   let colour = rep.colorAt(x: px, y: py) {
-                    sampled += 1
-                    // Снимок в фикстуре — синяя заливка: пиксель карточки обязан
-                    // быть заметно синим и непрозрачным.
-                    if colour.alphaComponent > 0.5, colour.blueComponent > 0.4,
-                       colour.blueComponent > colour.redComponent + 0.1 {
-                        painted += 1
-                    }
-                }
-                x += 4
-            }
-            y += 4
-        }
+        let (sampled, painted) = sampleFixtureBlue(rep: rep, host: host, rect: inner, step: 4)
         guard sampled > 50 else {
             failures.append("display-pass: рамка карточки вне буфера (\(sampled) точек)")
             return
@@ -522,22 +543,7 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
         // Доля закрашенных содержимым точек вдоль строки в центральной части
         // ширины карточки: срез снимка в фикстуре — синяя заливка.
         func paintedRatio(atY y: CGFloat) -> Double {
-            var sampled = 0
-            var painted = 0
-            var x = frame.minX + frame.width * 0.25
-            while x < frame.maxX - frame.width * 0.25 {
-                let px = Int(x * scaleX)
-                let py = Int((host.bounds.height - y) * scaleY)
-                if px >= 0, py >= 0, px < rep.pixelsWide, py < rep.pixelsHigh,
-                   let colour = rep.colorAt(x: px, y: py) {
-                    sampled += 1
-                    if colour.alphaComponent > 0.5, colour.blueComponent > 0.4,
-                       colour.blueComponent > colour.redComponent + 0.1 {
-                        painted += 1
-                    }
-                }
-                x += 2
-            }
+        let (sampled, painted) = sampleFixtureBlue(rep: rep, host: host, rect: inner, step: 2)
             return sampled > 0 ? Double(painted) / Double(sampled) : 0
         }
 

@@ -128,6 +128,19 @@ def duplicates(scope, label, window=6, floor=120):
     report(f'копипаста ({label})', merged, detail)
 
 
+# Осознанные исключения: длина без вложенности — не запутанность.
+#
+# `triggerCapture` и `renderNow` — линейные цепочки `guard`, где каждый шаг
+# зависит от предыдущего и читается сверху вниз. `update` в Zig — линейное
+# обновление модели. `onCommand` — плоская таблица разбора команд.
+# `testHundredFakeBackendLifecycles` — группа задач: вложенность там задаёт
+# сама модель конкурентности, а не логика теста.
+COMPLEXITY_EXEMPT = {
+    'triggerCapture', 'renderNow', 'update', 'onCommand',
+    'testHundredFakeBackendLifecycles',
+}
+
+
 def complexity():
     heavy = []
     for p in SOURCES + ZIG + TESTS:
@@ -138,6 +151,8 @@ def complexity():
             if len(parts) != 5 or parts[0] in ('максимум',) or line.startswith('-'):
                 continue
             name, code_lines, branches, cases, depth = parts[0], *map(int, parts[1:])
+            if name in COMPLEXITY_EXEMPT:
+                continue
             flat_table = depth <= 1 and cases == 0
             if flat_table:
                 continue

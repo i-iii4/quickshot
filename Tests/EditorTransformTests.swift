@@ -127,10 +127,7 @@ struct EditorTransformTests {
     }
 
     private static func topRedBottomBlueImage(width: Int, height: Int) -> CGImage {
-        let context = CGContext(data: nil, width: width, height: height,
-                                bitsPerComponent: 8, bytesPerRow: 0,
-                                space: CGColorSpaceCreateDeviceRGB(),
-                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        let context = makeTestContext(width: width, height: height)
         // В CG-контексте origin внизу: верхняя половина изображения — большие y.
         context.setFillColor(CGColor(red: 0, green: 0, blue: 1, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: width, height: height / 2))
@@ -172,10 +169,7 @@ struct EditorTransformTests {
     }
 
     private static func sampleImage(width: Int, height: Int) -> CGImage {
-        let context = CGContext(data: nil, width: width, height: height,
-                                bitsPerComponent: 8, bytesPerRow: 0,
-                                space: CGColorSpaceCreateDeviceRGB(),
-                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        let context = makeTestContext(width: width, height: height)
         context.setFillColor(NSColor.white.cgColor)
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         return context.makeImage()!
