@@ -73,6 +73,14 @@ fullscreen behavior remain explicit runtime release checks.
 
 ## Tray And Hub
 
+> **Хаб упразднён `TR-30` (19.08.2026), код удалён 23.08.2026.** Пункты
+> 1-3, 7 и 11 этого раздела описывают кнопку-пилюлю со счётчиком, которой
+> больше нет: вместе с ней ушли состояние «спрятано» и кнопки
+> «свернуть»/«развернуть». Актуальное поведение двух состояний — развёрнутая
+> лента и шкатулка — описано в `SYSTEM_REQUIREMENTS.md`, `TR-28`…`TR-32`.
+> Пункты про ховер-остров, приёмку нового снимка и геометрию ленты (4-6,
+> 8-10) остаются в силе: они про карточки, а не про хаб.
+
 1. Hub click toggles thumbnail collapse/expand.
 2. Manual collapse state and hover presentation are separate. Hovering the hub
    temporarily reveals a collapsed tray without changing what the next hub
