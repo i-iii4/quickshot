@@ -115,6 +115,7 @@ xcrun swiftc \
   Sources/CaptureSequence.swift \
   Sources/Clipboard.swift \
   Sources/CaptureArtifact.swift \
+  Sources/ImageContext.swift \
   Sources/CaptureTypes.swift \
   Sources/CoordinateMath.swift \
   Tests/CaptureArtifactTests.swift \
@@ -377,6 +378,7 @@ xcrun swiftc \
   Sources/HubTooltip.swift \
   Sources/WindowCaptureProtection.swift \
   Sources/AnnotationCanvasView.swift \
+  Sources/ImageContext.swift \
   Tests/EditorToolbarLiveTests.swift \
   "$NATIVE_UI_LIB" \
   -o "$TOOLBAR_LIVE_OUT"
@@ -409,6 +411,7 @@ xcrun swiftc \
   Sources/HubTooltip.swift \
   Sources/WindowCaptureProtection.swift \
   Sources/AnnotationCanvasView.swift \
+  Sources/ImageContext.swift \
   Tests/EditorTransformTests.swift \
   "$NATIVE_UI_LIB" \
   -o "$TRANSFORM_OUT"
@@ -441,6 +444,7 @@ xcrun swiftc \
   Sources/HubTooltip.swift \
   Sources/WindowCaptureProtection.swift \
   Sources/AnnotationCanvasView.swift \
+  Sources/ImageContext.swift \
   Tests/EditorDrawingTests.swift \
   "$NATIVE_UI_LIB" \
   -o "$DRAWING_OUT"
@@ -473,6 +477,7 @@ xcrun swiftc \
   Sources/HubTooltip.swift \
   Sources/WindowCaptureProtection.swift \
   Sources/AnnotationCanvasView.swift \
+  Sources/ImageContext.swift \
   Tests/EditorHistoryTests.swift \
   "$NATIVE_UI_LIB" \
   -o "$HISTORY_OUT"
@@ -505,6 +510,7 @@ xcrun swiftc \
   Sources/HubTooltip.swift \
   Sources/WindowCaptureProtection.swift \
   Sources/AnnotationCanvasView.swift \
+  Sources/ImageContext.swift \
   Tests/EndToEndScenarioTests.swift \
   "$NATIVE_UI_LIB" \
   -o "$SCENARIO_OUT"
@@ -529,6 +535,7 @@ xcrun swiftc \
   Sources/CaptureSequence.swift \
   Sources/Clipboard.swift \
   Sources/CaptureArtifact.swift \
+  Sources/ImageContext.swift \
   Sources/CaptureTypes.swift \
   Sources/CoordinateMath.swift \
   Sources/ScreenshotLibraryModel.swift \
@@ -598,6 +605,7 @@ xcrun swiftc \
   Sources/ThumbnailCollectionModel.swift \
   Sources/Clipboard.swift \
   Sources/CaptureArtifact.swift \
+  Sources/ImageContext.swift \
   Sources/CaptureTypes.swift \
   Sources/CoordinateMath.swift \
   Sources/CardSizing.swift \
@@ -688,6 +696,7 @@ xcrun swiftc \
   Sources/CaptureSequence.swift \
   Sources/Clipboard.swift \
   Sources/CaptureArtifact.swift \
+  Sources/ImageContext.swift \
   Sources/CaptureTypes.swift \
   Sources/CoordinateMath.swift \
   Sources/ScreenshotLibraryModel.swift \
@@ -784,6 +793,7 @@ xcrun swiftc \
   Sources/ThumbnailCollectionModel.swift \
   Sources/Clipboard.swift \
   Sources/CaptureArtifact.swift \
+  Sources/ImageContext.swift \
   Sources/CaptureTypes.swift \
   Sources/CoordinateMath.swift \
   Sources/CardSizing.swift \
@@ -1007,6 +1017,7 @@ xcrun swiftc \
   Sources/SelectionPresentationCoordinator.swift \
   Sources/CaptureWindowLevels.swift \
   Sources/SessionEscapeHotKey.swift \
+  Sources/HotKeyLifetime.swift \
   Sources/Overlay.swift \
   Tests/SelectionToolBehaviorTests.swift \
   -o "$SELECTION_OUT"

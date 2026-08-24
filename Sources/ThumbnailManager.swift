@@ -1847,17 +1847,8 @@ final class ThumbnailManager {
     }
 
     private func syncScrollModel(on screen: NSScreen) {
-        let vertical = axisIsVertical
-        let gap = ThumbStyle.gap
-        let lengths = items.map { vertical ? $0.cardSize.height : $0.cardSize.width }
-        let content = lengths.reduce(0, +) + gap * CGFloat(max(0, lengths.count - 1))
-        let geometry = viewportGeometry(on: screen)
-        let viewport = thumbnailTrayViewportLength(screenFrame: screen.frame,
-                                                   edge: geometry.edge,
-                                                   hubSize: geometry.hubSize,
-                                                   margin: geometry.margin,
-                                                   menuBarInset: menuBarInset(on: screen))
-        applyStripMetrics(content: content, viewport: viewport, last: lengths.last ?? 0)
+        let metrics = stripMetrics(on: screen)
+        applyStripMetrics(content: metrics.content, viewport: metrics.viewport, last: metrics.last)
         // Пока идёт жест или пружинный возврат, смещение может законно жить за
         // границей — мгновенный clamp здесь и делал резинку невидимой.
         if gestureCore.state.scrollGestureActive || scrollSettleAnimating {

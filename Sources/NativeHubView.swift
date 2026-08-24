@@ -823,13 +823,6 @@ final class NativeThumbnailButtonView: NativeSurfaceHostView {
     override var fittingSize: NSSize { measured }
     override var intrinsicContentSize: NSSize { measured }
 
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        let local = superview.map { convert(point, from: $0) } ?? point
-        guard !isHidden, alphaValue > 0.01, bounds.contains(local) else { return nil }
-        let inNative = convert(local, to: nativeView)
-        return nativeView.hasInteractiveButton(at: inNative) ? nativeView : nil
-    }
-
     override func layout() {
         super.layout()
         nativeView.frame = bounds
@@ -993,13 +986,6 @@ final class NativePinnedCopyButtonView: NativeSurfaceHostView {
 
     override var intrinsicContentSize: NSSize { fittingSize }
 
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        let local = superview.map { convert(point, from: $0) } ?? point
-        guard !isHidden, alphaValue > 0.01, bounds.contains(local) else { return nil }
-        let inNative = convert(local, to: nativeView)
-        return nativeView.hasInteractiveButton(at: inNative) ? nativeView : nil
-    }
-
     override func layout() {
         super.layout()
         nativeView.frame = bounds
@@ -1087,13 +1073,6 @@ final class NativeSettingsContentView: NativeSurfaceHostView {
 
     override var fittingSize: NSSize { measuredFittingSize }
     override var intrinsicContentSize: NSSize { fittingSize }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        let local = superview.map { convert(point, from: $0) } ?? point
-        guard !isHidden, alphaValue > 0.01, bounds.contains(local) else { return nil }
-        let inNative = convert(local, to: nativeView)
-        return nativeView.hasInteractiveButton(at: inNative) ? nativeView : nil
-    }
 
     override func layout() {
         super.layout()
@@ -1209,12 +1188,6 @@ final class NativeAnnotationToolbarSurface: NativeSurfaceHostView {
 
     /// Пустое место панели не крадёт клики: события получают только кнопки.
     /// Точка приходит в координатах супервью — контракт hitTest AppKit.
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        let local = superview.map { convert(point, from: $0) } ?? point
-        guard !isHidden, alphaValue > 0.01, bounds.contains(local) else { return nil }
-        let inNative = convert(local, to: nativeView)
-        return nativeView.hasInteractiveButton(at: inNative) ? nativeView : nil
-    }
 
     override func layout() {
         super.layout()

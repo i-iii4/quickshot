@@ -103,19 +103,37 @@ func thumbnailReflowOrigin(candidate: NSPoint,
 
 /// One finite display-linked clock for a discrete collection transaction. Visual channels
 /// derive their own curves from this raw progress, avoiding compounded easing and idle tails.
+/// Общая основа анимаций, ведомых кадрами дисплея: слабая ссылка на вью,
+/// сам `CADisplayLink` и пара замыканий кадра и завершения.
+///
+/// Оба аниматора трея — прогресс коллекции и пружина трея — держали это
+/// дословно одинаково, включая `cancel()` и снятие ссылки в `deinit`.
 @MainActor
-final class CollectionProgressAnimator: NSObject {
-    private weak var hostView: NSView?
-    private var link: CADisplayLink?
-    private var startedAt: CFTimeInterval = 0
-    private var duration: CFTimeInterval = 0
-    private var onFrame: ((CGFloat) -> Void)?
-    private var onDone: (() -> Void)?
+class DisplayLinkAnimator: NSObject {
+    fileprivate weak var hostView: NSView?
+    fileprivate var link: CADisplayLink?
+    fileprivate var onFrame: ((CGFloat) -> Void)?
+    fileprivate var onDone: (() -> Void)?
 
     init(hostView: NSView) {
         self.hostView = hostView
         super.init()
     }
+
+    func cancel() {
+        link?.invalidate()
+        link = nil
+        onFrame = nil
+        onDone = nil
+    }
+
+    isolated deinit { link?.invalidate() }
+}
+
+@MainActor
+final class CollectionProgressAnimator: DisplayLinkAnimator {
+    private var startedAt: CFTimeInterval = 0
+    private var duration: CFTimeInterval = 0
 
     func run(duration: CFTimeInterval,
              onFrame: @escaping (CGFloat) -> Void,
@@ -152,18 +170,10 @@ final class CollectionProgressAnimator: NSObject {
         completion?()
     }
 
-    func cancel() {
-        link?.invalidate()
-        link = nil
-        onFrame = nil
-        onDone = nil
-    }
-
 #if TESTING
     @MainActor static var debugStepCount = 0
 #endif
 
-    isolated deinit { link?.invalidate() }
 }
 
 struct ThumbnailTrayVisualState {
@@ -199,22 +209,13 @@ func thumbnailTrayVisualState(progress: CGFloat, reduceMotion: Bool) -> Thumbnai
 /// One display clock for the complete tray. Retargeting keeps both the current
 /// presentation value and velocity, so Hide/Show can reverse without a stop.
 @MainActor
-final class TrayProgressAnimator: NSObject {
-    private weak var hostView: NSView?
-    private var link: CADisplayLink?
+final class TrayProgressAnimator: DisplayLinkAnimator {
     private var value: CGFloat = 0
     private var velocity: CGFloat = 0
     private var target: CGFloat = 0
     private var angularFrequency: CGFloat = 1
     private var lastTimestamp: CFTimeInterval = 0
     private var deadline: CFTimeInterval = 0
-    private var onFrame: ((CGFloat) -> Void)?
-    private var onDone: (() -> Void)?
-
-    init(hostView: NSView) {
-        self.hostView = hostView
-        super.init()
-    }
 
     var presentationValue: CGFloat { trayClampedUnit(value) }
 
@@ -281,14 +282,6 @@ final class TrayProgressAnimator: NSObject {
         completion?()
     }
 
-    func cancel() {
-        link?.invalidate()
-        link = nil
-        onFrame = nil
-        onDone = nil
-    }
-
-    isolated deinit { link?.invalidate() }
 }
 
 /// Ось раскрытия колоды выбирается ЖЕСТОМ (`TR-38`): потянул вверх —

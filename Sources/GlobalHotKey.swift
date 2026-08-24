@@ -67,14 +67,7 @@ final class GlobalHotKey {
 
     /// Безопасно вызывать многократно; вызывать при завершении.
     func unregister() {
-        if let hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
-            self.hotKeyRef = nil
-        }
-        if let handlerRef {
-            RemoveEventHandler(handlerRef)
-            self.handlerRef = nil
-        }
+        releaseHotKey(&hotKeyRef, &handlerRef)
         onTrigger = nil
     }
 

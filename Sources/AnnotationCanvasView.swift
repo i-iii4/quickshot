@@ -799,13 +799,7 @@ final class AnnotationCanvasView: NSView {
         guard let image else { return nil }
         let width = image.width
         let height = image.height
-        guard let context = CGContext(data: nil,
-                                      width: width,
-                                      height: height,
-                                      bitsPerComponent: 8,
-                                      bytesPerRow: 0,
-                                      space: CGColorSpaceCreateDeviceRGB(),
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+        guard let context = makeRGBAContext(width: width, height: height) else {
             return nil
         }
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))

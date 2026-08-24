@@ -127,13 +127,7 @@ final class CaptureArtifact {
         let scale = CGFloat(maximumPixelDimension) / CGFloat(longest)
         let width = max(1, Int((CGFloat(image.width) * scale).rounded()))
         let height = max(1, Int((CGFloat(image.height) * scale).rounded()))
-        guard let context = CGContext(data: nil,
-                                      width: width,
-                                      height: height,
-                                      bitsPerComponent: 8,
-                                      bytesPerRow: 0,
-                                      space: CGColorSpaceCreateDeviceRGB(),
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+        guard let context = makeRGBAContext(width: width, height: height) else {
             return image
         }
         context.interpolationQuality = .high

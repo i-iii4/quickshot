@@ -43,14 +43,7 @@ final class SessionEscapeHotKey {
     }
 
     func unregister() {
-        if let hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
-            self.hotKeyRef = nil
-        }
-        if let handlerRef {
-            RemoveEventHandler(handlerRef)
-            self.handlerRef = nil
-        }
+        releaseHotKey(&hotKeyRef, &handlerRef)
         onEscape = nil
     }
 
