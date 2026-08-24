@@ -1408,6 +1408,41 @@ rg -F -q "AnnotationPalette.redaction" Sources/AnnotationRenderer.swift
 rg -F -q "func discardAll()" Sources/AnnotationSession.swift
 rg -F -q "editedImages.preparedImage(for: t.artifact.id)" Sources/ThumbnailManager.swift
 rg -F -q "sessions.discardAll()" Sources/ThumbnailManager.swift
+# `TR-35`: позицию ленты пишет ЕДИНСТВЕННАЯ воронка. Прямых присваиваний
+# `scrollModel.offset` и `detentDip` вне `writeModel`/`writePresented`/
+# `writeDip` быть не может — два источника позиции и давали рассинхрон.
+if output="$(awk '
+  /private func (writeModel|writePresented|writeDip)\(/ { inside = 1 }
+  inside && /^    \}$/ { inside = 0; next }
+  !inside && /(scrollModel\.offset|detentDip) = / { print FILENAME ":" NR ": " $0 }
+' Sources/ThumbnailManager.swift | rg -n .)"; then
+  echo "$output"
+  echo "TR-35 regression: tray position must be written only through the funnel." >&2
+  exit 1
+fi
+rg -F -q "private var presentedOffset: CGFloat { scrollModel.offset + detentDip }" Sources/ThumbnailManager.swift
+
+# `TR-3a`: порядок наложения задаёт раскладка, а не порядок добавления карточек.
+rg -F -q "stackOrder: band.zOrder" Sources/ThumbnailLayout.swift
+rg -F -q "var stackOrder: CGFloat = 0" Sources/ThumbnailLayout.swift
+
+# `TR-3b`: стопка целиком помещается в окно просмотра — верхний ярус упирается
+# в край окна и не выезжает за него.
+rg -F -q "min(viewportLength, farPark + e * CGFloat(depth) + e * phase)" Sources/TrayScrollModel.swift
+
+# `TR-27`: «стопка собрана у кнопки» — самостоятельное состояние, а не край
+# прокрутки: клик по кнопке ведёт по ступеням.
+rg -F -q "detent.settleTarget(for: scrollModel)" Sources/ThumbnailManager.swift
+
+# `TR-31`: подложка шкатулки — системный материал с пином активного вида.
+rg -F -q "NSVisualEffectView" Sources/TrayCaseView.swift
+rg -F -q "state = .active" Sources/TrayCaseView.swift
+
+# `TR-32` НЕ РЕАЛИЗОВАНО: шкатулка появляется мгновенно, через `isHidden`, а
+# требование описывает растекание маски из центра стопки. Проверки нет
+# намеренно — она утверждала бы несуществующее. Отмечено в
+# SYSTEM_REQUIREMENTS.md.
+
 # Прокрутка непрерывная, а не пошаговая; сворачивание требует намерения.
 # Механика жеста живёт в TrayGestureCore: колесо шагает по дельте без
 # резинки, жест идёт через защёлку. Проверка переехала сюда вместе с кодом —

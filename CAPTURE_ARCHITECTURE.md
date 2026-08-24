@@ -111,6 +111,7 @@ rewrite.
 1. A complete mouse-down/drag/mouse-up gesture can finish before the frozen
    backdrop is ready. `PreOverlayMouseTracker` then returns no seed because the
    button is no longer held, and the user's selection is lost.
+   (Снято: трекер удалён, жест доигрывается из `CaptureGestureBuffer`.)
 2. Every card prepares a clipboard payload while automatic clipboard delivery
    prepares another. Temporary PNG files have no owner or cleanup policy, and
    decoded images plus PNG/TIFF payloads grow without a resource budget.
@@ -339,7 +340,8 @@ Exit criteria:
 
 ### Phase 1 - Repair Input And Session Lifecycle (Complete)
 
-Scope:
+Scope (выполнено; `PreOverlayMouseTracker` удалён, его место занял
+`CaptureGestureBuffer` — набор `CaptureGestureBufferTests`):
 
 - replace `PreOverlayMouseTracker` with the typed gesture buffer;
 - register session-scoped Carbon Escape immediately at capture acceptance;

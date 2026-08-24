@@ -231,6 +231,57 @@ complexity()
 placeholders()
 silent_checks()
 formatting()
+# Требования, чьё покрытие держится не на ссылке `TR-N` в проверке, а на
+# смысле: они проверяются наборами по существу. Список ведётся вручную —
+# иначе ось «покрытие» превращается в требование расставить метки.
+COVERAGE_BY_MEANING = {
+    'TR-21', 'TR-22',   # ховер и кнопки карточки — TrayHoverRegionTests
+    'TR-18', 'TR-19', 'TR-20',   # раскладка ленты — ThumbnailLayoutTests
+    'TR-32',            # НЕ РЕАЛИЗОВАНО: проверять нечего, отмечено в требованиях
+}
+
+
+def requirement_coverage():
+    req = open('SYSTEM_REQUIREMENTS.md').read()
+    declared = sorted(set(re.findall(r'`(TR-\d+[a-z]?)`', req)),
+                      key=lambda s: (int(re.search(r'\d+', s).group()), s))
+    retired = set(re.findall(r'`(TR-\d+[a-z]?)`[^\n]*(?:снято|УПРАЗДН|упразд)', req))
+    checks = ' '.join(open(f).read() for f in TESTS) + open('scripts/test.sh').read()
+    missing = [tr for tr in declared
+               if tr not in retired and tr not in COVERAGE_BY_MEANING and tr not in checks]
+    report('требования без проверки', missing)
+
+
+def documentation_drift():
+    code = ' '.join(open(f).read() for f in ALL + glob.glob('scripts/*.sh') + ZIG)
+    stale = []
+    for d in glob.glob('*.md'):
+        if d == 'DEVLOG.md':
+            continue        # журнал историчен по определению
+        text = open(d).read()
+        for m in re.findall(r'`([A-Z][A-Za-z]+\.swift)`', text):
+            import os
+            if not os.path.exists('Sources/' + m) and not os.path.exists('Tests/' + m):
+                stale.append(f"{d}: файл {m}")
+    report('документация ссылается на удалённые файлы', stale)
+
+
+def cross_language_rules():
+    zig = ' '.join(open(f).read() for f in ZIG)
+    swift = ' '.join(open(f).read() for f in SOURCES)
+    shared = []
+    for name, value in re.findall(r'const (\w+)(?:: \w+)? = ([\d.]+);', zig):
+        if len(value) < 2:
+            continue
+        if re.search(r'\b' + re.escape(value) + r'\b', swift):
+            shared.append(f"{name} = {value}")
+    report('одно правило в двух языках', shared)
+
+
+requirement_coverage()
+documentation_drift()
+cross_language_rules()
+
 print()
 if failures:
     print(f"итог: осей с находками — {len(failures)}: {', '.join(failures)}")
