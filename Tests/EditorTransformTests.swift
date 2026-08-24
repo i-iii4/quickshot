@@ -154,20 +154,6 @@ struct EditorTransformTests {
         canvas.mouseUp(with: mouse(.leftMouseUp, at: end, in: window))
     }
 
-    @MainActor private static func mouse(_ type: NSEvent.EventType,
-                                         at point: CGPoint,
-                                         in window: NSWindow) -> NSEvent {
-        NSEvent.mouseEvent(with: type,
-                           location: point,
-                           modifierFlags: [],
-                           timestamp: ProcessInfo.processInfo.systemUptime,
-                           windowNumber: window.windowNumber,
-                           context: nil,
-                           eventNumber: 0,
-                           clickCount: 1,
-                           pressure: 1)!
-    }
-
     private static func sampleImage(width: Int, height: Int) -> CGImage {
         let context = makeTestContext(width: width, height: height)
         context.setFillColor(NSColor.white.cgColor)

@@ -160,18 +160,6 @@ private final class ThumbnailWindowLiveClickTests: NSObject, NSApplicationDelega
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         return context.makeImage()
     }
-
-    private func spin(_ seconds: TimeInterval) {
-        RunLoop.current.run(until: Date().addingTimeInterval(seconds))
-    }
-
-    private func spinUntil(_ timeout: TimeInterval, condition: () -> Bool) {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if condition() { return }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
-        }
-    }
 }
 
 @main

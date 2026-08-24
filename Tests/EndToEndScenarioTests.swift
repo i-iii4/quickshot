@@ -187,33 +187,11 @@ struct EndToEndScenarioTests {
         var brightness: Int { (red + green + blue) / 3 }
     }
 
-    private static func bytes(_ image: CGImage) -> [UInt8] {
-        var buffer = [UInt8](repeating: 0, count: image.width * image.height * 4)
-        buffer.withUnsafeMutableBytes { raw in
-            let context = CGContext(data: raw.baseAddress, width: image.width, height: image.height,
-                                    bitsPerComponent: 8, bytesPerRow: image.width * 4,
-                                    space: CGColorSpaceCreateDeviceRGB(),
-                                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        }
-        return buffer
-    }
-
     private static func pixel(_ image: CGImage, x: Int, y: Int) -> Pixel {
-        let data = bytes(image)
+        let data = imageBytes(image)
         let index = (y * image.width + x) * 4
         return Pixel(red: Int(data[index]), green: Int(data[index + 1]),
                      blue: Int(data[index + 2]), alpha: Int(data[index + 3]))
-    }
-
-    private static func inkPixels(_ image: CGImage) -> Int {
-        let data = bytes(image)
-        var count = 0
-        for index in stride(from: 0, to: data.count, by: 4) {
-            let isWhite = data[index] > 250 && data[index + 1] > 250 && data[index + 2] > 250
-            if !isWhite { count += 1 }
-        }
-        return count
     }
 
     private struct Failure: Error, CustomStringConvertible {

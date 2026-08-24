@@ -87,6 +87,20 @@ def uses(t, name, skip):
 # собственной точкой входа, и `run-one.py` собирает его минимальным списком
 # файлов. Три строки проверки и тип ошибки внутри набора — цена этой
 # независимости, а не копипаста.
+# Неустранимое по правилам языка и по устройству API.
+#
+# `required init?(coder:)` обязан объявить каждый подкласс со своим
+# инициализатором — вынести его в основу нельзя. Рядом с ним стоят две
+# строки размеров, и окно проверки захватывает их заодно.
+#
+# Два вызова раскладки отличаются функцией, а не логикой: общий у них только
+# список аргументов, и свести их можно лишь сломав сигнатуры свободных
+# функций раскладки.
+LANGUAGE_IDIOMS = (
+    'required init?(coder: NSCoder)',
+    'cardHeights: items.map(\\.cardHeight)',
+)
+
 TEST_IDIOMS = (
     'func require(', 'struct Failure: Error', 'static func run(',
     'NSApplication.shared.setActivationPolicy',
@@ -94,7 +108,7 @@ TEST_IDIOMS = (
 
 
 def is_idiom(chunk):
-    return any(mark in chunk for mark in TEST_IDIOMS)
+    return any(mark in chunk for mark in TEST_IDIOMS + LANGUAGE_IDIOMS)
 
 
 def duplicates(scope, label, window=6, floor=120):

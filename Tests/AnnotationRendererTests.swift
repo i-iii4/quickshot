@@ -161,24 +161,8 @@ struct AnnotationRendererTests {
         var brightness: Int { (red + green + blue) / 3 }
     }
 
-    private static func bytes(_ image: CGImage) -> [UInt8] {
-        let width = image.width, height = image.height
-        var buffer = [UInt8](repeating: 0, count: width * height * 4)
-        buffer.withUnsafeMutableBytes { raw in
-            let context = CGContext(data: raw.baseAddress,
-                                    width: width,
-                                    height: height,
-                                    bitsPerComponent: 8,
-                                    bytesPerRow: width * 4,
-                                    space: CGColorSpaceCreateDeviceRGB(),
-                                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        }
-        return buffer
-    }
-
     private static func pixel(_ image: CGImage, at point: CGPoint) -> Pixel {
-        let data = bytes(image)
+        let data = imageBytes(image)
         let index = (Int(point.y) * image.width + Int(point.x)) * 4
         return Pixel(red: Int(data[index]),
                      green: Int(data[index + 1]),
@@ -186,18 +170,8 @@ struct AnnotationRendererTests {
                      alpha: Int(data[index + 3]))
     }
 
-    private static func inkPixels(_ image: CGImage) -> Int {
-        let data = bytes(image)
-        var count = 0
-        for index in stride(from: 0, to: data.count, by: 4) {
-            let isWhite = data[index] > 250 && data[index + 1] > 250 && data[index + 2] > 250
-            if !isWhite { count += 1 }
-        }
-        return count
-    }
-
     private static func inkRows(_ image: CGImage, column: Int) -> Int {
-        let data = bytes(image)
+        let data = imageBytes(image)
         var rows = 0
         for y in 0..<image.height {
             let index = (y * image.width + column) * 4

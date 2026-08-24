@@ -665,6 +665,7 @@ xcrun swiftc \
   -framework UniformTypeIdentifiers \
   Sources/Clipboard.swift \
   Tests/ClipboardDeliveryTests.swift \
+  Tests/ProcessTestSupport.swift \
   Tests/ImageTestSupport.swift \
   -o "$CLIPBOARD_OUT"
 
@@ -922,6 +923,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/TrayCaseView.swift \
   Sources/TrayHaptics.swift \
   Tests/ThumbnailWindowLiveClickTests.swift \
+  Tests/LiveUITestSupport.swift \
   Tests/ImageTestSupport.swift \
   Tests/EditorTestSupport.swift \
   "$NATIVE_UI_LIB" \

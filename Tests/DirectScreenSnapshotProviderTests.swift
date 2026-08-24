@@ -251,16 +251,8 @@ struct DirectScreenSnapshotProviderTests {
     }
 
     private static func solidImage(width: Int, height: Int, red: CGFloat) throws -> CGImage {
-        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
-              let context = CGContext(data: nil,
-                                      width: width,
-                                      height: height,
-                                      bitsPerComponent: 8,
-                                      bytesPerRow: 0,
-                                      space: colorSpace,
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-            throw TestFailure("Could not create test bitmap")
-        }
+        let context = try sRGBContext(width: width, height: height,
+                                      failure: "Could not create test bitmap")
         context.setFillColor(CGColor(red: red, green: 0.2, blue: 0.3, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         guard let image = context.makeImage() else {
@@ -337,16 +329,8 @@ private final class CaptureRecorder: @unchecked Sendable {
     }
 
     private func makeImage(width: Int, height: Int, red: CGFloat) throws -> CGImage {
-        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
-              let context = CGContext(data: nil,
-                                      width: width,
-                                      height: height,
-                                      bitsPerComponent: 8,
-                                      bytesPerRow: 0,
-                                      space: colorSpace,
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-            throw TestFailure("Could not create recorder bitmap")
-        }
+        let context = try sRGBContext(width: width, height: height,
+                                      failure: "Could not create recorder bitmap")
         context.setFillColor(CGColor(red: red, green: 0, blue: 0, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         guard let image = context.makeImage() else {
@@ -359,4 +343,20 @@ private final class CaptureRecorder: @unchecked Sendable {
 private struct TestFailure: Error, CustomStringConvertible {
     let description: String
     init(_ description: String) { self.description = description }
+}
+
+/// Растр sRGB для проверок провайдера: заводился дважды дословно, отличалось
+/// только сообщение об ошибке.
+private func sRGBContext(width: Int, height: Int, failure: String) throws -> CGContext {
+    guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+          let context = CGContext(data: nil,
+                                  width: width,
+                                  height: height,
+                                  bitsPerComponent: 8,
+                                  bytesPerRow: 0,
+                                  space: colorSpace,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+        throw TestFailure(failure)
+    }
+    return context
 }

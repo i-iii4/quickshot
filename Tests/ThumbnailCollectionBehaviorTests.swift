@@ -109,18 +109,7 @@ struct ThumbnailCollectionBehaviorTests {
         manager: ThumbnailManager,
         store: CaptureArtifactStore
     ) {
-        guard let screen = NSScreen.main else { throw Failure("No screen available") }
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        guard let context = CGContext(data: nil,
-                                      width: 320,
-                                      height: 180,
-                                      bitsPerComponent: 8,
-                                      bytesPerRow: 320 * 4,
-                                      space: colorSpace,
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
-              let image = context.makeImage() else {
-            throw Failure("Could not create test image")
-        }
+        let (screen, image) = try makeScreenAndImage()
         let sequence = CaptureSequence(rawValue: UInt64.random(in: 1...UInt64.max))
         let store = CaptureArtifactStore(
             rootURL: FileManager.default.temporaryDirectory
@@ -176,18 +165,7 @@ struct ThumbnailCollectionBehaviorTests {
     }
 
     private static func makeThumbnail() throws -> ThumbnailWindow {
-        guard let screen = NSScreen.main else { throw Failure("No screen available") }
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        guard let context = CGContext(data: nil,
-                                      width: 320,
-                                      height: 180,
-                                      bitsPerComponent: 8,
-                                      bytesPerRow: 320 * 4,
-                                      space: colorSpace,
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
-              let image = context.makeImage() else {
-            throw Failure("Could not create test image")
-        }
+        let (screen, image) = try makeScreenAndImage()
         let sequence = CaptureSequence(rawValue: UInt64.random(in: 1...UInt64.max))
         let store = CaptureArtifactStore(
             rootURL: FileManager.default.temporaryDirectory
@@ -220,4 +198,22 @@ struct ThumbnailCollectionBehaviorTests {
         let description: String
         init(_ description: String) { self.description = description }
     }
+
+    /// Экран и тестовое изображение 320×180: заводились дословно одинаково в
+    /// двух фикстурах набора.
+    private static func makeScreenAndImage() throws -> (NSScreen, CGImage) {
+        guard let screen = NSScreen.main else { throw Failure("No screen available") }
+        guard let context = CGContext(data: nil,
+                                      width: 320,
+                                      height: 180,
+                                      bitsPerComponent: 8,
+                                      bytesPerRow: 320 * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let image = context.makeImage() else {
+            throw Failure("Could not create test image")
+        }
+        return (screen, image)
+    }
+
 }

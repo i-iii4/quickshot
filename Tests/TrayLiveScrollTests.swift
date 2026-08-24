@@ -765,21 +765,11 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
                       phase: CGScrollPhase,
                       at windowPoint: NSPoint,
                       window: NSWindow) {
-        guard let cg = CGEvent(scrollWheelEvent2Source: nil,
-                               units: .pixel,
-                               wheelCount: 1,
-                               wheel1: Int32(delta),
-                               wheel2: 0,
-                               wheel3: 0) else { return }
-        cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
-        cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-        let screenPoint = window.convertPoint(toScreen: windowPoint)
-        // CGEvent живёт в экранных координатах с началом в верхнем левом углу.
-        let flipped = CGPoint(x: screenPoint.x,
-                              y: (NSScreen.screens.first?.frame.maxY ?? 0) - screenPoint.y)
-        cg.location = flipped
-        guard let event = NSEvent(cgEvent: cg) else { return }
-        window.sendEvent(event)
+        postScroll(delta: delta,
+                   scrollPhase: Int64(phase.rawValue),
+                   momentumPhase: 0,
+                   at: windowPoint,
+                   window: window)
     }
 
     /// Инерционное событие: пальцы уже отпущены, фаза жеста пуста.
@@ -867,18 +857,6 @@ private final class TrayLiveScrollTests: NSObject, NSApplicationDelegate {
         }
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         return context.makeImage()
-    }
-
-    private func spin(_ seconds: TimeInterval) {
-        RunLoop.current.run(until: Date().addingTimeInterval(seconds))
-    }
-
-    private func spinUntil(_ timeout: TimeInterval, condition: () -> Bool) {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if condition() { return }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
-        }
     }
 }
 

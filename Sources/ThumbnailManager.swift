@@ -599,9 +599,7 @@ final class ThumbnailManager {
             inserted.hide()
             return
         }
-        inserted.prepareInsertion(at: toLocal(slot.origin),
-                                  from: collectionDirectionalOffset(),
-                                  reduceMotion: reduceMotion)
+        prepareInsertion(of: inserted, at: slot.origin, reduceMotion: reduceMotion)
         // Новая карточка тоже влетает сбоку: контур шкатулки берёт её место,
         // а не текущее положение.
         enteringTargets[ObjectIdentifier(inserted)] = thumbnailVisibleFrame(
@@ -646,9 +644,7 @@ final class ThumbnailManager {
             inserted.hide()
             return
         }
-        inserted.prepareInsertion(at: toLocal(slot.origin),
-                                  from: collectionDirectionalOffset(),
-                                  reduceMotion: reduceMotion)
+        prepareInsertion(of: inserted, at: slot.origin, reduceMotion: reduceMotion)
         runCollectionMotion(duration: reduceMotion ? TrayAnim.reducedTransition : TrayAnim.insertion,
                             onFrame: { [weak inserted] progress in
             inserted?.applyInsertion(progress: progress, reduceMotion: reduceMotion)
@@ -875,6 +871,16 @@ final class ThumbnailManager {
         trayProgress = 0
         host.orderOut(nil)
         refreshHostPointerRouting()
+    }
+
+    /// Карточка влетает со стороны сбора: одна и та же подготовка и у вставки
+    /// в ленту, и у предпросмотра свёрнутого трея.
+    private func prepareInsertion(of item: ThumbnailWindow,
+                                  at origin: NSPoint,
+                                  reduceMotion: Bool) {
+        item.prepareInsertion(at: toLocal(origin),
+                              from: collectionDirectionalOffset(),
+                              reduceMotion: reduceMotion)
     }
 
     private func collectionDirectionalOffset() -> NSPoint {

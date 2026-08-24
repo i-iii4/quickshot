@@ -94,18 +94,6 @@ struct EditorHistoryTests {
                                          cornerRadius: 0))
     }
 
-    @MainActor private static func hostWindow(for canvas: AnnotationCanvasView) -> NSWindow {
-        let window = NSWindow(contentRect: canvas.frame, styleMask: [.borderless],
-                              backing: .buffered, defer: false)
-        let root = NSView(frame: canvas.frame)
-        window.contentView = root
-        root.addSubview(canvas)
-        window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
-        window.orderFrontRegardless()
-        root.layoutSubtreeIfNeeded()
-        return window
-    }
-
     @MainActor private static func drag(_ canvas: AnnotationCanvasView,
                                         from start: CGPoint,
                                         to end: CGPoint,
@@ -127,20 +115,6 @@ struct EditorHistoryTests {
         let inWindow = canvas.convert(point, to: nil)
         canvas.mouseDown(with: mouse(.leftMouseDown, at: inWindow, in: window))
         canvas.mouseUp(with: mouse(.leftMouseUp, at: inWindow, in: window))
-    }
-
-    @MainActor private static func mouse(_ type: NSEvent.EventType,
-                                         at point: CGPoint,
-                                         in window: NSWindow) -> NSEvent {
-        NSEvent.mouseEvent(with: type,
-                           location: point,
-                           modifierFlags: [],
-                           timestamp: ProcessInfo.processInfo.systemUptime,
-                           windowNumber: window.windowNumber,
-                           context: nil,
-                           eventNumber: 0,
-                           clickCount: 1,
-                           pressure: 1)!
     }
 
     private struct Failure: Error, CustomStringConvertible {

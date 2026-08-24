@@ -163,18 +163,6 @@ struct EditorDrawingTests {
         return object
     }
 
-    @MainActor private static func hostWindow(for canvas: AnnotationCanvasView) -> NSWindow {
-        let window = NSWindow(contentRect: canvas.frame, styleMask: [.borderless],
-                              backing: .buffered, defer: false)
-        let root = NSView(frame: canvas.frame)
-        window.contentView = root
-        root.addSubview(canvas)
-        window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
-        window.orderFrontRegardless()
-        root.layoutSubtreeIfNeeded()
-        return window
-    }
-
     @MainActor private static func click(_ canvas: AnnotationCanvasView,
                                          at point: CGPoint,
                                          in window: NSWindow,
