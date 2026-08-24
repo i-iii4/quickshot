@@ -31,8 +31,6 @@ private enum NativeHubMetrics {
     }
 }
 
-
-
 /// A finite, critically damped reveal. Retargeting keeps the presentation
 /// velocity, while the House fast token remains a hard perceptual deadline.
 @MainActor
@@ -199,7 +197,6 @@ private final class NativeHubRenderView: NSView {
     private var accessibilityObserver: NSObjectProtocol?
 
     override var isFlipped: Bool { true }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override init(frame frameRect: NSRect) {
         nativeApp = native_sdk_app_create()
@@ -222,7 +219,10 @@ private final class NativeHubRenderView: NSView {
         syncSystemAppearance()
     }
 
-    required init?(coder: NSCoder) { fatalError() }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    // Клик по неактивной панели должен срабатывать сразу, без активации.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     isolated deinit {
         if let accessibilityObserver {
@@ -260,9 +260,6 @@ private final class NativeHubRenderView: NSView {
         addTrackingArea(area)
         trackingArea = area
     }
-
-
-
 
     func setSurface(_ surface: NativeControlSurface) {
         guard self.surface != surface else { return }
@@ -380,8 +377,6 @@ private final class NativeHubRenderView: NSView {
         totalRenderDuration += CACurrentMediaTime() - startedAt
         onRendered?()
     }
-
-
 
     /// Счётчик снимков для панели шкатулки (`TR-30`).
     func setCount(_ count: Int) {
@@ -528,7 +523,6 @@ private final class NativeHubRenderView: NSView {
         hoverClearWorkItem = nil
     }
 
-
     private func clearHoverNow() {
         guard hoveredNodeID != nil else { return }
         hoveredNodeID = nil
@@ -590,7 +584,6 @@ private final class NativeHubRenderView: NSView {
         invalidateRender()
     }
 
-
     private func forwardPointerMove(_ point: NSPoint) {
         guard let target = button(at: point) else {
             scheduleHoverClear()
@@ -612,7 +605,6 @@ private final class NativeHubRenderView: NSView {
         sendCommand("ui.\(channel.rawValue):\(action.rawValue)")
         onInteractionChanged?(channel, action)
     }
-
 
     private func actionForButton(identifier: String, title: String) -> NativeHubPressedButton {
         switch identifier {
@@ -713,7 +705,6 @@ private final class NativeHubRenderView: NSView {
     }
 }
 
-
 extension NativeSDKWidgetSemantics {
     static var empty: NativeSDKWidgetSemantics {
         NativeSDKWidgetSemantics(id: 0,
@@ -750,11 +741,50 @@ extension NativeSDKWidgetSemantics {
     }
 }
 
-
-
 /// Одиночная кнопка карточки (`TR-28`): крестик и копирование разнесены по
 /// верхним углам, поэтому каждая живёт своим вью со своей поверхностью.
-final class NativeThumbnailButtonView: NSView {
+/// Общая основа поверхностей нативного UI.
+///
+/// Пять поверхностей — кнопки миниатюры, панель шкатулки, кнопка
+/// закреплённого окна, настройки и панель редактора — повторяли этот
+/// boilerplate дословно: своя вью-рендерер, попадание мыши только по
+/// интерактивной кнопке, отказ от `init(coder:)` и отладочные снимки.
+///
+/// Не `final`: наследуется. Размеры, собственный `init` и раскладку каждая
+/// поверхность задаёт сама — они у всех разные.
+class NativeSurfaceHostView: NSView {
+    fileprivate let nativeView = NativeHubRenderView(frame: .zero)
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    // Клик по неактивной панели должен срабатывать сразу, без активации.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+    }
+
+    /// Мышь ловит только настоящая кнопка: прозрачные места поверхности
+    /// пропускают клик дальше.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = superview.map { convert(point, from: $0) } ?? point
+        guard !isHidden, alphaValue > 0.01, bounds.contains(local) else { return nil }
+        let inNative = convert(local, to: nativeView)
+        return nativeView.hasInteractiveButton(at: inNative) ? nativeView : nil
+    }
+
+#if TESTING
+    func debugButtons() -> [NativeControlDebugButtonSnapshot] {
+        nativeDebugButtons(nativeView, in: self)
+    }
+
+    func debugHoverButton(title: String) {
+        nativeDebugHover(title: title, nativeView: nativeView)
+    }
+#endif
+}
+
+final class NativeThumbnailButtonView: NativeSurfaceHostView {
     enum Kind {
         case copy
         case dismiss
@@ -763,7 +793,6 @@ final class NativeThumbnailButtonView: NSView {
 
     var onPress: (() -> Void)?
 
-    private let nativeView = NativeHubRenderView(frame: .zero)
     private let kind: Kind
     private var measured = NSSize(width: NativeHubMetrics.height,
                                   height: NativeHubMetrics.height)
@@ -788,11 +817,11 @@ final class NativeThumbnailButtonView: NSView {
         measured = nativeView.measureButtonContentSize()
     }
 
-    required init?(coder: NSCoder) { fatalError() }
+    // Требование языка: подкласс со своим инициализатором обязан объявить и этот.
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override var fittingSize: NSSize { measured }
     override var intrinsicContentSize: NSSize { measured }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = superview.map { convert(point, from: $0) } ?? point
@@ -836,14 +865,6 @@ final class NativeThumbnailButtonView: NSView {
         return "nativeFrame=\(nativeView.frame) buttonFrame=\(frame) hidden=\(isHidden) alpha=\(alphaValue) nodes=\(nodes.map(\.title))"
     }
 
-    func debugButtons() -> [NativeControlDebugButtonSnapshot] {
-        nativeDebugButtons(nativeView, in: self)
-    }
-
-    func debugHoverButton(title: String) {
-        nativeDebugHover(title: title, nativeView: nativeView)
-    }
-
     func debugPixel(at point: NSPoint) -> UInt32 {
         nativeView.debugPixel(at: point)
     }
@@ -853,12 +874,11 @@ final class NativeThumbnailButtonView: NSView {
 /// Панель шкатулки (`TR-30`): закрыть всё, копировать всё, счётчик снимков.
 /// Рисуется нативной поверхностью `case_panel`, фон прозрачный — подложку даёт
 /// сама шкатулка.
-final class NativeCasePanelView: NSView {
+final class NativeCasePanelView: NativeSurfaceHostView {
     var onDeleteAll: (() -> Void)?
     var onCopyAll: (() -> Void)?
     var onSaveAll: (() -> Void)?
 
-    private let nativeView = NativeHubRenderView(frame: .zero)
     private var measured = NSSize(width: 120, height: 28)
 
     override init(frame frameRect: NSRect) {
@@ -876,6 +896,7 @@ final class NativeCasePanelView: NSView {
         setCount(0)
     }
 
+    // Требование языка: подкласс со своим инициализатором обязан объявить и этот.
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     func setCount(_ count: Int) {
@@ -924,7 +945,6 @@ final class NativeCasePanelView: NSView {
 
     /// Трей живёт в неактивном окне-панели: без этого первый клик уходил бы
     /// в активацию окна, а кнопка срабатывала бы лишь со второго.
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     /// Мышь ловится только кнопками: остальная площадь панели принадлежит
     /// подложке шкатулки.
@@ -943,14 +963,12 @@ final class NativeCasePanelView: NSView {
     }
 
     #if TESTING
-    func debugButtons() -> [NativeControlDebugButtonSnapshot] { nativeDebugButtons(nativeView, in: self) }
     #endif
 }
 
-final class NativePinnedCopyButtonView: NSView {
+final class NativePinnedCopyButtonView: NativeSurfaceHostView {
     var onCopy: (() -> Void)?
 
-    private let nativeView = NativeHubRenderView(frame: .zero)
     private var measuredFittingSize = NSSize(width: NativeHubMetrics.height * 2,
                                              height: NativeHubMetrics.height)
 
@@ -966,15 +984,14 @@ final class NativePinnedCopyButtonView: NSView {
         refreshFittingSize()
     }
 
-    required init?(coder: NSCoder) { fatalError() }
+    // Требование языка: подкласс со своим инициализатором обязан объявить и этот.
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override var fittingSize: NSSize {
         measuredFittingSize
     }
 
     override var intrinsicContentSize: NSSize { fittingSize }
-
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = superview.map { convert(point, from: $0) } ?? point
@@ -997,13 +1014,6 @@ final class NativePinnedCopyButtonView: NSView {
     }
 
 #if TESTING
-    func debugButtons() -> [NativeControlDebugButtonSnapshot] {
-        nativeDebugButtons(nativeView, in: self)
-    }
-
-    func debugHoverButton(title: String) {
-        nativeDebugHover(title: title, nativeView: nativeView)
-    }
 
     func debugPixel(at point: NSPoint) -> UInt32 {
         nativeView.debugPixel(at: convert(point, to: nativeView))
@@ -1021,13 +1031,12 @@ final class NativePinnedCopyButtonView: NSView {
     }
 }
 
-final class NativeSettingsContentView: NSView {
+final class NativeSettingsContentView: NativeSurfaceHostView {
     var onPositionSelected: ((String) -> Void)?
     var onRetentionSelected: ((String) -> Void)?
     var onAutosaveChanged: ((Bool) -> Void)?
     var onOpenFolder: (() -> Void)?
 
-    private let nativeView = NativeHubRenderView(frame: .zero)
     private var selectedPosition = "right"
     private var selectedRetention = "week"
     private var autosaveEnabled = true
@@ -1073,11 +1082,11 @@ final class NativeSettingsContentView: NSView {
                                      height: contentSize.height)
     }
 
-    required init?(coder: NSCoder) { fatalError() }
+    // Требование языка: подкласс со своим инициализатором обязан объявить и этот.
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override var fittingSize: NSSize { measuredFittingSize }
     override var intrinsicContentSize: NSSize { fittingSize }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = superview.map { convert(point, from: $0) } ?? point
@@ -1147,13 +1156,6 @@ final class NativeSettingsContentView: NSView {
     }
 
 #if TESTING
-    func debugButtons() -> [NativeControlDebugButtonSnapshot] {
-        nativeDebugButtons(nativeView, in: self)
-    }
-
-    func debugHoverButton(title: String) {
-        nativeDebugHover(title: title, nativeView: nativeView)
-    }
 
     func debugSetAppearance(dark: Bool, highContrast: Bool = false, reduceMotion: Bool = false) {
         nativeView.debugSetAppearance(dark: dark, highContrast: highContrast, reduceMotion: reduceMotion)
@@ -1168,10 +1170,9 @@ final class NativeSettingsContentView: NSView {
 /// Поверхность панели инструментов: Native SDK владеет геометрией, hover,
 /// нажатием и типизированной диспетчеризацией.
 @MainActor
-final class NativeAnnotationToolbarSurface: NSView {
+final class NativeAnnotationToolbarSurface: NativeSurfaceHostView {
     var onCommand: ((AnnotationToolbarView.Command) -> Void)?
 
-    private let nativeView = NativeHubRenderView(frame: .zero)
     private var measuredFittingSize = NSSize(width: 720, height: 40)
     private var selectedTool: AnnotationTool = .select
     private var isCompact = false
@@ -1200,11 +1201,11 @@ final class NativeAnnotationToolbarSurface: NSView {
         remeasure()
     }
 
-    required init?(coder: NSCoder) { fatalError() }
+    // Требование языка: подкласс со своим инициализатором обязан объявить и этот.
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override var fittingSize: NSSize { measuredFittingSize }
     override var intrinsicContentSize: NSSize { fittingSize }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     /// Пустое место панели не крадёт клики: события получают только кнопки.
     /// Точка приходит в координатах супервью — контракт hitTest AppKit.
@@ -1423,14 +1424,6 @@ final class NativeAnnotationToolbarSurface: NSView {
 
 #if TESTING
     var debugRenderedSize: NSSize { nativeView.debugRenderedSize }
-
-    func debugButtons() -> [NativeControlDebugButtonSnapshot] {
-        nativeDebugButtons(nativeView, in: self)
-    }
-
-    func debugHoverButton(title: String) {
-        nativeDebugHover(title: title, nativeView: nativeView)
-    }
 #endif
 }
 
