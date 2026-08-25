@@ -1408,6 +1408,18 @@ rg -F -q "AnnotationPalette.redaction" Sources/AnnotationRenderer.swift
 rg -F -q "func discardAll()" Sources/AnnotationSession.swift
 rg -F -q "editedImages.preparedImage(for: t.artifact.id)" Sources/ThumbnailManager.swift
 rg -F -q "sessions.discardAll()" Sources/ThumbnailManager.swift
+# `TR-5`: новый снимок НЕ сворачивает раскрытую ленту. Признак «лента была
+# сжата» обязан смотреть на положение у упора, а не на прокручиваемость:
+# `maximumOffset > 0.5` истинно у любой ленты из двух снимков, и раскрытая
+# лента собиралась от каждого нового кадра. Баг чинился 21.08.2026 и вернулся
+# при откате 22.08.2026 — проверка держит исправление на месте.
+rg -F -q "let wasCompressed = scrollModel.offset >= scrollModel.maximumOffset - 1" Sources/ThumbnailManager.swift
+if output="$(rg -n "wasCompressed = scrollModel.maximumOffset > 0.5" Sources/ThumbnailManager.swift)"; then
+  echo "$output"
+  echo "TR-5 regression: a new screenshot must not collapse an expanded tray." >&2
+  exit 1
+fi
+
 # `TR-35`: позицию ленты пишет ЕДИНСТВЕННАЯ воронка. Прямых присваиваний
 # `scrollModel.offset` и `detentDip` вне `writeModel`/`writePresented`/
 # `writeDip` быть не может — два источника позиции и давали рассинхрон.
