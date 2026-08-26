@@ -85,6 +85,8 @@ private enum NativeHubPressedButton: Int32 {
     case fillOff
     /// `TR-43`: пилюля шкатулки переключает ряд команд.
     case caseMore
+    /// `TR-43`: меню шкатулки закрылось само (клик вне, Escape).
+    case caseDismiss
 }
 
 private enum NativeControlSurface: String {
@@ -618,6 +620,9 @@ private final class NativeHubRenderView: NSView {
         case "Copy screenshot", "Copied screenshot": return .copy
         case "Dismiss screenshot": return .dismiss
         case "Screenshot count": return .caseMore
+        case "Copy all": return .copyAll
+        case "Download all": return .saveAs
+        case "Clear all": return .delete
         case "Tray bottom left": return .positionBottomLeft
         case "Tray bottom right": return .positionBottomRight
         case "Tray top left": return .positionTopLeft
@@ -893,6 +898,7 @@ final class NativeCasePanelView: NativeSurfaceHostView {
         nativeView.onButtonPressed = { [weak self] pressed in
             switch pressed {
             case .caseMore: self?.toggleExpanded()
+            case .caseDismiss: self?.collapseCommands()
             // `TR-43`: команда выполняется и сворачивает ряд.
             case .delete: self?.collapseAndRun { self?.onDeleteAll?() }
             case .copyAll: self?.collapseAndRun { self?.onCopyAll?() }
@@ -908,7 +914,7 @@ final class NativeCasePanelView: NativeSurfaceHostView {
 
     /// Клик по пилюле открывает и закрывает ряд команд (`TR-43`).
     private func toggleExpanded() {
-        setExpanded(!isExpanded)
+        syncExpanded(!isExpanded)
     }
 
     /// Ряд сворачивается и выполняет команду: свёрнутое состояние —
@@ -929,13 +935,22 @@ final class NativeCasePanelView: NativeSurfaceHostView {
     func debugToggleCommands() { toggleExpanded() }
 #endif
 
-    private func setExpanded(_ expanded: Bool) {
+    /// Состояние меню держит вёрстка: нажатие пилюли переключает его внутри,
+    /// а Swift лишь идёт следом – пересчитывает размер и сообщает шкатулке.
+    /// Отправка команды обратно приводила к двум источникам истины.
+    private func syncExpanded(_ expanded: Bool) {
         guard expanded != isExpanded else { return }
         isExpanded = expanded
-        nativeView.setSurface(.casePanel)
-        nativeView.sendCaseExpanded(expanded)
         remeasure()
         onExpandedChanged?()
+    }
+
+    /// Принудительное сворачивание извне: курсор ушёл со шкатулки.
+    private func setExpanded(_ expanded: Bool) {
+        guard expanded != isExpanded else { return }
+        nativeView.setSurface(.casePanel)
+        nativeView.sendCaseExpanded(expanded)
+        syncExpanded(expanded)
     }
 
     func setCount(_ count: Int) {
@@ -954,14 +969,21 @@ final class NativeCasePanelView: NativeSurfaceHostView {
         remeasure()
     }
 
-    /// Замер под текущее содержимое: пилюля одна или пилюля плюс ряд команд.
+    /// Замер под текущее содержимое: пилюля или пилюля с открытым меню.
+    ///
+    /// Размер берётся у самой вёрстки, а не считается по числу рядов:
+    /// арифметика давала почти двойную высоту и кнопки посреди пустоты
+    /// (приёмка 24.08.2026).
     private func remeasure() {
-        let buttons = nativeView.measureButtonContentSize()
-        let rows: CGFloat = isExpanded ? 2 : 1
-        measured = NSSize(width: buttons.width + Self.counterSlack,
-                          height: max(buttons.height, NativeHubMetrics.height) * rows
-                              + Self.rowPadding * 2
-                              + (isExpanded ? Self.rowPadding : 0))
+        // Открытое меню — всплывающий слой: его пункты не попадают в список
+        // кнопок, поэтому обычный замер видит только пилюлю и высота не
+        // растёт. Пока меню открыто, размер берётся по семантике вёрстки,
+        // которая знает и о нём.
+        let content = isExpanded
+            ? nativeView.measureSemanticContentSize(width: 800)
+            : nativeView.measureButtonContentSize()
+        measured = NSSize(width: content.width + Self.rowPadding * 2,
+                          height: max(content.height, NativeHubMetrics.height) + Self.rowPadding * 2)
         invalidateIntrinsicContentSize()
         redrawAtCurrentBounds()
     }

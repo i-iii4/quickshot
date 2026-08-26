@@ -1408,6 +1408,14 @@ rg -F -q "AnnotationPalette.redaction" Sources/AnnotationRenderer.swift
 rg -F -q "func discardAll()" Sources/AnnotationSession.swift
 rg -F -q "editedImages.preparedImage(for: t.artifact.id)" Sources/ThumbnailManager.swift
 rg -F -q "sessions.discardAll()" Sources/ThumbnailManager.swift
+# `TR-43`: меню шкатулки — штатный компонент дизайн-системы, а не самодельный
+# ряд кнопок; подписи команд читаются словами, разрушительная отделена.
+rg -F -q "<dropdown-menu" NativeQuickShotUI/src/hub.native
+rg -F -q "<menu-item icon=\"copy\" on-press=\"copy_all\">Copy all</menu-item>" NativeQuickShotUI/src/hub.native
+rg -F -q "<menu-item icon=\"download\" on-press=\"save_as\">Download all</menu-item>" NativeQuickShotUI/src/hub.native
+rg -F -q "<menu-item icon=\"x\" on-press=\"delete\">Clear all</menu-item>" NativeQuickShotUI/src/hub.native
+rg -F -q "<separator />" NativeQuickShotUI/src/hub.native
+
 # `TR-5`: новый снимок НЕ сворачивает раскрытую ленту. Признак «лента была
 # сжата» обязан смотреть на положение у упора, а не на прокручиваемость:
 # `maximumOffset > 0.5` истинно у любой ленты из двух снимков, и раскрытая
@@ -1532,10 +1540,12 @@ if output="$(rg -n "trashItem|recycle" Sources/ScreenshotLibrary.swift)"; then
   echo "Retention regression: expired screenshots must be deleted, not moved to the Trash (ST-6)." >&2
   exit 1
 fi
-# Панель капсулы рендерится в фактическую ширину ряда: фикс срезанного штриха.
-if output="$(rg -n 'on-press="(delete|save_as|copy_all)">[A-Za-z]' NativeQuickShotUI/src/hub.native)"; then
+# Команды-КНОПКИ остаются только иконками: имена живут в тултипах. Пунктов
+# меню это не касается — `TR-43` требует ровно обратного, подписи словами:
+# меню открывается по «ещё», и угадывать команды по иконкам там нельзя.
+if output="$(rg -n '<button[^>]*on-press="(delete|save_as|copy_all)">[A-Za-z]' NativeQuickShotUI/src/hub.native)"; then
   echo "$output"
-  echo "Hub regression: action commands must stay icon-only; names live in tooltips." >&2
+  echo "Hub regression: action buttons must stay icon-only; names live in tooltips." >&2
   exit 1
 fi
 test -f PRODUCT_CONTRACT.md

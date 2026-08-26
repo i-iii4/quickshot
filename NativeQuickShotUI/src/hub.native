@@ -17,16 +17,17 @@
         </if>
         <else>
         <if test="{casePanelSurface}">
-          <column gap="6" padding="6" label="Case">
+          <stack padding="6" label="Case">
             <button size="sm" variant="ghost" icon="app:more" icon-placement="trailing" label="Screenshot count" on-press="case_more">{countLabel}</button>
             <if test="{caseExpanded}">
-              <row gap="8" cross="center" label="Case actions">
-                <button size="sm" variant="destructive" icon="x" label="Close all" on-press="delete"></button>
-                <button size="sm" variant="secondary" icon="copy" label="Copy all" on-press="copy_all"></button>
-                <button size="sm" variant="secondary" icon="download" label="Save all" on-press="save_as"></button>
-              </row>
+              <dropdown-menu anchor="below" anchor-alignment="stretch" on-dismiss="case_dismiss">
+                <menu-item icon="copy" on-press="copy_all">Copy all</menu-item>
+                <menu-item icon="download" on-press="save_as">Download all</menu-item>
+                <separator />
+                <menu-item icon="x" on-press="delete">Clear all</menu-item>
+              </dropdown-menu>
             </if>
-          </column>
+          </stack>
         </if>
         <else>
           <if test="{annotationToolbarSurface}">

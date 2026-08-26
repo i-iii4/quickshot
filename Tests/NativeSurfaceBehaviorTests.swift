@@ -152,16 +152,14 @@ struct NativeSurfaceBehaviorTests {
         let expandedSize = panel.fittingSize
         try require(expandedSize.height > size.height,
                     "раскрытая панель обязана быть выше свёрнутой: \(size.height) → \(expandedSize.height)")
-        panel.frame = NSRect(origin: .zero, size: expandedSize)
-        _ = Host(view: panel, size: expandedSize)
-        let expanded = panel.debugButtons()
-        try require(expanded.count == 4,
-                    "в раскрытой панели ожидались пилюля и три команды: \(expanded.map(\.title))")
-        try requireContainedAndSeparated(expanded, in: panel.bounds, context: "case panel")
-        for button in expanded {
-            try require(button.frame.width > 20 && button.frame.height > 20,
-                        "кнопка смята: \(button.title) \(button.frame)")
-        }
+        // Пункты меню живут во всплывающем слое и в список кнопок не
+        // попадают: их подписи проверяет сканирующая проверка разметки.
+        // Здесь важно, что панель выросла ровно под открытое меню.
+        try require(expandedSize.height > size.height * 1.5,
+                    "панель обязана вместить меню: \(size.height) → \(expandedSize.height)")
+        panel.debugToggleCommands()
+        try require(panel.fittingSize.height == size.height,
+                    "после закрытия панель обязана вернуться к прежней высоте: \(panel.fittingSize.height)")
     }
 
     private static func testPinnedControl() throws {

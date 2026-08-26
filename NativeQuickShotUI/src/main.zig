@@ -334,6 +334,7 @@ pub const Action = enum {
     fill_on,
     fill_off,
     case_more,
+    case_dismiss,
 };
 
 pub const Metric = enum(c_int) {
@@ -425,6 +426,7 @@ pub const Msg = union(enum) {
     set_interaction_pressed: Action,
     /// `TR-43`: нажатие пилюли шкатулки.
     case_more,
+    case_dismiss,
 };
 
 const App = native_sdk.UiApp(Model, Msg);
@@ -566,7 +568,16 @@ fn update(model: *Model, msg: Msg) void {
         // `TR-43`: пилюля только СООБЩАЕТ о нажатии. Состояние ряда держит
         // Swift и присылает его командой: два источника истины расходились —
         // модель раскрывалась, а панель об этом не знала и не меняла высоту.
-        .case_more => model.last_action = .case_more,
+        // Нажатие пилюли переключает меню здесь же: Swift синхронизирует своё
+        // состояние по тому же событию, а не отправкой команды обратно.
+        .case_more => {
+            model.case_expanded = !model.case_expanded;
+            model.last_action = .case_more;
+        },
+        .case_dismiss => {
+            model.case_expanded = false;
+            model.last_action = .case_dismiss;
+        },
         .tool_select => { model.tool = .select; model.last_action = .tool_select; },
         .tool_crop => { model.tool = .crop; model.last_action = .tool_crop; },
         .tool_arrow => { model.tool = .arrow; model.last_action = .tool_arrow; },
@@ -820,6 +831,7 @@ fn actionForMessage(msg: Msg) Action {
         .autosave_off => .autosave_off,
         .open_folder => .open_folder,
         .case_more => .case_more,
+        .case_dismiss => .case_dismiss,
         .tool_select => .tool_select,
         .tool_crop => .tool_crop,
         .tool_arrow => .tool_arrow,
