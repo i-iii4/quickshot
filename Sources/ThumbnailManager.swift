@@ -1261,6 +1261,12 @@ final class ThumbnailManager {
         }
         guard !contour.isNull, contour.width > 1, contour.height > 1 else { return }
         casePanel.setCount(items.count)
+        // Два размера, и путать их нельзя. Полосу под панель шкатулка мерит
+        // по ПИЛЮЛЕ: открытое меню – всплывающий слой поверх стопки, и если
+        // считать полосу по нему, шкатулка раздувается вдвое при каждом
+        // нажатии (приёмка 24.08.2026). Сама панель берёт полный размер,
+        // чтобы меню в неё поместилось.
+        let pillSize = casePanel.pillSize
         let panelSize = casePanel.fittingSize
         let side = TrayCaseView.sidePadding
         let gap = TrayCaseView.panelGap
@@ -1268,10 +1274,10 @@ final class ThumbnailManager {
         // неё. `TR-42`: панель прижата к тому краю шкатулки, который дальше от
         // края экрана со стопкой. Стопка у верхнего края — панель снизу.
         let panelBelow = TrayPosition.current.isTop
-        let panelBand = gap + panelSize.height + gap
+        let panelBand = gap + pillSize.height + gap
         var caseRect = NSRect(x: contour.minX - side,
                               y: contour.minY - (panelBelow ? panelBand : side),
-                              width: max(contour.width + side * 2, panelSize.width + side * 2),
+                              width: max(contour.width + side * 2, pillSize.width + side * 2),
                               height: side + contour.height + panelBand)
         // `TR-42`: шкатулка не заходит под строку меню. Отступ знали только
         // карточки — рамка строится по их контуру и о меню не знала, поэтому
@@ -1293,10 +1299,13 @@ final class ThumbnailManager {
         // Панель ставится по своему измеренному размеру: растянутая на всю
         // ширину, она рисовала ряд кнопок натуральной величины у левого края
         // и скомканно (приёмка 19.08.2026).
+        // Пилюля прижата к ВЕРХУ панели, меню всплывает под ней (`TR-43`,
+        // `crossAlign` в разметке). Значит панель крепится верхом к месту
+        // пилюли и растёт вниз, за пределы подложки шкатулки: место пилюли
+        // не зависит от того, открыто меню или нет.
+        let pillTop = panelBelow ? caseRect.minY + panelBand - gap : caseRect.maxY - gap
         let panelRect = NSRect(x: caseRect.minX + side,
-                               y: panelBelow
-                                   ? caseRect.minY + gap
-                                   : caseRect.maxY - gap - panelSize.height,
+                               y: pillTop - panelSize.height,
                                width: panelSize.width,
                                height: panelSize.height)
         if casePanel.frame != panelRect {

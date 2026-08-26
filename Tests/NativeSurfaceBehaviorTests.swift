@@ -137,6 +137,7 @@ struct NativeSurfaceBehaviorTests {
         let panel = NativeCasePanelView(frame: .zero)
         panel.setCount(4)
         let size = panel.fittingSize
+        let pill = panel.pillSize
         panel.frame = NSRect(origin: .zero, size: size)
         _ = Host(view: panel, size: size)
         // `TR-43`: свёрнутая панель показывает только пилюлю со счётчиком.
@@ -152,14 +153,45 @@ struct NativeSurfaceBehaviorTests {
         let expandedSize = panel.fittingSize
         try require(expandedSize.height > size.height,
                     "раскрытая панель обязана быть выше свёрнутой: \(size.height) → \(expandedSize.height)")
-        // Пункты меню живут во всплывающем слое и в список кнопок не
-        // попадают: их подписи проверяет сканирующая проверка разметки.
-        // Здесь важно, что панель выросла ровно под открытое меню.
         try require(expandedSize.height > size.height * 1.5,
                     "панель обязана вместить меню: \(size.height) → \(expandedSize.height)")
-        panel.debugToggleCommands()
+
+        // Размер ПИЛЮЛИ от меню не зависит: по нему шкатулка строит свою
+        // полосу, и если он растёт вместе с меню, шкатулка раздувается при
+        // каждом открытии (приёмка 24.08.2026).
+        try require(panel.pillSize == pill,
+                    "пилюля обязана сохранить размер: \(pill) → \(panel.pillSize)")
+
+        // Меню обязано ЛОВИТЬ МЫШЬ. Пункт меню несёт свою роль, отличную от
+        // кнопки, и фильтр по одной роли кнопки оставлял его вне попадания:
+        // меню рисовалось, но не нажималось.
+        panel.frame = NSRect(origin: .zero, size: expandedSize)
+        let host = Host(view: panel, size: expandedSize)
+        // Рамка выросла – вёрстка обязана лечь в неё до того, как с неё
+        // снимают кнопки: иначе они берутся от прежнего, тесного размера.
+        // Шкатулка ставит `needsLayout` вместе с рамкой – здесь так же.
+        panel.needsLayout = true
+        panel.layoutSubtreeIfNeeded()
+        let expanded = panel.debugButtons()
+        try require(expanded.map(\.title) == ["Screenshot count", "Copy", "Download", "Clear all"],
+                    "раскрытая панель обязана отдать пилюлю и три команды: \(expanded.map(\.title))")
+        try requireContainedAndSeparated(expanded, in: panel.bounds, context: "case menu",
+                                         buttonRegister: false)
+
+        var copied = 0
+        panel.onCopyAll = { copied += 1 }
+        guard let copyItem = expanded.first(where: { $0.title == "Copy" }) else {
+            throw Failure("пункт Copy не найден")
+        }
+        host.clickDirectly(copyItem.frame, in: panel)
+        try require(copied == 1, "клик по пункту меню обязан сработать: \(copied)")
+
+        // Выбор команды сам закрывает меню: держать его открытым после
+        // выполненного действия незачем, и панель возвращается к пилюле.
         try require(panel.fittingSize.height == size.height,
-                    "после закрытия панель обязана вернуться к прежней высоте: \(panel.fittingSize.height)")
+                    "после команды панель обязана вернуться к прежней высоте: \(panel.fittingSize.height)")
+        try require(panel.debugButtons().map(\.title) == ["Screenshot count"],
+                    "после команды обязана остаться одна пилюля: \(panel.debugButtons().map(\.title))")
     }
 
     private static func testPinnedControl() throws {
@@ -252,14 +284,19 @@ struct NativeSurfaceBehaviorTests {
                     "House Dark must remain fixed across system Light/Dark changes")
     }
 
+    /// `buttonRegister` – проверять ли высоту по кнопочному реестру дома.
+    /// Пункт всплывающего меню кнопкой не является: его высоту задаёт свой
+    /// компонент дизайн-системы, и мерить его кнопочной сеткой неверно.
     private static func requireContainedAndSeparated(_ buttons: [NativeControlDebugButtonSnapshot],
                                                      in bounds: NSRect,
-                                                     context: String) throws {
+                                                     context: String,
+                                                     buttonRegister: Bool = true) throws {
         try require(!buttons.isEmpty, "\(context): no buttons rendered")
         let outer = bounds.insetBy(dx: -0.5, dy: -0.5)
         for button in buttons {
             try require(outer.contains(button.frame),
                         "\(context): \(button.title) escapes \(bounds): \(button.frame)")
+            guard buttonRegister else { continue }
             try require(abs(button.frame.height - 28) <= 0.5,
                         "\(context): \(button.title) is not on the House sm register: \(button.frame.height)")
         }

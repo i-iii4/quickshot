@@ -179,6 +179,15 @@ pub const Model = struct {
 
     pub fn caseExpanded(model: *const Model) bool { return model.case_expanded; }
 
+    /// `TR-43`: поперечное выравнивание корня. Панель шкатулки прижимает
+    /// пилюлю к верху – всплывающее меню висит НИЖЕ неё и в поток раскладки
+    /// не входит, поэтому центрованная пилюля уводила меню за нижний край
+    /// поверхности, и оно ужималось. Остальные поверхности – ряд кнопок в
+    /// одну строку, там центр по-прежнему верен.
+    pub fn crossAlign(model: *const Model) []const u8 {
+        return if (model.surface == .case_panel) "start" else "center";
+    }
+
     var count_label_buffer: [32]u8 = undefined;
 
     /// `TR-43`: подпись счётчика словами. Единственное число при одном

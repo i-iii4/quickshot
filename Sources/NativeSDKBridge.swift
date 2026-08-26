@@ -1,6 +1,12 @@
 import Foundation
 
 let nativeSDKWidgetRoleButton: Int32 = 4
+/// Пункт всплывающего меню. Роль отдельная от кнопки, и фильтр по одной
+/// только роли кнопки делал пункты меню ненажимаемыми (`TR-43`).
+let nativeSDKWidgetRoleMenuItem: Int32 = 9
+/// Контейнеры вёрстки: строки, колонки, стопки и корневой узел во весь
+/// отведённый простор. В замере содержимого они дают ложный размер.
+let nativeSDKWidgetRoleContainer: Int32 = 1
 let nativeSDKWidgetActionPressFlag: UInt32 = 1 << 1
 let nativeSDKWidgetHoveredFlag: UInt32 = 1 << 1
 let nativeSDKWidgetPressedFlag: UInt32 = 1 << 2

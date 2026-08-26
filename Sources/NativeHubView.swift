@@ -3,6 +3,7 @@ import CoreGraphics
 import OSLog
 import QuartzCore
 
+
 private enum NativeHubMetrics {
     private static func token(_ metric: NativeSDKMetric) -> CGFloat {
         let value = CGFloat(quickshot_native_ui_metric(metric.rawValue))
@@ -116,6 +117,12 @@ private struct NativeHubButtonNode {
     let frame: NSRect
     let flags: UInt32
     let action: NativeHubPressedButton
+    /// Роль узла. Список нажимаемых узлов шире кнопок – в нём живут и пункты
+    /// всплывающего меню, – а замер полосы кнопок обязан считать только по
+    /// кнопкам, иначе открытое меню раздувает измеренную пилюлю (`TR-43`).
+    let role: Int32
+
+    var isButton: Bool { role == nativeSDKWidgetRoleButton }
 
     var isHovered: Bool { (flags & nativeSDKWidgetHoveredFlag) != 0 }
     var isPressed: Bool { (flags & nativeSDKWidgetPressedFlag) != 0 }
@@ -442,8 +449,12 @@ private final class NativeHubRenderView: NSView {
         nodes.reserveCapacity(Int(total))
         for index in 0..<total {
             var node = NativeSDKWidgetSemantics.empty
+            // Не только кнопки: пункт всплывающего меню несёт свою роль, и
+            // по одной роли кнопки они оставались вне попадания мыши – меню
+            // рисовалось, но не нажималось (`TR-43`).
             guard native_sdk_app_widget_semantics_at(nativeApp, index, &node) == 1,
-                  node.role == nativeSDKWidgetRoleButton,
+                  node.role == nativeSDKWidgetRoleButton
+                      || node.role == nativeSDKWidgetRoleMenuItem,
                   (node.actions & nativeSDKWidgetActionPressFlag) != 0 else { continue }
             let label = nativeSDKString(node.label, length: node.label_len)
             let text = nativeSDKString(node.text, length: node.text_len)
@@ -457,7 +468,8 @@ private final class NativeHubRenderView: NSView {
                                                            height: CGFloat(node.height)),
                                              flags: node.flags,
                                              action: actionForButton(identifier: label.isEmpty ? text : label,
-                                                                     title: title)))
+                                                                     title: title),
+                                             role: node.role))
         }
         return nodes
     }
@@ -466,11 +478,45 @@ private final class NativeHubRenderView: NSView {
         let previousFrame = frame
         frame = NSRect(x: 0, y: 0, width: 800, height: height)
         renderNow()
-        let frames = buttonNodes().map(\.frame)
+        let frames = buttonNodes().filter(\.isButton).map(\.frame)
         let content = frames.dropFirst().reduce(frames.first ?? .zero) { $0.union($1) }
         frame = previousFrame
         lastRenderSignature = nil
         return NSSize(width: ceil(content.width), height: ceil(content.height))
+    }
+
+    /// Рамка содержимого по семантике вёрстки: сами узлы, без добавки
+    /// отступов. `measureSemanticContentSize` возвращает `max + min`, то есть
+    /// содержимое плюс симметричное поле – на большом просторе это почти весь
+    /// простор, и панель шкатулки вырастала до него (приёмка 24.08.2026).
+#if TESTING
+
+#endif
+
+    func measureSemanticContentRect(width: CGFloat, height: CGFloat = 400) -> NSRect {
+        let previousFrame = frame
+        frame = NSRect(x: 0, y: 0, width: width, height: height)
+        renderNow()
+        guard let nativeApp else { return .zero }
+        native_sdk_app_frame(nativeApp)
+        let total = native_sdk_app_widget_semantics_count(nativeApp)
+        var content: NSRect?
+        for index in 0..<total {
+            var node = NativeSDKWidgetSemantics.empty
+            guard native_sdk_app_widget_semantics_at(nativeApp, index, &node) == 1,
+                  node.width > 0,
+                  node.height > 0 else { continue }
+            // Роль 1 – контейнеры, включая корень во весь простор: он и давал
+            // ложный размер. Кнопки, меню и его пункты идут своими ролями, и
+            // без них замер не видел всплывший слой вовсе.
+            guard node.role != nativeSDKWidgetRoleContainer else { continue }
+            let frame = NSRect(x: CGFloat(node.x), y: CGFloat(node.y),
+                               width: CGFloat(node.width), height: CGFloat(node.height))
+            content = content.map { $0.union(frame) } ?? frame
+        }
+        frame = previousFrame
+        lastRenderSignature = nil
+        return content ?? .zero
     }
 
     func measureSemanticContentSize(width: CGFloat, height: CGFloat = 400) -> NSSize {
@@ -889,6 +935,7 @@ final class NativeCasePanelView: NativeSurfaceHostView {
     var onExpandedChanged: (() -> Void)?
 
     private var measured = NSSize(width: 120, height: 28)
+    private var measuredPill = NSSize(width: 120, height: 28)
     private(set) var isExpanded = false
 
     override init(frame frameRect: NSRect) {
@@ -930,9 +977,14 @@ final class NativeCasePanelView: NativeSurfaceHostView {
     }
 
 #if TESTING
-    /// Переключение ряда без мыши: доставку клика проверяют другие наборы, а
-    /// здесь важны состояние и размеры.
-    func debugToggleCommands() { toggleExpanded() }
+    /// Переключение меню без мыши: доставку клика проверяют другие наборы, а
+    /// здесь важны состояние и размеры. Идёт полным путём, с командой в
+    /// вёрстку: иначе меняется только состояние Swift, а меню не рисуется.
+    func debugToggleCommands() { setExpanded(!isExpanded) }
+
+    /// Роли и рамки всех семантических узлов: без этого не видно, какие узлы
+    /// замер отбрасывает фильтром.
+
 #endif
 
     /// Состояние меню держит вёрстка: нажатие пилюли переключает его внутри,
@@ -982,10 +1034,24 @@ final class NativeCasePanelView: NativeSurfaceHostView {
         // Ширину задаёт пилюля, а не простор замера: при 800 подложка
         // растягивалась на весь экран, карточка жалась к краю, а между ней и
         // меню зияла пустота (приёмка 24.08.2026).
-        let pill = nativeView.measureButtonContentSize()
-        let content = isExpanded
-            ? nativeView.measureSemanticContentSize(width: pill.width + Self.rowPadding * 2)
-            : pill
+        // Простор замера должен вмещать и раскрытое меню: в тесной высоте
+        // SDK ужимает его и печатает переполнение оси. На РАЗМЕР пилюли
+        // высота простора не влияет – только на её место в нём.
+        let pill = nativeView.measureButtonContentSize(
+            height: isExpanded ? Self.measurementSlack : NativeHubMetrics.height)
+        let content: NSSize
+        if isExpanded {
+            // Ширину берёт ПИЛЮЛЯ, высоту – рамка содержимого вместе с
+            // меню. Меню растягивается до простора, в котором его мерят,
+            // поэтому ширина по нему сама себя разгоняет: 152 → 172 → …
+            // и рамка панели не сходится (приёмка 24.08.2026).
+            let rect = nativeView.measureSemanticContentRect(width: pill.width + Self.rowPadding * 2)
+            content = NSSize(width: pill.width, height: rect.height)
+        } else {
+            content = pill
+        }
+        measuredPill = NSSize(width: pill.width + Self.rowPadding * 2,
+                              height: max(pill.height, NativeHubMetrics.height) + Self.rowPadding * 2)
         measured = NSSize(width: content.width + Self.rowPadding * 2,
                           height: max(content.height, NativeHubMetrics.height) + Self.rowPadding * 2)
         invalidateIntrinsicContentSize()
@@ -997,6 +1063,10 @@ final class NativeCasePanelView: NativeSurfaceHostView {
     /// Перерисовать панель в её настоящих границах.
     private func redrawAtCurrentBounds() {
         guard bounds.width > 1, bounds.height > 1 else { return }
+        // Рамку задаёт шкатулка, и приходит она следующим кадром. Рисовать
+        // раскрытое меню в ещё не выросших границах бессмысленно: SDK ужмёт
+        // его и пожалуется на переполнение оси, а кадр всё равно сменится.
+        guard bounds.height + 0.5 >= measured.height else { return }
         nativeView.frame = bounds
         nativeView.renderNow()
     }
@@ -1005,9 +1075,16 @@ final class NativeCasePanelView: NativeSurfaceHostView {
     private static let counterSlack: CGFloat = 26
     /// Внутренние поля ряда из разметки панели.
     private static let rowPadding: CGFloat = 6
+    /// Высота простора для замеров: заведомо больше пилюли с открытым меню.
+    private static let measurementSlack: CGFloat = 400
 
     override var fittingSize: NSSize { measured }
     override var intrinsicContentSize: NSSize { measured }
+
+    /// Размер одной пилюли, без всплывшего меню. Шкатулка строит свою полосу
+    /// по нему: `fittingSize` растёт вместе с меню, и полоса, посчитанная по
+    /// нему, раздувала бы саму шкатулку при каждом открытии (`TR-43`).
+    var pillSize: NSSize { measuredPill }
 
     override func layout() {
         super.layout()
