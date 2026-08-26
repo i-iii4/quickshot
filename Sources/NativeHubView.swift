@@ -83,6 +83,8 @@ private enum NativeHubPressedButton: Int32 {
     case weightThick
     case fillOn
     case fillOff
+    /// `TR-43`: пилюля шкатулки переключает ряд команд.
+    case caseMore
 }
 
 private enum NativeControlSurface: String {
@@ -304,6 +306,11 @@ private final class NativeHubRenderView: NSView {
 
     func sendSettingsRetention(_ rawValue: String) {
         sendCommand("settings.retention:\(rawValue)")
+    }
+
+    /// `TR-43`: ряд команд шкатулки открыт или свёрнут.
+    func sendCaseExpanded(_ expanded: Bool) {
+        sendCommand("case.expanded:\(expanded ? 1 : 0)")
     }
 
     func sendSettingsAutosave(_ enabled: Bool) {
@@ -610,6 +617,7 @@ private final class NativeHubRenderView: NSView {
         switch identifier {
         case "Copy screenshot", "Copied screenshot": return .copy
         case "Dismiss screenshot": return .dismiss
+        case "Screenshot count": return .caseMore
         case "Tray bottom left": return .positionBottomLeft
         case "Tray bottom right": return .positionBottomRight
         case "Tray top left": return .positionTopLeft
@@ -871,8 +879,12 @@ final class NativeCasePanelView: NativeSurfaceHostView {
     var onDeleteAll: (() -> Void)?
     var onCopyAll: (() -> Void)?
     var onSaveAll: (() -> Void)?
+    /// Ряд команд открылся или закрылся: шкатулка обязана пересчитать высоту
+    /// (`TR-43`).
+    var onExpandedChanged: (() -> Void)?
 
     private var measured = NSSize(width: 120, height: 28)
+    private(set) var isExpanded = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -880,9 +892,11 @@ final class NativeCasePanelView: NativeSurfaceHostView {
         nativeView.setSurface(.casePanel)
         nativeView.onButtonPressed = { [weak self] pressed in
             switch pressed {
-            case .delete: self?.onDeleteAll?()
-            case .copyAll: self?.onCopyAll?()
-            case .saveAs: self?.onSaveAll?()
+            case .caseMore: self?.toggleExpanded()
+            // `TR-43`: команда выполняется и сворачивает ряд.
+            case .delete: self?.collapseAndRun { self?.onDeleteAll?() }
+            case .copyAll: self?.collapseAndRun { self?.onCopyAll?() }
+            case .saveAs: self?.collapseAndRun { self?.onSaveAll?() }
             default: break
             }
         }
@@ -891,6 +905,38 @@ final class NativeCasePanelView: NativeSurfaceHostView {
 
     // Требование языка: подкласс со своим инициализатором обязан объявить и этот.
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    /// Клик по пилюле открывает и закрывает ряд команд (`TR-43`).
+    private func toggleExpanded() {
+        setExpanded(!isExpanded)
+    }
+
+    /// Ряд сворачивается и выполняет команду: свёрнутое состояние —
+    /// исходное, возвращаться к нему должен сам интерфейс.
+    private func collapseAndRun(_ action: @escaping () -> Void) {
+        setExpanded(false)
+        action()
+    }
+
+    /// Свернуть ряд команд, если он открыт: уход курсора со шкатулки.
+    func collapseCommands() {
+        setExpanded(false)
+    }
+
+#if TESTING
+    /// Переключение ряда без мыши: доставку клика проверяют другие наборы, а
+    /// здесь важны состояние и размеры.
+    func debugToggleCommands() { toggleExpanded() }
+#endif
+
+    private func setExpanded(_ expanded: Bool) {
+        guard expanded != isExpanded else { return }
+        isExpanded = expanded
+        nativeView.setSurface(.casePanel)
+        nativeView.sendCaseExpanded(expanded)
+        remeasure()
+        onExpandedChanged?()
+    }
 
     func setCount(_ count: Int) {
         guard count != lastCount else { return }
@@ -905,9 +951,17 @@ final class NativeCasePanelView: NativeSurfaceHostView {
         // 800 pt, втиснутая в узкую панель — кнопки жмутся к левому краю и
         // сминаются (приёмка 20.08.2026). Плюс замер идёт только при смене
         // счётчика, а не на каждой раскладке.
+        remeasure()
+    }
+
+    /// Замер под текущее содержимое: пилюля одна или пилюля плюс ряд команд.
+    private func remeasure() {
         let buttons = nativeView.measureButtonContentSize()
+        let rows: CGFloat = isExpanded ? 2 : 1
         measured = NSSize(width: buttons.width + Self.counterSlack,
-                          height: max(buttons.height, NativeHubMetrics.height) + Self.rowPadding * 2)
+                          height: max(buttons.height, NativeHubMetrics.height) * rows
+                              + Self.rowPadding * 2
+                              + (isExpanded ? Self.rowPadding : 0))
         invalidateIntrinsicContentSize()
         redrawAtCurrentBounds()
     }

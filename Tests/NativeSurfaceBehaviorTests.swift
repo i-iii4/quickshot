@@ -129,27 +129,39 @@ struct NativeSurfaceBehaviorTests {
                     "Dismiss click dispatched the wrong thumbnail action")
     }
 
-    /// Панель шкатулки (`TR-30`): три кнопки в ряд, без наложений, целиком
-    /// внутри измеренного размера. Растянутая на всю ширину панель рисовала
-    /// ряд у левого края и сминала кнопки — приёмка 19.08.2026.
+    /// Панель шкатулки (`TR-43`): свёрнутая – одна пилюля со счётчиком,
+    /// раскрытая – пилюля и три команды, без наложений и целиком внутри
+    /// измеренного размера. Растянутая на всю ширину панель рисовала ряд у
+    /// левого края и сминала кнопки – приёмка 19.08.2026.
     private static func testCasePanelLayout() throws {
         let panel = NativeCasePanelView(frame: .zero)
         panel.setCount(4)
         let size = panel.fittingSize
         panel.frame = NSRect(origin: .zero, size: size)
         _ = Host(view: panel, size: size)
-        let buttons = panel.debugButtons().sorted { $0.frame.minX < $1.frame.minX }
-        try require(buttons.count == 3,
-                    "в панели ожидались три кнопки: \(buttons.map(\.title))")
-        try requireContainedAndSeparated(buttons, in: panel.bounds, context: "case panel")
-        for button in buttons {
+        // `TR-43`: свёрнутая панель показывает только пилюлю со счётчиком.
+        let collapsed = panel.debugButtons()
+        try require(collapsed.count == 1,
+                    "свёрнутая панель обязана показывать одну пилюлю: \(collapsed.map(\.title))")
+        try require(collapsed[0].identifier == "Screenshot count",
+                    "пилюля обязана быть счётчиком: \(collapsed[0].identifier)")
+        try requireContainedAndSeparated(collapsed, in: panel.bounds, context: "case pill")
+
+        // Клик по пилюле открывает ряд команд и растит панель по высоте.
+        panel.debugToggleCommands()
+        let expandedSize = panel.fittingSize
+        try require(expandedSize.height > size.height,
+                    "раскрытая панель обязана быть выше свёрнутой: \(size.height) → \(expandedSize.height)")
+        panel.frame = NSRect(origin: .zero, size: expandedSize)
+        _ = Host(view: panel, size: expandedSize)
+        let expanded = panel.debugButtons()
+        try require(expanded.count == 4,
+                    "в раскрытой панели ожидались пилюля и три команды: \(expanded.map(\.title))")
+        try requireContainedAndSeparated(expanded, in: panel.bounds, context: "case panel")
+        for button in expanded {
             try require(button.frame.width > 20 && button.frame.height > 20,
                         "кнопка смята: \(button.title) \(button.frame)")
         }
-        // Справа от кнопок остаётся место под счётчик.
-        let rightmost = buttons.last!.frame.maxX
-        try require(size.width - rightmost > 12,
-                    "счётчику не хватило места: \(size.width - rightmost)")
     }
 
     private static func testPinnedControl() throws {
@@ -298,6 +310,16 @@ struct NativeSurfaceBehaviorTests {
             root.addSubview(view)
             root.layoutSubtreeIfNeeded()
             view.layoutSubtreeIfNeeded()
+        }
+
+        /// Клик по поверхности, которая ловит мышь сама: панель шкатулки
+        /// возвращает из `hitTest` себя, а не дочернюю вью, поэтому общий
+        /// путь через попадание в потомка ей не подходит.
+        func clickDirectly(_ buttonFrame: NSRect, in view: NSView) {
+            let point = NSPoint(x: buttonFrame.midX, y: buttonFrame.midY)
+            let location = view.convert(point, to: nil)
+            view.mouseDown(with: event(.leftMouseDown, at: location))
+            view.mouseUp(with: event(.leftMouseUp, at: location))
         }
 
         func click(_ buttonFrame: NSRect, in view: NSView) throws {

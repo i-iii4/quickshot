@@ -37,6 +37,9 @@ const shape_fill_icon = appIcon("shape-fill");
 const undo_icon = appIcon("undo");
 const redo_icon = appIcon("redo");
 const scan_icon = appIcon("scan");
+// `TR-43`: многоточие пилюли шкатулки. Во встроенном наборе его нет,
+// добавлено штатным механизмом иконок приложения.
+const more_icon = appIcon("more");
 
 pub const app_icons: []const canvas.icons.Entry = &.{
     .{ .name = "tool-select", .icon = &tool_select_icon },
@@ -63,6 +66,7 @@ pub const app_icons: []const canvas.icons.Entry = &.{
     .{ .name = "undo", .icon = &undo_icon },
     .{ .name = "redo", .icon = &redo_icon },
     .{ .name = "scan", .icon = &scan_icon },
+    .{ .name = "more", .icon = &more_icon },
 };
 
 pub const Model = struct {
@@ -86,6 +90,9 @@ pub const Model = struct {
     stroke_weight: StrokeWeight = .medium,
     filled: bool = false,
     toolbar_compact: bool = false,
+    /// `TR-43`: ряд команд шкатулки открыт. Свёрнутая показывает только
+    /// пилюлю со счётчиком.
+    case_expanded: bool = false,
     /// Есть ли что настраивать: контролы стиля появляются только при
     /// выделенном объекте, иначе панель превращается в свалку.
     has_selection: bool = false,
@@ -168,6 +175,17 @@ pub const Model = struct {
 
     pub fn countText(model: *const Model) []const u8 {
         return std.fmt.bufPrint(&count_buffer, "{d}", .{model.count}) catch "0";
+    }
+
+    pub fn caseExpanded(model: *const Model) bool { return model.case_expanded; }
+
+    var count_label_buffer: [32]u8 = undefined;
+
+    /// `TR-43`: подпись счётчика словами. Единственное число при одном
+    /// снимке — «1 screenshot», иначе «N screenshots».
+    pub fn countLabel(model: *const Model) []const u8 {
+        const word = if (model.count == 1) "screenshot" else "screenshots";
+        return std.fmt.bufPrint(&count_label_buffer, "{d} {s}", .{ model.count, word }) catch "0 screenshots";
     }
 
     pub fn annotationToolbarSurface(model: *const Model) bool {
@@ -315,6 +333,7 @@ pub const Action = enum {
     weight_thick,
     fill_on,
     fill_off,
+    case_more,
 };
 
 pub const Metric = enum(c_int) {
@@ -391,6 +410,7 @@ pub const Msg = union(enum) {
     set_compact: bool,
     set_copied: bool,
     set_position: TrayPosition,
+    set_case_expanded: bool,
     set_retention: Retention,
     set_tool: AnnotationTool,
     set_can_undo: bool,
@@ -403,6 +423,8 @@ pub const Msg = union(enum) {
     set_autosave: bool,
     set_interaction_hover: Action,
     set_interaction_pressed: Action,
+    /// `TR-43`: нажатие пилюли шкатулки.
+    case_more,
 };
 
 const App = native_sdk.UiApp(Model, Msg);
@@ -418,6 +440,7 @@ const command_actions_after_prefix = "hub.actions_after:";
 const command_surface_prefix = "surface:";
 const command_compact_prefix = "control.compact:";
 const command_copied_prefix = "control.copied:";
+const command_case_expanded_prefix = "case.expanded:";
 const command_position_prefix = "settings.position:";
 const command_retention_prefix = "settings.retention:";
 const command_tool_prefix = "editor.tool:";
@@ -540,6 +563,10 @@ fn update(model: *Model, msg: Msg) void {
             model.last_action = .autosave_off;
         },
         .open_folder => model.last_action = .open_folder,
+        // `TR-43`: пилюля только СООБЩАЕТ о нажатии. Состояние ряда держит
+        // Swift и присылает его командой: два источника истины расходились —
+        // модель раскрывалась, а панель об этом не знала и не меняла высоту.
+        .case_more => model.last_action = .case_more,
         .tool_select => { model.tool = .select; model.last_action = .tool_select; },
         .tool_crop => { model.tool = .crop; model.last_action = .tool_crop; },
         .tool_arrow => { model.tool = .arrow; model.last_action = .tool_arrow; },
@@ -589,6 +616,7 @@ fn update(model: *Model, msg: Msg) void {
         .set_compact => |compact| model.compact = compact,
         .set_copied => |copied| model.copied = copied,
         .set_position => |position| model.position = position,
+        .set_case_expanded => |expanded| model.case_expanded = expanded,
         .set_retention => |retention| model.retention = retention,
         .set_tool => |tool| model.tool = tool,
         .set_can_undo => |value| model.can_undo = value,
@@ -650,6 +678,9 @@ fn onCommand(name: []const u8) ?Msg {
     }
     if (std.mem.startsWith(u8, name, command_copied_prefix)) {
         return .{ .set_copied = parseBool(name[command_copied_prefix.len..]) orelse return null };
+    }
+    if (std.mem.startsWith(u8, name, command_case_expanded_prefix)) {
+        return .{ .set_case_expanded = parseBool(name[command_case_expanded_prefix.len..]) orelse return null };
     }
     if (std.mem.startsWith(u8, name, command_position_prefix)) {
         return .{ .set_position = parsePosition(name[command_position_prefix.len..]) orelse return null };
@@ -788,6 +819,7 @@ fn actionForMessage(msg: Msg) Action {
         .autosave_on => .autosave_on,
         .autosave_off => .autosave_off,
         .open_folder => .open_folder,
+        .case_more => .case_more,
         .tool_select => .tool_select,
         .tool_crop => .tool_crop,
         .tool_arrow => .tool_arrow,

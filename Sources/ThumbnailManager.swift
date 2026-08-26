@@ -213,6 +213,8 @@ final class ThumbnailManager {
         casePanel.onCopyAll = { [weak self] in self?.copyAll() }
         casePanel.onSaveAll = { [weak self] in self?.saveAllAs() }
         hostContent.addSubview(caseView)
+        // `TR-43`: ряд команд меняет высоту шкатулки.
+        casePanel.onExpandedChanged = { [weak self] in self?.updateCase() }
         hostContent.addSubview(casePanel)
         // Хаб-виджет упразднён (`TR-30`): панель кнопок живёт в шкатулке.
 
@@ -410,6 +412,9 @@ final class ThumbnailManager {
     private func endTrayHoverSession() {
         guard trayHoverActive else { return }
         trayHoverActive = false
+        // `TR-43`: курсор ушёл со шкатулки — ряд команд сворачивается, как и
+        // ховер карточек, с той же отсрочкой.
+        casePanel.collapseCommands()
         guard collapsed, let screen = anchorScreen ?? NSScreen.main else { return }
         finishCollectionMotion()
         runTrayTransition(to: 1, on: screen)
