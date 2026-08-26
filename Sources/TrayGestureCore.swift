@@ -159,6 +159,10 @@ protocol TrayGestureIntake: AnyObject {
 @MainActor
 protocol TrayAxisReader: AnyObject {
     var gestureActiveEdge: ThumbnailLayoutEdge { get }
+    /// Ход вдоль оси считается в обратную сторону: у верхнего края лента
+    /// растёт вниз, у левого — вправо (`TR-42`). Без этого жест открывал
+    /// шкатулку движением в противоположную сторону.
+    var gestureAxisReversed: Bool { get }
 }
 
 /// Что нужно выбору оси (`TR-38`).
@@ -243,7 +247,8 @@ struct TrayGestureEvent {
         let raw = out.gestureActiveEdge.isVertical
             ? input.deltaY
             : (abs(input.deltaX) > 0.01 ? input.deltaX : input.deltaY)
-        return input.hasPreciseDeltas ? raw : raw * TrayGestureCore.wheelLineHeight
+        let along = out.gestureAxisReversed ? -raw : raw
+        return input.hasPreciseDeltas ? along : along * TrayGestureCore.wheelLineHeight
     }
 }
 

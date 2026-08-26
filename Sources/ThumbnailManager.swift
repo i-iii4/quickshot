@@ -1265,7 +1265,7 @@ final class ThumbnailManager {
         let panelBelow = TrayPosition.current.isTop
         let panelBand = gap + panelSize.height + gap
         var caseRect = NSRect(x: contour.minX - side,
-                              y: contour.minY - side - (panelBelow ? panelBand : 0),
+                              y: contour.minY - (panelBelow ? panelBand : side),
                               width: max(contour.width + side * 2, panelSize.width + side * 2),
                               height: side + contour.height + panelBand)
         // `TR-42`: шкатулка не заходит под строку меню. Отступ знали только
@@ -2015,6 +2015,13 @@ extension ThumbnailManager: TrayGestureOutput {
     /// Базовая ось угла — вертикальная; вторая, горизонтальная, приходит
     /// через `gestureAlternateEdge` (`TR-42`).
     var gestureBaseEdge: ThumbnailLayoutEdge { TrayPosition.current.verticalEdge }
+
+    /// `TR-42`: у верхнего угла вертикальная лента растёт вниз, у левого
+    /// горизонтальная — вправо. Ход вдоль такой оси считается наоборот.
+    var gestureAxisReversed: Bool {
+        let corner = TrayPosition.current
+        return activeEdge.isVertical ? corner.isTop : corner.isLeft
+    }
     var gestureDipAnimating: Bool { detentDipAnimating }
 
     func gestureSwitchAxis(to edge: ThumbnailLayoutEdge) { switchAxis(to: edge) }

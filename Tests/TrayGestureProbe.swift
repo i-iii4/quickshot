@@ -16,6 +16,7 @@ final class TrayGestureProbe: TrayGestureOutput {
     var base: ThumbnailLayoutEdge
     var dipAnimating = false
     var device: UInt64?
+    var reversed = false
     var scrollIntentCleared = false
     var settleGeneration = 0
     /// След эффектов за шаг: порядок вызовов — такая же часть поведения, как
@@ -35,6 +36,9 @@ final class TrayGestureProbe: TrayGestureOutput {
     var gestureModel: TrayScrollModel { model }
     var gestureDetentEngaged: Bool { detent.engaged }
     var gestureActiveEdge: ThumbnailLayoutEdge { edge }
+    /// Направление роста ленты: подставной мир держит углы, растущие от
+    /// начала координат, поэтому ход считается как есть.
+    var gestureAxisReversed: Bool { reversed }
     var gestureAlternateEdge: ThumbnailLayoutEdge? { alternate }
     var gestureBaseEdge: ThumbnailLayoutEdge { base }
     var gestureDipAnimating: Bool { dipAnimating }

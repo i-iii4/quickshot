@@ -27,6 +27,7 @@ struct TrayGestureRoutingTests {
         run("каждый получатель — свой тип со своими методами", testPartiesAreSeparateTypes)
         run("каждый получатель сужает мир до своего", testPartiesNarrowTheirWorld)
         run("цепочка настоящая: лента не зовёт границу напрямую", testChainIsNotFaked)
+        run("у верхнего угла ход считается наоборот", testReversedAxisTravel)
         run("конец жеста не оставляет накопленного хода", testEndClearsAxisTravel)
         run("следующий жест начинает счёт направления с нуля", testNoLeftoverState)
         run("обработчик не хранит полей состояния жеста", testHandlerHoldsNoState)
@@ -207,6 +208,25 @@ struct TrayGestureRoutingTests {
                     "Бросок не защёлкнул ленту, эффекты: \(probe.effects)")
         try require(core.state.endedRecipients == TrayGestureRecipient.allCases,
                     "После броска конец дошёл не до всех: \(core.state.endedRecipients)")
+    }
+
+    /// `TR-42`: у верхнего края лента растёт вниз, у левого — вправо. Ход
+    /// вдоль такой оси считается наоборот, иначе жест открывал бы шкатулку
+    /// движением в противоположную сторону.
+    private static func testReversedAxisTravel() throws {
+        let (straight, straightProbe) = make(gathered: false, alternate: nil)
+        straight.handle(input(dx: 0, dy: 8, phase: .began), out: straightProbe)
+        straight.handle(input(dx: 0, dy: 8, phase: .changed, at: 10.02), out: straightProbe)
+
+        let (mirrored, mirroredProbe) = make(gathered: false, alternate: nil)
+        mirroredProbe.reversed = true
+        mirrored.handle(input(dx: 0, dy: 8, phase: .began), out: mirroredProbe)
+        mirrored.handle(input(dx: 0, dy: 8, phase: .changed, at: 10.02), out: mirroredProbe)
+
+        try require(straightProbe.model.offset != mirroredProbe.model.offset,
+                    "Зеркальная ось поехала в ту же сторону: \(straightProbe.model.offset)")
+        try require(mirroredProbe.model.offset <= 0.01,
+                    "Ход вниз у верхнего угла обязан упираться в начало, а не двигать ленту: \(mirroredProbe.model.offset)")
     }
 
     /// Состояние не переживает событие, которое его завершает: иначе связь
