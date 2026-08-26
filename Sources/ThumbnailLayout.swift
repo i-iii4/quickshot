@@ -186,16 +186,16 @@ func thumbnailScrollLayout(screenFrame: NSRect,
                                                      hubSize: hubSize,
                                                      margin: margin,
                                                      menuBarInset: menuBarInset)
-    // `TR-13`: перетяг за край — движение ленты ЦЕЛИКОМ, а не расхождение
-    // стопки. Раскладка получает зажатое смещение и раскладывает ярусы как
-    // обычно; сам перетяг едет общим сдвигом всех полос ниже. Иначе смещение
-    // за упором попадало в ту часть формулы, которая его не читает: карточки
-    // уходили в ближнюю стопку, их позиции задавали ярусы, и перетяг пропадал
-    // с экрана целиком (приёмка 24.08.2026).
+    // `TR-42`: положение СОБРАННОЙ шкатулки зафиксировано. Перетяг за упор
+    // не двигает ни карточки, ни рамку: колода стоит на месте, сколько её ни
+    // тяни. Решение заказчика 24.08.2026 – движение стопки за край пробовали
+    // и отказались.
+    //
+    // Смещение поэтому зажимается: раскладка работает только внутри хода
+    // ленты, а перетяг живёт лишь в модели, где его гасит пружина возврата.
     let content = lengths.reduce(0, +) + gap * CGFloat(max(0, lengths.count - 1))
     let maximum = max(0, content - (lengths.last ?? 0))
     let clamped = min(max(0, offset), maximum)
-    let overshoot = offset - clamped
     let bands = TrayStripLayout.bands(cardLengths: lengths,
                                       gap: gap,
                                       offset: clamped,
@@ -234,8 +234,7 @@ func thumbnailScrollLayout(screenFrame: NSRect,
                                 band: band,
                                 vertical: edge.isVertical,
                                 anchorTop: fromTop,
-                                anchorLeft: fromLeft,
-                                overshoot: overshoot)
+                                anchorLeft: fromLeft)
         let origin: NSPoint
         if edge.isVertical {
             let x = fromLeft
@@ -306,18 +305,15 @@ private func anchorAlong(strip: NSPoint,
                          band: TrayCardBand,
                          vertical: Bool,
                          anchorTop: Bool,
-                         anchorLeft: Bool,
-                         overshoot: CGFloat) -> CGFloat {
-    // Перетяг общий для всех полос: стопка едет как одно тело и не
-    // расходится. Направление то же, что у хода вдоль оси.
+                         anchorLeft: Bool) -> CGFloat {
     if vertical {
         return anchorTop
-            ? strip.y - band.position - band.length + overshoot
-            : strip.y + band.position - overshoot
+            ? strip.y - band.position - band.length
+            : strip.y + band.position
     }
     return anchorLeft
-        ? strip.x + band.position - overshoot
-        : strip.x - band.position - band.length + overshoot
+        ? strip.x + band.position
+        : strip.x - band.position - band.length
 }
 
 /// Видимая рамка карточки для слота раскладки, в глобальных координатах и без

@@ -1276,12 +1276,9 @@ final class ThumbnailManager {
         // потолок опускался ровно на верх карточек, и верхняя карточка
         // упиралась в край рамки (приёмка 24.08.2026).
         //
-        // При ПЕРЕТЯГЕ потолок не применяется: шкатулка уехала вместе с
-        // карточками и обязана ехать с ними до конца. Иначе она упиралась в
-        // потолок и вставала, а карточки продолжали и выезжали за её границы
-        // (приёмка 24.08.2026).
-        let pulled = abs(scrollModel.overshoot) > 0.5
-        if !pulled, let screen = anchorScreen ?? NSScreen.main {
+        // Потолок безусловен: положение собранной шкатулки зафиксировано, и
+        // перетяг её не двигает (`TR-42`).
+        if let screen = anchorScreen ?? NSScreen.main {
             let ceiling = screen.frame.maxY - menuBarInset(on: screen)
             if caseRect.maxY > ceiling {
                 caseRect.origin.y -= caseRect.maxY - ceiling

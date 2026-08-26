@@ -25,7 +25,7 @@ struct TrayScrollLayoutTests {
         deeperLayersGoBehind()
         visibleFrameFollowsTheSlot()
         loneCardStandsWhereTheStackTopStands()
-        overshootMovesTheWholeDeck()
+        overshootLeavesTheDeckInPlace()
         print("TrayScrollLayoutTests: passed")
     }
 
@@ -292,11 +292,10 @@ struct TrayScrollLayoutTests {
         guard condition() else { fail(message); return }
     }
 
-    /// `TR-13`: перетяг за край — движение собранной колоды ЦЕЛИКОМ, а не
-    /// расхождение стопки. Смещение за упором попадало в ту часть формулы,
-    /// которая его не читает: карточки уходили в ближнюю стопку, позиции
-    /// задавали ярусы, и перетяг пропадал с экрана (приёмка 24.08.2026).
-    private static func overshootMovesTheWholeDeck() {
+    /// `TR-42`: положение собранной шкатулки ЗАФИКСИРОВАНО. Перетяг за упор
+    /// не двигает ни карточки, ни рамку – колода стоит на месте, сколько её
+    /// ни тяни. Движение стопки за край пробовали 24.08.2026 и отказались.
+    private static func overshootLeavesTheDeckInPlace() {
         let heights: [CGFloat] = [180, 180, 180]
         let content = heights.reduce(0, +) + 12 * 2
         let maximum = content - heights.last!
@@ -316,8 +315,8 @@ struct TrayScrollLayoutTests {
         }
         let resting = deck(0)
         let pulled = deck(30)
-        precondition(abs((resting.low - pulled.low) - 30) < 0.01,
-                     "перетяг не сдвинул колоду: \(resting.low) → \(pulled.low)")
+        precondition(abs(resting.low - pulled.low) < 0.01,
+                     "перетяг сдвинул зафиксированную колоду: \(resting.low) → \(pulled.low)")
         precondition(abs(resting.height - pulled.height) < 0.01,
                      "стопка разошлась при перетяге: \(resting.height) → \(pulled.height)")
     }
