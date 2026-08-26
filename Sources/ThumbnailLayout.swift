@@ -186,9 +186,19 @@ func thumbnailScrollLayout(screenFrame: NSRect,
                                                      hubSize: hubSize,
                                                      margin: margin,
                                                      menuBarInset: menuBarInset)
+    // `TR-13`: перетяг за край — движение ленты ЦЕЛИКОМ, а не расхождение
+    // стопки. Раскладка получает зажатое смещение и раскладывает ярусы как
+    // обычно; сам перетяг едет общим сдвигом всех полос ниже. Иначе смещение
+    // за упором попадало в ту часть формулы, которая его не читает: карточки
+    // уходили в ближнюю стопку, их позиции задавали ярусы, и перетяг пропадал
+    // с экрана целиком (приёмка 24.08.2026).
+    let content = lengths.reduce(0, +) + gap * CGFloat(max(0, lengths.count - 1))
+    let maximum = max(0, content - (lengths.last ?? 0))
+    let clamped = min(max(0, offset), maximum)
+    let overshoot = offset - clamped
     let bands = TrayStripLayout.bands(cardLengths: lengths,
                                       gap: gap,
-                                      offset: offset,
+                                      offset: clamped,
                                       viewportLength: max(1, viewportLength),
                                       deckProgress: deckProgress)
 
@@ -224,7 +234,8 @@ func thumbnailScrollLayout(screenFrame: NSRect,
                                 band: band,
                                 vertical: edge.isVertical,
                                 anchorTop: fromTop,
-                                anchorLeft: fromLeft)
+                                anchorLeft: fromLeft,
+                                overshoot: overshoot)
         let origin: NSPoint
         if edge.isVertical {
             let x = fromLeft
@@ -295,15 +306,18 @@ private func anchorAlong(strip: NSPoint,
                          band: TrayCardBand,
                          vertical: Bool,
                          anchorTop: Bool,
-                         anchorLeft: Bool) -> CGFloat {
+                         anchorLeft: Bool,
+                         overshoot: CGFloat) -> CGFloat {
+    // Перетяг общий для всех полос: стопка едет как одно тело и не
+    // расходится. Направление то же, что у хода вдоль оси.
     if vertical {
         return anchorTop
-            ? strip.y - band.position - band.length
-            : strip.y + band.position
+            ? strip.y - band.position - band.length + overshoot
+            : strip.y + band.position - overshoot
     }
     return anchorLeft
-        ? strip.x + band.position
-        : strip.x - band.position - band.length
+        ? strip.x + band.position - overshoot
+        : strip.x - band.position - band.length + overshoot
 }
 
 /// Видимая рамка карточки для слота раскладки, в глобальных координатах и без

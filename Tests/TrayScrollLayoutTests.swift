@@ -25,6 +25,7 @@ struct TrayScrollLayoutTests {
         deeperLayersGoBehind()
         visibleFrameFollowsTheSlot()
         loneCardStandsWhereTheStackTopStands()
+        overshootMovesTheWholeDeck()
         print("TrayScrollLayoutTests: passed")
     }
 
@@ -290,4 +291,35 @@ struct TrayScrollLayoutTests {
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
         guard condition() else { fail(message); return }
     }
+
+    /// `TR-13`: перетяг за край — движение собранной колоды ЦЕЛИКОМ, а не
+    /// расхождение стопки. Смещение за упором попадало в ту часть формулы,
+    /// которая его не читает: карточки уходили в ближнюю стопку, позиции
+    /// задавали ярусы, и перетяг пропадал с экрана (приёмка 24.08.2026).
+    private static func overshootMovesTheWholeDeck() {
+        let heights: [CGFloat] = [180, 180, 180]
+        let content = heights.reduce(0, +) + 12 * 2
+        let maximum = content - heights.last!
+        func deck(_ overshoot: CGFloat) -> (low: CGFloat, height: CGFloat) {
+            let result = thumbnailScrollLayout(screenFrame: screen, edge: .right,
+                                               cardWidth: 240, cardHeights: heights,
+                                               hubSize: .zero, margin: 16, gap: 12,
+                                               offset: maximum + overshoot,
+                                               menuBarInset: 25, deckProgress: 1)
+            let frames = result.visible.map {
+                thumbnailVisibleFrame(slot: $0, cardSize: NSSize(width: 240, height: 180),
+                                      vertical: true)
+            }
+            let low = frames.map(\.minY).min() ?? 0
+            let high = frames.map(\.maxY).max() ?? 0
+            return (low, high - low)
+        }
+        let resting = deck(0)
+        let pulled = deck(30)
+        precondition(abs((resting.low - pulled.low) - 30) < 0.01,
+                     "перетяг не сдвинул колоду: \(resting.low) → \(pulled.low)")
+        precondition(abs(resting.height - pulled.height) < 0.01,
+                     "стопка разошлась при перетяге: \(resting.height) → \(pulled.height)")
+    }
+
 }
