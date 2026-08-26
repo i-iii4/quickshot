@@ -1272,7 +1272,12 @@ final class ThumbnailManager {
         // карточки — рамка строится по их контуру и о меню не знала, поэтому
         // у верхнего края верхняя граница шкатулки уходила под меню.
         if let screen = anchorScreen ?? NSScreen.main {
-            let ceiling = screen.frame.maxY - menuBarInset(on: screen) - ThumbStyle.margin
+            // Потолок — сама граница строки меню, без поля карточек: это поле
+            // и есть место, куда шкатулка выступает своими 8 pt. Вычитая его
+            // тоже, потолок опускался ровно на верх карточек, шкатулку
+            // сдвигало вниз, и верхняя карточка упиралась в край рамки
+            // (приёмка 24.08.2026).
+            let ceiling = screen.frame.maxY - menuBarInset(on: screen)
             if caseRect.maxY > ceiling {
                 caseRect.origin.y -= caseRect.maxY - ceiling
             }
