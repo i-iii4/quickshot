@@ -1507,7 +1507,7 @@ rg -F -q "passesLuhn" Sources/SensitiveDataDetector.swift
 # отклика (`logSink` и его промежуточные строки `report.append`) и NSLog.
 # Проверка молчала до 22.08.2026, потому что прогон падал раньше на других
 # поломках.
-if output="$(rg -n '"[^"]*[а-яА-Я][^"]*"' Sources/*.swift | rg -v 'NSLog|debugTrayLog|logSink|report\.append')"; then
+if output="$(rg -n '"[^"]*[а-яА-Я][^"]*"' Sources/*.swift | rg -v 'NSLog|debugTrayLog|gestureLog|logSink|report\.append')"; then
   echo "$output"
   echo "Language regression: the interface is English-only (N-1)." >&2
   exit 1

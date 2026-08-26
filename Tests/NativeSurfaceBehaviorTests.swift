@@ -180,7 +180,7 @@ struct NativeSurfaceBehaviorTests {
         let host = Host(view: view, size: view.fittingSize)
 
         // Автосохранение включено по умолчанию, поэтому срок и папка видимы.
-        let expected = ["Tray left", "Tray right", "Tray bottom", "Tray top",
+        let expected = ["Tray bottom left", "Tray bottom right", "Tray top left", "Tray top right",
                         "Autosave on", "Autosave off",
                         "Keep a day", "Keep a week", "Keep a month", "Keep forever",
                         "Open folder"]
@@ -191,11 +191,11 @@ struct NativeSurfaceBehaviorTests {
         try require(view.debugButtons().filter(\.isHovered).count == 1,
                     "Native SDK did not own settings hover")
 
-        for identifier in ["Tray left", "Tray right", "Tray bottom", "Tray top"] {
+        for identifier in ["Tray bottom left", "Tray bottom right", "Tray top left", "Tray top right"] {
             let button = view.debugButtons().first { $0.identifier == identifier }!
             try host.click(button.frame, in: view)
         }
-        try require(positions == ["left", "right", "bottom", "top"],
+        try require(positions == ["bottomLeft", "bottomRight", "topLeft", "topRight"],
                     "Settings dispatch order is wrong: \(positions)")
 
         for identifier in ["Keep a day", "Keep a month", "Keep forever", "Keep a week"] {

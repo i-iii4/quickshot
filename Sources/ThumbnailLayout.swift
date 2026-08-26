@@ -175,7 +175,9 @@ func thumbnailScrollLayout(screenFrame: NSRect,
                            gap: CGFloat,
                            offset: CGFloat,
                            menuBarInset: CGFloat = 0,
-                           deckProgress: CGFloat = 0) -> ThumbnailLayoutResult {
+                           deckProgress: CGFloat = 0,
+                           anchorTop: Bool = false,
+                           anchorLeft: Bool = false) -> ThumbnailLayoutResult {
     guard !cardHeights.isEmpty else { return .init(visible: [], hidden: []) }
 
     let lengths = edge.isVertical ? cardHeights : Array(repeating: cardWidth, count: cardHeights.count)
@@ -195,7 +197,10 @@ func thumbnailScrollLayout(screenFrame: NSRect,
     let strip = stripOrigin(screenFrame: screenFrame,
                             edge: edge,
                             hubSize: hubSize,
-                            margin: margin)
+                            margin: margin,
+                            menuBarInset: menuBarInset,
+                            anchorTop: anchorTop,
+                            anchorLeft: anchorLeft)
 
     for (index, band) in bands.enumerated() {
         guard !band.hidden else {
@@ -206,20 +211,31 @@ func thumbnailScrollLayout(screenFrame: NSRect,
         // `thumbnailLayout`: правый край — карточка у правого края, верхний —
         // карточка целиком на экране. Ошибка здесь и ломала трей при
         // переполнении: полоса бралась от ширины хаба, а не карточки.
+        // Лента растёт ОТ УГЛА: у нижнего вверх, у верхнего вниз; у правого
+        // влево, у левого вправо (`TR-42`). Прежняя раскладка знала только
+        // сторону, поэтому вертикальная лента всегда шла снизу, а
+        // горизонтальная — справа.
+        // У вертикальной ленты сторону задаёт сам край, а верх или низ —
+        // угол; у горизонтальной наоборот. Смешивать нельзя: иначе флаг
+        // перекрывает семантику края.
+        let fromTop = edge.isVertical ? anchorTop : (edge == .top)
+        let fromLeft = edge.isVertical ? (edge == .left) : anchorLeft
+        let along = anchorAlong(strip: strip,
+                                band: band,
+                                vertical: edge.isVertical,
+                                anchorTop: fromTop,
+                                anchorLeft: fromLeft)
         let origin: NSPoint
-        switch edge {
-        case .right:
-            origin = NSPoint(x: screenFrame.maxX - margin - cardWidth,
-                             y: strip.y + band.position)
-        case .left:
-            origin = NSPoint(x: screenFrame.minX + margin,
-                             y: strip.y + band.position)
-        case .bottom:
-            origin = NSPoint(x: strip.x - band.position - band.length,
-                             y: screenFrame.minY + margin)
-        case .top:
-            origin = NSPoint(x: strip.x - band.position - band.length,
-                             y: screenFrame.maxY - menuBarInset - margin - cardHeights[index])
+        if edge.isVertical {
+            let x = fromLeft
+                ? screenFrame.minX + margin
+                : screenFrame.maxX - margin - cardWidth
+            origin = NSPoint(x: x, y: along)
+        } else {
+            let y = fromTop
+                ? screenFrame.maxY - menuBarInset - margin - cardHeights[index]
+                : screenFrame.minY + margin
+            origin = NSPoint(x: along, y: y)
         }
         // Чем глубже слой, тем он дальше: порядок наложения задаётся явно, а не
         // порядком добавления сабвью. Иначе стопка рисуется задом наперёд.
@@ -254,25 +270,40 @@ func thumbnailTrayViewportLength(screenFrame: NSRect,
     return screenFrame.width - margin * 2 - hubSize.width - TrayStripLayout.hubClearance
 }
 
+/// Начало ленты — угол, от которого она растёт (`TR-42`).
 private func stripOrigin(screenFrame: NSRect,
                          edge: ThumbnailLayoutEdge,
                          hubSize: NSSize,
-                         margin: CGFloat) -> NSPoint {
+                         margin: CGFloat,
+                         menuBarInset: CGFloat,
+                         anchorTop: Bool,
+                         anchorLeft: Bool) -> NSPoint {
     let clearance = TrayStripLayout.hubClearance
-    switch edge {
-    case .right:
-        return NSPoint(x: screenFrame.maxX - margin - hubSize.width,
-                       y: screenFrame.minY + margin + hubSize.height + clearance)
-    case .left:
-        return NSPoint(x: screenFrame.minX + margin,
-                       y: screenFrame.minY + margin + hubSize.height + clearance)
-    case .bottom:
-        return NSPoint(x: screenFrame.maxX - margin - hubSize.width - clearance,
-                       y: screenFrame.minY + margin)
-    case .top:
-        return NSPoint(x: screenFrame.maxX - margin - hubSize.width - clearance,
-                       y: screenFrame.maxY - margin)
+    let fromTop = edge.isVertical ? anchorTop : (edge == .top)
+    let fromLeft = edge.isVertical ? (edge == .left) : anchorLeft
+    let x = fromLeft
+        ? screenFrame.minX + margin + hubSize.width + clearance
+        : screenFrame.maxX - margin - hubSize.width - clearance
+    let y = fromTop
+        ? screenFrame.maxY - menuBarInset - margin - hubSize.height - clearance
+        : screenFrame.minY + margin + hubSize.height + clearance
+    return NSPoint(x: x, y: y)
+}
+
+/// Координата вдоль оси ленты с учётом того, от какого края она растёт.
+private func anchorAlong(strip: NSPoint,
+                         band: TrayCardBand,
+                         vertical: Bool,
+                         anchorTop: Bool,
+                         anchorLeft: Bool) -> CGFloat {
+    if vertical {
+        return anchorTop
+            ? strip.y - band.position - band.length
+            : strip.y + band.position
     }
+    return anchorLeft
+        ? strip.x + band.position
+        : strip.x - band.position - band.length
 }
 
 /// Видимая рамка карточки для слота раскладки, в глобальных координатах и без

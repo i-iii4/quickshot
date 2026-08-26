@@ -77,7 +77,7 @@ pub const Model = struct {
     actions_after: bool = false,
     compact: bool = false,
     copied: bool = false,
-    position: TrayPosition = .right,
+    position: TrayPosition = .bottom_right,
     last_action: Action = .none,
     interaction_hover: Action = .none,
     interaction_pressed: Action = .none,
@@ -214,10 +214,10 @@ pub const Model = struct {
     pub fn autosaveEnabled(model: *const Model) bool { return model.autosave; }
     pub fn autosaveDisabled(model: *const Model) bool { return !model.autosave; }
 
-    pub fn positionLeft(model: *const Model) bool { return model.position == .left; }
-    pub fn positionRight(model: *const Model) bool { return model.position == .right; }
-    pub fn positionBottom(model: *const Model) bool { return model.position == .bottom; }
-    pub fn positionTop(model: *const Model) bool { return model.position == .top; }
+    pub fn positionBottomLeft(model: *const Model) bool { return model.position == .bottom_left; }
+    pub fn positionBottomRight(model: *const Model) bool { return model.position == .bottom_right; }
+    pub fn positionTopLeft(model: *const Model) bool { return model.position == .top_left; }
+    pub fn positionTopRight(model: *const Model) bool { return model.position == .top_right; }
 };
 
 pub const Surface = enum {
@@ -234,10 +234,10 @@ pub const Surface = enum {
 };
 
 pub const TrayPosition = enum {
-    left,
-    right,
-    bottom,
-    top,
+    bottom_left,
+    bottom_right,
+    top_left,
+    top_right,
 };
 
 pub const StrokeWeight = enum {
@@ -275,10 +275,10 @@ pub const Action = enum {
     copy_all,
     copy,
     dismiss,
-    position_left,
-    position_right,
-    position_bottom,
-    position_top,
+    position_bottom_left,
+    position_bottom_right,
+    position_top_left,
+    position_top_right,
     retention_day,
     retention_week,
     retention_month,
@@ -338,10 +338,10 @@ pub const Msg = union(enum) {
     copy_all,
     copy,
     dismiss,
-    position_left,
-    position_right,
-    position_bottom,
-    position_top,
+    position_bottom_left,
+    position_bottom_right,
+    position_top_left,
+    position_top_right,
     retention_day,
     retention_week,
     retention_month,
@@ -499,21 +499,21 @@ fn update(model: *Model, msg: Msg) void {
         .copy_all => model.last_action = .copy_all,
         .copy => model.last_action = .copy,
         .dismiss => model.last_action = .dismiss,
-        .position_left => {
-            model.position = .left;
-            model.last_action = .position_left;
+        .position_bottom_left => {
+            model.position = .bottom_left;
+            model.last_action = .position_bottom_left;
         },
-        .position_right => {
-            model.position = .right;
-            model.last_action = .position_right;
+        .position_bottom_right => {
+            model.position = .bottom_right;
+            model.last_action = .position_bottom_right;
         },
-        .position_bottom => {
-            model.position = .bottom;
-            model.last_action = .position_bottom;
+        .position_top_left => {
+            model.position = .top_left;
+            model.last_action = .position_top_left;
         },
-        .position_top => {
-            model.position = .top;
-            model.last_action = .position_top;
+        .position_top_right => {
+            model.position = .top_right;
+            model.last_action = .position_top_right;
         },
         .retention_day => {
             model.retention = .day;
@@ -701,10 +701,10 @@ fn parseBool(raw: []const u8) ?bool {
 }
 
 fn parsePosition(raw: []const u8) ?TrayPosition {
-    if (std.mem.eql(u8, raw, "left")) return .left;
-    if (std.mem.eql(u8, raw, "right")) return .right;
-    if (std.mem.eql(u8, raw, "bottom")) return .bottom;
-    if (std.mem.eql(u8, raw, "top")) return .top;
+    if (std.mem.eql(u8, raw, "bottomLeft")) return .bottom_left;
+    if (std.mem.eql(u8, raw, "bottomRight")) return .bottom_right;
+    if (std.mem.eql(u8, raw, "topLeft")) return .top_left;
+    if (std.mem.eql(u8, raw, "topRight")) return .top_right;
     return null;
 }
 
@@ -777,10 +777,10 @@ fn actionForMessage(msg: Msg) Action {
         .copy_all => .copy_all,
         .copy => .copy,
         .dismiss => .dismiss,
-        .position_left => .position_left,
-        .position_right => .position_right,
-        .position_bottom => .position_bottom,
-        .position_top => .position_top,
+        .position_bottom_left => .position_bottom_left,
+        .position_bottom_right => .position_bottom_right,
+        .position_top_left => .position_top_left,
+        .position_top_right => .position_top_right,
         .retention_day => .retention_day,
         .retention_week => .retention_week,
         .retention_month => .retention_month,

@@ -12,15 +12,37 @@ enum ThumbStyle {
 }
 
 /// Положение трея миниатюр. Сохраняется в UserDefaults, меняется из окна настроек.
+/// Угол экрана, в котором живёт стопка (`TR-42`).
+///
+/// Прежняя модель задавала СТОРОНУ, и углов получалось три: `right` и
+/// `bottom` делили правый нижний, левого верхнего не существовало вовсе.
+/// Угол определяет пару доступных осей: вертикальную и горизонтальную,
+/// обе выходят из него.
 enum TrayPosition: String {
-    case right, left, bottom, top
-    var isVertical: Bool { self == .right || self == .left }
+    case bottomRight, bottomLeft, topRight, topLeft
+
+    var isTop: Bool { self == .topRight || self == .topLeft }
+    var isLeft: Bool { self == .bottomLeft || self == .topLeft }
+
+    /// Вертикальная ось угла: лента идёт вдоль правого или левого края.
+    var verticalEdge: ThumbnailLayoutEdge { isLeft ? .left : .right }
+    /// Горизонтальная ось угла: лента идёт вдоль нижнего или верхнего края.
+    var horizontalEdge: ThumbnailLayoutEdge { isTop ? .top : .bottom }
 
     static let defaultsKey = "trayPosition"
     static let changedNotification = Notification.Name("QuickShotTrayPositionChanged")
 
     static var current: TrayPosition {
-        TrayPosition(rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? "") ?? .right
+        let raw = UserDefaults.standard.string(forKey: defaultsKey) ?? ""
+        if let corner = TrayPosition(rawValue: raw) { return corner }
+        // Настройка от прежней модели сторон читается как ближайший угол:
+        // правый и нижний край сходились в правом нижнем, верхний — в правом
+        // верхнем.
+        switch raw {
+        case "left": return .bottomLeft
+        case "top": return .topRight
+        default: return .bottomRight
+        }
     }
     static func set(_ pos: TrayPosition) {
         UserDefaults.standard.set(pos.rawValue, forKey: defaultsKey)
@@ -63,16 +85,13 @@ final class ThumbnailManager {
     /// Пока ось не выбрана — берётся из позиции трея.
     private var activeEdge: ThumbnailLayoutEdge { openAxis }
 
-    /// Вторая ось для текущей позиции трея, или `nil`, если её нет.
+    /// Горизонтальная ось текущего угла — вторая в его паре (`TR-42`).
+    ///
     /// Пара обязана выходить из ОДНОГО угла, иначе выбор оси двигал бы
-    /// собранную стопку. Для трея у правого края это `.right` и `.bottom`:
-    /// обе собираются в правом нижнем углу.
+    /// собранную стопку. Прежняя версия выводила пару из СТОРОНЫ и отдавала
+    /// `nil` для левой и верхней: там выбора оси не было вовсе.
     private var alternateEdge: ThumbnailLayoutEdge? {
-        switch ThumbnailLayoutEdge(rawValue: TrayPosition.current.rawValue) ?? .right {
-        case .right: return .bottom
-        case .bottom: return .right
-        default: return nil
-        }
+        TrayPosition.current.horizontalEdge
     }
 
     private var axisIsVertical: Bool { activeEdge.isVertical }
@@ -91,8 +110,9 @@ final class ThumbnailManager {
     /// пересчитать модель, — и оба дефекта 20.08.2026 родились именно там:
     /// в одну сторону пересчёт оказался лишним, в другую его не хватало.
     /// Право сменить ось выражается СОСТОЯНИЕМ ленты, а не фазой жеста.
-    private lazy var openAxis: ThumbnailLayoutEdge =
-        ThumbnailLayoutEdge(rawValue: TrayPosition.current.rawValue) ?? .right
+    /// Ось раскрытия. По умолчанию вертикальная ось угла; жест меняет её на
+    /// горизонтальную и обратно (`TR-38`, `TR-42`).
+    private lazy var openAxis: ThumbnailLayoutEdge = TrayPosition.current.verticalEdge
     /// Механика жеста прокрутки (`TrayGestureCore`): ход выбора оси, оценка
     /// скорости, признаки жеста и передачи инерции живут внутри неё. Раньше
     /// они лежали отдельными полями менеджера, и правка обработчика обязана
@@ -634,10 +654,10 @@ final class ThumbnailManager {
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         collapsedPeekItem = inserted
         for item in items where item !== inserted { item.hide() }
-        let edge = ThumbnailLayoutEdge(rawValue: TrayPosition.current.rawValue)!
-        let margin = TrayPosition.current == .left
-            ? ThumbStyle.margin
-            : ThumbStyle.margin
+        // Предпросмотр свёрнутого трея показывает одну карточку у своего
+        // угла: ось берётся вертикальная, ход по ней не важен.
+        let edge = TrayPosition.current.verticalEdge
+        let margin = ThumbStyle.margin
         let slot = thumbnailLayout(screenFrame: screen.frame,
                                    edge: edge,
                                    cardWidth: cardWidth,
@@ -1239,17 +1259,32 @@ final class ThumbnailManager {
         let panelSize = casePanel.fittingSize
         let side = TrayCaseView.sidePadding
         let gap = TrayCaseView.panelGap
-        // 8 pt по периметру верхней карточки, сверху добавка под панель.
-        let caseRect = NSRect(x: contour.minX - side,
-                              y: contour.minY - side,
+        // 8 pt по периметру верхней карточки, со стороны панели — добавка под
+        // неё. `TR-42`: панель прижата к тому краю шкатулки, который дальше от
+        // края экрана со стопкой. Стопка у верхнего края — панель снизу.
+        let panelBelow = TrayPosition.current.isTop
+        let panelBand = gap + panelSize.height + gap
+        var caseRect = NSRect(x: contour.minX - side,
+                              y: contour.minY - side - (panelBelow ? panelBand : 0),
                               width: max(contour.width + side * 2, panelSize.width + side * 2),
-                              height: side + contour.height + gap + panelSize.height + gap)
+                              height: side + contour.height + panelBand)
+        // `TR-42`: шкатулка не заходит под строку меню. Отступ знали только
+        // карточки — рамка строится по их контуру и о меню не знала, поэтому
+        // у верхнего края верхняя граница шкатулки уходила под меню.
+        if let screen = anchorScreen ?? NSScreen.main {
+            let ceiling = screen.frame.maxY - menuBarInset(on: screen) - ThumbStyle.margin
+            if caseRect.maxY > ceiling {
+                caseRect.origin.y -= caseRect.maxY - ceiling
+            }
+        }
         caseView.frame = caseRect
         // Панель ставится по своему измеренному размеру: растянутая на всю
         // ширину, она рисовала ряд кнопок натуральной величины у левого края
         // и скомканно (приёмка 19.08.2026).
         let panelRect = NSRect(x: caseRect.minX + side,
-                               y: caseRect.maxY - gap - panelSize.height,
+                               y: panelBelow
+                                   ? caseRect.minY + gap
+                                   : caseRect.maxY - gap - panelSize.height,
                                width: panelSize.width,
                                height: panelSize.height)
         if casePanel.frame != panelRect {
@@ -1796,8 +1831,7 @@ final class ThumbnailManager {
         for t in items {
             t.applyWidth(cardWidth, screenHeight: screen.frame.height)
         }
-        let edgePos = TrayPosition.current
-        for t in items { t.setCollapsed(settledProgress == 1); t.configureResize(for: edgePos) }
+        for t in items { t.setCollapsed(settledProgress == 1); t.configureResize(for: activeEdge) }
         let (visible, hidden) = cardLayout(on: screen)
         for t in hidden { t.hide() }
         if settledProgress == 1 {
@@ -1897,7 +1931,10 @@ final class ThumbnailManager {
                                          // `TR-34`: степень схлопывания колоды
                                          // от той же видимой позиции.
                                          deckProgress: TrayDeckClosure.value(
-                                             presented: presentedOffset, model: scrollModel))
+                                             presented: presentedOffset, model: scrollModel),
+                                         // `TR-42`: лента растёт от своего угла.
+                                         anchorTop: TrayPosition.current.isTop,
+                                         anchorLeft: TrayPosition.current.isLeft)
         }
 
         let newest = newestViewportLayout(on: screen)
@@ -1938,10 +1975,7 @@ final class ThumbnailManager {
                                                             margin: CGFloat) {
         // Карточки и хаб используют полный frame экрана, поэтому Dock и menu bar
         // не создают разные системы отсчёта.
-        let position = TrayPosition.current
-        let margin = position == .left
-            ? ThumbStyle.margin
-            : ThumbStyle.margin
+        let margin = ThumbStyle.margin
         // `TR-30`: хаб-виджет упразднён, места под него лента не резервирует.
         // Край берётся из АКТИВНОЙ оси (`TR-38`), а не только из позиции трея:
         // жест решает, раскрывается колода вверх или влево.
@@ -1978,9 +2012,9 @@ extension ThumbnailManager: TrayGestureOutput {
     var gestureDetentEngaged: Bool { detent.engaged }
     var gestureActiveEdge: ThumbnailLayoutEdge { activeEdge }
     var gestureAlternateEdge: ThumbnailLayoutEdge? { alternateEdge }
-    var gestureBaseEdge: ThumbnailLayoutEdge {
-        ThumbnailLayoutEdge(rawValue: TrayPosition.current.rawValue) ?? .right
-    }
+    /// Базовая ось угла — вертикальная; вторая, горизонтальная, приходит
+    /// через `gestureAlternateEdge` (`TR-42`).
+    var gestureBaseEdge: ThumbnailLayoutEdge { TrayPosition.current.verticalEdge }
     var gestureDipAnimating: Bool { detentDipAnimating }
 
     func gestureSwitchAxis(to edge: ThumbnailLayoutEdge) { switchAxis(to: edge) }

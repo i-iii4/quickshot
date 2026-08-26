@@ -43,10 +43,10 @@ private enum NativeHubPressedButton: Int32 {
     case copyAll
     case copy
     case dismiss
-    case positionLeft
-    case positionRight
-    case positionBottom
-    case positionTop
+    case positionBottomLeft
+    case positionBottomRight
+    case positionTopLeft
+    case positionTopRight
     case retentionDay
     case retentionWeek
     case retentionMonth
@@ -610,10 +610,10 @@ private final class NativeHubRenderView: NSView {
         switch identifier {
         case "Copy screenshot", "Copied screenshot": return .copy
         case "Dismiss screenshot": return .dismiss
-        case "Tray left": return .positionLeft
-        case "Tray right": return .positionRight
-        case "Tray bottom": return .positionBottom
-        case "Tray top": return .positionTop
+        case "Tray bottom left": return .positionBottomLeft
+        case "Tray bottom right": return .positionBottomRight
+        case "Tray top left": return .positionTopLeft
+        case "Tray top right": return .positionTopRight
         case "Keep a day": return .retentionDay
         case "Keep a week": return .retentionWeek
         case "Keep a month": return .retentionMonth
@@ -1036,14 +1036,14 @@ final class NativeSettingsContentView: NativeSurfaceHostView {
         nativeView.setSurface(.settings)
         nativeView.onButtonPressed = { [weak self] pressed in
             switch pressed {
-            case .positionLeft:
-                self?.select("left")
-            case .positionRight:
-                self?.select("right")
-            case .positionBottom:
-                self?.select("bottom")
-            case .positionTop:
-                self?.select("top")
+            case .positionBottomLeft:
+                self?.select("bottomLeft")
+            case .positionBottomRight:
+                self?.select("bottomRight")
+            case .positionTopLeft:
+                self?.select("topLeft")
+            case .positionTopRight:
+                self?.select("topRight")
             case .retentionDay:
                 self?.selectRetention("day")
             case .retentionWeek:

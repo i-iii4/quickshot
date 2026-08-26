@@ -122,10 +122,10 @@
               <column gap="10" padding="20" background="background" label="QuickShot settings">
                 <text>Thumbnail tray position</text>
                 <button-group gap="0" cross="center" label="Tray position">
-                  <button size="sm" selected="{positionLeft}" label="Tray left" on-press="position_left">Left</button>
-                  <button size="sm" selected="{positionRight}" label="Tray right" on-press="position_right">Right</button>
-                  <button size="sm" selected="{positionBottom}" label="Tray bottom" on-press="position_bottom">Bottom</button>
-                  <button size="sm" selected="{positionTop}" label="Tray top" on-press="position_top">Top</button>
+                  <button size="sm" selected="{positionBottomLeft}" label="Tray bottom left" on-press="position_bottom_left">Bottom Left</button>
+                  <button size="sm" selected="{positionBottomRight}" label="Tray bottom right" on-press="position_bottom_right">Bottom Right</button>
+                  <button size="sm" selected="{positionTopLeft}" label="Tray top left" on-press="position_top_left">Top Left</button>
+                  <button size="sm" selected="{positionTopRight}" label="Tray top right" on-press="position_top_right">Top Right</button>
                 </button-group>
                 <text size="sm" foreground="text_muted" wrap="true">New screenshots appear at the matching screen corner.</text>
                 <text>Save screenshots to disk</text>

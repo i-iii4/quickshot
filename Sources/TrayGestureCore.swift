@@ -165,6 +165,8 @@ protocol TrayAxisReader: AnyObject {
 @MainActor
 protocol TrayAxisOutput: TrayAxisReader {
     var gestureAlternateEdge: ThumbnailLayoutEdge? { get }
+    /// Диагностический журнал трея (`QUICKSHOT_LOG_TRAY`).
+    func gestureLog(_ line: String)
     /// Ось, заданная положением трея; вторая ось — `gestureAlternateEdge`.
     var gestureBaseEdge: ThumbnailLayoutEdge { get }
     func gestureSwitchAxis(to edge: ThumbnailLayoutEdge)
@@ -300,13 +302,20 @@ final class TrayAxisParty: TrayGestureParty {
         // направление, которого пользователь не показывал (приёмка
         // 20.08.2026).
         guard out.gestureAlternateEdge != nil, event.gathered,
-              event.momentumPhase == [] else { return nil }
-        switch picker.decide(deltaX: event.input.deltaX,
-                             deltaY: event.input.deltaY,
-                             began: event.phase == .began,
-                             activeEdge: out.gestureActiveEdge,
-                             base: out.gestureBaseEdge,
-                             alternate: out.gestureAlternateEdge) {
+              event.momentumPhase == [] else {
+            if event.phase == .began {
+                out.gestureLog("ось: пропуск — alt=\(out.gestureAlternateEdge?.rawValue ?? "нет") собрана=\(event.gathered) инерция=\(event.momentumPhase != [])")
+            }
+            return nil
+        }
+        let decision = picker.decide(deltaX: event.input.deltaX,
+                                    deltaY: event.input.deltaY,
+                                    began: event.phase == .began,
+                                    activeEdge: out.gestureActiveEdge,
+                                    base: out.gestureBaseEdge,
+                                    alternate: out.gestureAlternateEdge)
+        out.gestureLog("ось: \(decision) ход=(\(Int(picker.accumulatedX)),\(Int(picker.accumulatedY))) активная=\(out.gestureActiveEdge.rawValue) база=\(out.gestureBaseEdge.rawValue) alt=\(out.gestureAlternateEdge?.rawValue ?? "нет")")
+        switch decision {
         case .proceed:
             return nil
         case .wait:

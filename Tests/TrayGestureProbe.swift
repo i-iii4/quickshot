@@ -66,7 +66,9 @@ final class TrayGestureProbe: TrayGestureOutput {
         self.device = device
     }
 
-    func gestureLog(_ line: String) { effects.append("log") }
+    /// Журнал в след НЕ пишется: он ничего не двигает, а эталон сравнивает
+    /// движение. Иначе любая новая диагностическая строка ломала бы сравнение.
+    func gestureLog(_ line: String) {}
     func gestureClearScrollIntent() {
         effects.append("clearIntent")
         scrollIntentCleared = true

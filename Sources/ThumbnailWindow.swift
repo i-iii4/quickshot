@@ -649,9 +649,11 @@ final class ThumbnailWindow {
         applyWidth(width, screenHeight: screenHeight)
     }
 
-    /// Назначить внутренний край под ресайз по позиции трея (внешний приколочен к краю экрана).
-    func configureResize(for pos: TrayPosition) {
-        switch pos {
+    /// Назначить внутренний край под ресайз по АКТИВНОЙ оси ленты (внешний
+    /// приколочен к краю экрана). Ось, а не угол: в одном углу лента живёт по
+    /// двум осям, и ручка обязана следовать за той, что выбрана (`TR-42`).
+    func configureResize(for edge: ThumbnailLayoutEdge) {
+        switch edge {
         case .right:  resizeEdge = .left
         case .left:   resizeEdge = .right
         case .top:    resizeEdge = .bottom
