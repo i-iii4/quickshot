@@ -643,6 +643,7 @@ xcrun swiftc \
   Sources/AnnotationEditor.swift \
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
+  Sources/TrayPosition.swift \
   Sources/ThumbnailManager.swift \
   Sources/TrayGestureCore.swift \
   Sources/TrayCaseView.swift \
@@ -767,6 +768,21 @@ xcrun swiftc \
 
 "$THUMBNAIL_LAYOUT_OUT"
 
+TRAY_CASE_LAYOUT_OUT="$(mktemp -t quickshot-tray-case-layout)"
+xcrun swiftc \
+  -sdk "$SDK" \
+  -target "${ARCH}-apple-macos${DEPLOY}" \
+  -swift-version 6 \
+  -strict-concurrency=complete \
+  -warnings-as-errors \
+  -framework AppKit \
+  Sources/ThumbnailLayout.swift \
+  Sources/TrayScrollModel.swift \
+  Tests/TrayCaseLayoutTests.swift \
+  -o "$TRAY_CASE_LAYOUT_OUT"
+
+"$TRAY_CASE_LAYOUT_OUT"
+
 xcrun swiftc \
   -sdk "$SDK" \
   -target "${ARCH}-apple-macos${DEPLOY}" \
@@ -832,6 +848,7 @@ xcrun swiftc \
   Sources/AnnotationEditor.swift \
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
+  Sources/TrayPosition.swift \
   Sources/ThumbnailManager.swift \
   Sources/TrayGestureCore.swift \
   Sources/TrayCaseView.swift \
@@ -918,6 +935,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/AnnotationEditor.swift \
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
+  Sources/TrayPosition.swift \
   Sources/ThumbnailManager.swift \
   Sources/TrayGestureCore.swift \
   Sources/TrayCaseView.swift \
@@ -1006,6 +1024,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/AnnotationEditor.swift \
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
+  Sources/TrayPosition.swift \
   Sources/ThumbnailManager.swift \
   Sources/TrayGestureCore.swift \
   Sources/TrayCaseView.swift \

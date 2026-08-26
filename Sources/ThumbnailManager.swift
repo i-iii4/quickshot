@@ -12,44 +12,6 @@ enum ThumbStyle {
 }
 
 /// Положение трея миниатюр. Сохраняется в UserDefaults, меняется из окна настроек.
-/// Угол экрана, в котором живёт стопка (`TR-42`).
-///
-/// Прежняя модель задавала СТОРОНУ, и углов получалось три: `right` и
-/// `bottom` делили правый нижний, левого верхнего не существовало вовсе.
-/// Угол определяет пару доступных осей: вертикальную и горизонтальную,
-/// обе выходят из него.
-enum TrayPosition: String {
-    case bottomRight, bottomLeft, topRight, topLeft
-
-    var isTop: Bool { self == .topRight || self == .topLeft }
-    var isLeft: Bool { self == .bottomLeft || self == .topLeft }
-
-    /// Вертикальная ось угла: лента идёт вдоль правого или левого края.
-    var verticalEdge: ThumbnailLayoutEdge { isLeft ? .left : .right }
-    /// Горизонтальная ось угла: лента идёт вдоль нижнего или верхнего края.
-    var horizontalEdge: ThumbnailLayoutEdge { isTop ? .top : .bottom }
-
-    static let defaultsKey = "trayPosition"
-    static let changedNotification = Notification.Name("QuickShotTrayPositionChanged")
-
-    static var current: TrayPosition {
-        let raw = UserDefaults.standard.string(forKey: defaultsKey) ?? ""
-        if let corner = TrayPosition(rawValue: raw) { return corner }
-        // Настройка от прежней модели сторон читается как ближайший угол:
-        // правый и нижний край сходились в правом нижнем, верхний — в правом
-        // верхнем.
-        switch raw {
-        case "left": return .bottomLeft
-        case "top": return .topRight
-        default: return .bottomRight
-        }
-    }
-    static func set(_ pos: TrayPosition) {
-        UserDefaults.standard.set(pos.rawValue, forKey: defaultsKey)
-        NotificationCenter.default.post(name: changedNotification, object: nil)
-    }
-}
-
 /// Окно-хост всего трея: ОДНА прозрачная nonactivating-панель на весь экран. Карточки и хаб —
 /// её сабвью. Панель может стать key внутри процесса, не активируя чужое приложение; так первый
 /// клик стабильно доходит до controls трея, без флаппинга между несколькими панелями.
@@ -1261,53 +1223,22 @@ final class ThumbnailManager {
         }
         guard !contour.isNull, contour.width > 1, contour.height > 1 else { return }
         casePanel.setCount(items.count)
-        // Два размера, и путать их нельзя. Полосу под панель шкатулка мерит
-        // по ПИЛЮЛЕ: открытое меню – всплывающий слой поверх стопки, и если
-        // считать полосу по нему, шкатулка раздувается вдвое при каждом
-        // нажатии (приёмка 24.08.2026). Сама панель берёт полный размер,
-        // чтобы меню в неё поместилось.
-        let pillSize = casePanel.pillSize
-        let panelSize = casePanel.fittingSize
-        let side = TrayCaseView.sidePadding
-        let gap = TrayCaseView.panelGap
-        // 8 pt по периметру верхней карточки, со стороны панели — добавка под
-        // неё. `TR-42`: панель прижата к тому краю шкатулки, который дальше от
-        // края экрана со стопкой. Стопка у верхнего края — панель снизу.
-        let panelBelow = TrayPosition.current.isTop
-        let panelBand = gap + pillSize.height + gap
-        var caseRect = NSRect(x: contour.minX - side,
-                              y: contour.minY - (panelBelow ? panelBand : side),
-                              width: max(contour.width + side * 2, pillSize.width + side * 2),
-                              height: side + contour.height + panelBand)
-        // `TR-42`: шкатулка не заходит под строку меню. Отступ знали только
-        // карточки — рамка строится по их контуру и о меню не знала, поэтому
-        // у верхнего края верхняя граница шкатулки уходила под меню.
-        // Потолок — сама граница строки меню, без поля карточек: это поле и
-        // есть место, куда шкатулка выступает своими 8 pt. Вычитая его тоже,
-        // потолок опускался ровно на верх карточек, и верхняя карточка
-        // упиралась в край рамки (приёмка 24.08.2026).
-        //
-        // Потолок безусловен: положение собранной шкатулки зафиксировано, и
-        // перетяг её не двигает (`TR-42`).
-        if let screen = anchorScreen ?? NSScreen.main {
-            let ceiling = screen.frame.maxY - menuBarInset(on: screen)
-            if caseRect.maxY > ceiling {
-                caseRect.origin.y -= caseRect.maxY - ceiling
-            }
+        // Вся геометрия шкатулки – в чистой функции `trayCaseLayout`: её
+        // рамки проверяются числами в тестах, а не глазами на скриншоте
+        // (приёмка 26.08.2026).
+        let ceiling = (anchorScreen ?? NSScreen.main).map {
+            $0.frame.maxY - menuBarInset(on: $0)
         }
-        caseView.frame = caseRect
-        // Панель ставится по своему измеренному размеру: растянутая на всю
-        // ширину, она рисовала ряд кнопок натуральной величины у левого края
-        // и скомканно (приёмка 19.08.2026).
-        // Пилюля прижата к ВЕРХУ панели, меню всплывает под ней (`TR-43`,
-        // `crossAlign` в разметке). Значит панель крепится верхом к месту
-        // пилюли и растёт вниз, за пределы подложки шкатулки: место пилюли
-        // не зависит от того, открыто меню или нет.
-        let pillTop = panelBelow ? caseRect.minY + panelBand - gap : caseRect.maxY - gap
-        let panelRect = NSRect(x: caseRect.minX + side,
-                               y: pillTop - panelSize.height,
-                               width: panelSize.width,
-                               height: panelSize.height)
+        // `TR-42`: панель прижата к тому краю шкатулки, который дальше от
+        // края экрана со стопкой. Стопка у верхнего края – панель снизу.
+        let layout = trayCaseLayout(contour: contour,
+                                    panelSize: casePanel.fittingSize,
+                                    side: TrayCaseView.sidePadding,
+                                    gap: TrayCaseView.panelGap,
+                                    panelBelow: TrayPosition.current.isTop,
+                                    ceiling: ceiling)
+        caseView.frame = layout.caseRect
+        let panelRect = layout.panelRect
         if casePanel.frame != panelRect {
             casePanel.frame = panelRect
             casePanel.needsLayout = true

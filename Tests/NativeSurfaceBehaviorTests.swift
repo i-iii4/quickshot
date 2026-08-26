@@ -137,7 +137,6 @@ struct NativeSurfaceBehaviorTests {
         let panel = NativeCasePanelView(frame: .zero)
         panel.setCount(4)
         let size = panel.fittingSize
-        let pill = panel.pillSize
         panel.frame = NSRect(origin: .zero, size: size)
         _ = Host(view: panel, size: size)
         // `TR-43`: свёрнутая панель показывает только пилюлю со счётчиком.
@@ -155,12 +154,6 @@ struct NativeSurfaceBehaviorTests {
                     "раскрытая панель обязана быть выше свёрнутой: \(size.height) → \(expandedSize.height)")
         try require(expandedSize.height > size.height * 1.5,
                     "панель обязана вместить меню: \(size.height) → \(expandedSize.height)")
-
-        // Размер ПИЛЮЛИ от меню не зависит: по нему шкатулка строит свою
-        // полосу, и если он растёт вместе с меню, шкатулка раздувается при
-        // каждом открытии (приёмка 24.08.2026).
-        try require(panel.pillSize == pill,
-                    "пилюля обязана сохранить размер: \(pill) → \(panel.pillSize)")
 
         // Меню обязано ЛОВИТЬ МЫШЬ. Пункт меню несёт свою роль, отличную от
         // кнопки, и фильтр по одной роли кнопки оставлял его вне попадания:

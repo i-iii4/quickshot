@@ -339,3 +339,52 @@ func thumbnailVisibleFrame(slot: ThumbnailLayoutSlot,
         : NSPoint(x: slot.origin.x, y: slot.origin.y + crossInset)
     return NSRect(origin: origin, size: NSSize(width: width, height: height))
 }
+
+/// Рамки шкатулки: сама подложка и панель внутри неё.
+struct TrayCaseLayout: Equatable {
+    let caseRect: NSRect
+    let panelRect: NSRect
+}
+
+/// Геометрия шкатулки по контуру карточек и размеру панели.
+///
+/// Вынесено из `ThumbnailManager.updateCase` (приёмка 26.08.2026): расчёт жил
+/// приватным методом, который правил вьюхи напрямую, поэтому ни один тест не
+/// видел построенных рамок, а единственным наблюдателем геометрии оставался
+/// человек со скриншотом. Числа обязаны проверяться числами.
+///
+/// - `contour` – объединённая рамка карточек ленты.
+/// - `panelSize` – измеренный размер панели, вместе с раскрытым меню.
+/// - `side` – поле подложки вокруг карточек.
+/// - `gap` – зазор вокруг панели: между нею и карточками, и до края.
+/// - `panelBelow` – панель у нижнего края шкатулки (стопка стоит у верха).
+/// - `ceiling` – граница строки меню: ниже неё шкатулка не поднимается.
+func trayCaseLayout(contour: NSRect,
+                    panelSize: NSSize,
+                    side: CGFloat,
+                    gap: CGFloat,
+                    panelBelow: Bool,
+                    ceiling: CGFloat?) -> TrayCaseLayout {
+    // Полоса под панель считается по ПОЛНОМУ размеру панели: раскрытое меню
+    // живёт внутри шкатулки, и шкатулка растёт ровно на него.
+    let panelBand = gap + panelSize.height + gap
+    var caseRect = NSRect(x: contour.minX - side,
+                          y: contour.minY - (panelBelow ? panelBand : side),
+                          width: max(contour.width + side * 2, panelSize.width + side * 2),
+                          height: side + contour.height + panelBand)
+    // Шкатулка не заходит под строку меню. Потолок безусловен: положение
+    // собранной шкатулки зафиксировано, и перетяг её не двигает (`TR-42`).
+    if let ceiling, caseRect.maxY > ceiling {
+        caseRect.origin.y -= caseRect.maxY - ceiling
+    }
+    // Панель ставится по своему измеренному размеру: растянутая на всю ширину
+    // шкатулки, она рисовала ряд натуральной величины у левого края и
+    // скомканно (приёмка 19.08.2026).
+    let panelRect = NSRect(x: caseRect.minX + side,
+                           y: panelBelow
+                               ? caseRect.minY + gap
+                               : caseRect.maxY - gap - panelSize.height,
+                           width: panelSize.width,
+                           height: panelSize.height)
+    return TrayCaseLayout(caseRect: caseRect, panelRect: panelRect)
+}

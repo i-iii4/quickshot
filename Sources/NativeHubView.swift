@@ -935,7 +935,6 @@ final class NativeCasePanelView: NativeSurfaceHostView {
     var onExpandedChanged: (() -> Void)?
 
     private var measured = NSSize(width: 120, height: 28)
-    private var measuredPill = NSSize(width: 120, height: 28)
     private(set) var isExpanded = false
 
     override init(frame frameRect: NSRect) {
@@ -1050,8 +1049,6 @@ final class NativeCasePanelView: NativeSurfaceHostView {
         } else {
             content = pill
         }
-        measuredPill = NSSize(width: pill.width + Self.rowPadding * 2,
-                              height: max(pill.height, NativeHubMetrics.height) + Self.rowPadding * 2)
         measured = NSSize(width: content.width + Self.rowPadding * 2,
                           height: max(content.height, NativeHubMetrics.height) + Self.rowPadding * 2)
         invalidateIntrinsicContentSize()
@@ -1080,11 +1077,6 @@ final class NativeCasePanelView: NativeSurfaceHostView {
 
     override var fittingSize: NSSize { measured }
     override var intrinsicContentSize: NSSize { measured }
-
-    /// Размер одной пилюли, без всплывшего меню. Шкатулка строит свою полосу
-    /// по нему: `fittingSize` растёт вместе с меню, и полоса, посчитанная по
-    /// нему, раздувала бы саму шкатулку при каждом открытии (`TR-43`).
-    var pillSize: NSSize { measuredPill }
 
     override func layout() {
         super.layout()
