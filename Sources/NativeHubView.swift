@@ -620,8 +620,8 @@ private final class NativeHubRenderView: NSView {
         case "Copy screenshot", "Copied screenshot": return .copy
         case "Dismiss screenshot": return .dismiss
         case "Screenshot count": return .caseMore
-        case "Copy all": return .copyAll
-        case "Download all": return .saveAs
+        case "Copy": return .copyAll
+        case "Download": return .saveAs
         case "Clear all": return .delete
         case "Tray bottom left": return .positionBottomLeft
         case "Tray bottom right": return .positionBottomRight
@@ -979,9 +979,13 @@ final class NativeCasePanelView: NativeSurfaceHostView {
         // кнопок, поэтому обычный замер видит только пилюлю и высота не
         // растёт. Пока меню открыто, размер берётся по семантике вёрстки,
         // которая знает и о нём.
+        // Ширину задаёт пилюля, а не простор замера: при 800 подложка
+        // растягивалась на весь экран, карточка жалась к краю, а между ней и
+        // меню зияла пустота (приёмка 24.08.2026).
+        let pill = nativeView.measureButtonContentSize()
         let content = isExpanded
-            ? nativeView.measureSemanticContentSize(width: 800)
-            : nativeView.measureButtonContentSize()
+            ? nativeView.measureSemanticContentSize(width: pill.width + Self.rowPadding * 2)
+            : pill
         measured = NSSize(width: content.width + Self.rowPadding * 2,
                           height: max(content.height, NativeHubMetrics.height) + Self.rowPadding * 2)
         invalidateIntrinsicContentSize()

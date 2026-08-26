@@ -20,9 +20,9 @@
           <stack padding="6" label="Case">
             <button size="sm" variant="ghost" icon="app:more" icon-placement="trailing" label="Screenshot count" on-press="case_more">{countLabel}</button>
             <if test="{caseExpanded}">
-              <dropdown-menu anchor="below" anchor-alignment="stretch" on-dismiss="case_dismiss">
-                <menu-item icon="copy" on-press="copy_all">Copy all</menu-item>
-                <menu-item icon="download" on-press="save_as">Download all</menu-item>
+              <dropdown-menu anchor="below" on-dismiss="case_dismiss">
+                <menu-item icon="copy" on-press="copy_all">Copy</menu-item>
+                <menu-item icon="download" on-press="save_as">Download</menu-item>
                 <separator />
                 <menu-item icon="x" on-press="delete">Clear all</menu-item>
               </dropdown-menu>

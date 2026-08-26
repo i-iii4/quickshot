@@ -1411,8 +1411,8 @@ rg -F -q "sessions.discardAll()" Sources/ThumbnailManager.swift
 # `TR-43`: меню шкатулки — штатный компонент дизайн-системы, а не самодельный
 # ряд кнопок; подписи команд читаются словами, разрушительная отделена.
 rg -F -q "<dropdown-menu" NativeQuickShotUI/src/hub.native
-rg -F -q "<menu-item icon=\"copy\" on-press=\"copy_all\">Copy all</menu-item>" NativeQuickShotUI/src/hub.native
-rg -F -q "<menu-item icon=\"download\" on-press=\"save_as\">Download all</menu-item>" NativeQuickShotUI/src/hub.native
+rg -F -q "<menu-item icon=\"copy\" on-press=\"copy_all\">Copy</menu-item>" NativeQuickShotUI/src/hub.native
+rg -F -q "<menu-item icon=\"download\" on-press=\"save_as\">Download</menu-item>" NativeQuickShotUI/src/hub.native
 rg -F -q "<menu-item icon=\"x\" on-press=\"delete\">Clear all</menu-item>" NativeQuickShotUI/src/hub.native
 rg -F -q "<separator />" NativeQuickShotUI/src/hub.native
 
