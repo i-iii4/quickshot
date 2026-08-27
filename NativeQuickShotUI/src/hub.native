@@ -17,16 +17,26 @@
         </if>
         <else>
         <if test="{casePanelSurface}">
-          <stack padding="6" label="Case">
-              <button size="sm" variant="ghost" icon="app:more" icon-placement="trailing" label="Screenshot count" on-press="case_more">{countLabel}</button>
-              <if test="{caseExpanded}">
-                <dropdown-menu anchor="below" on-dismiss="case_dismiss">
+          <stack padding="0" label="Case">
+            <button size="sm" variant="secondary" icon="app:more" icon-placement="trailing" label="Screenshot count" on-press="case_more">{countLabel}</button>
+            <if test="{caseExpanded}">
+              <if test="{caseMenuAbove}">
+                <dropdown-menu anchor="above" anchor-alignment="stretch" anchor-offset="8" on-dismiss="case_dismiss">
                   <menu-item icon="copy" on-press="copy_all">Copy</menu-item>
                   <menu-item icon="download" on-press="save_as">Download</menu-item>
                   <separator />
                   <menu-item icon="x" on-press="delete">Clear all</menu-item>
                 </dropdown-menu>
               </if>
+              <else>
+                <dropdown-menu anchor="below" anchor-alignment="stretch" anchor-offset="8" on-dismiss="case_dismiss">
+                  <menu-item icon="copy" on-press="copy_all">Copy</menu-item>
+                  <menu-item icon="download" on-press="save_as">Download</menu-item>
+                  <separator />
+                  <menu-item icon="x" on-press="delete">Clear all</menu-item>
+                </dropdown-menu>
+              </else>
+            </if>
           </stack>
         </if>
         <else>

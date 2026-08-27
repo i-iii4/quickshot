@@ -399,6 +399,11 @@ private final class NativeHubRenderView: NSView {
         sendCommand("hub.count:\(max(0, count))")
     }
 
+    /// Сторона, в которую раскрывается меню шкатулки.
+    func setMenuAbove(_ above: Bool) {
+        sendCommand("case.menu_above:\(above ? 1 : 0)")
+    }
+
     func hasInteractiveButton(at point: NSPoint) -> Bool {
         button(at: point) != nil
     }
@@ -935,6 +940,7 @@ final class NativeCasePanelView: NativeSurfaceHostView {
     var onExpandedChanged: (() -> Void)?
 
     private var measured = NSSize(width: 120, height: 28)
+    private var menuAbove = false
     private(set) var isExpanded = false
 
     override init(frame frameRect: NSRect) {
@@ -1020,6 +1026,14 @@ final class NativeCasePanelView: NativeSurfaceHostView {
         remeasure()
     }
 
+    /// Меню раскрывается вверх (панель стоит у ВЕРХНЕГО края шкатулки).
+    func setMenuAbove(_ above: Bool) {
+        guard menuAbove != above else { return }
+        menuAbove = above
+        nativeView.setMenuAbove(above)
+        remeasure()
+    }
+
     /// Замер под текущее содержимое: пилюля или пилюля с открытым меню.
     ///
     /// Размер берётся у самой вёрстки, а не считается по числу рядов:
@@ -1070,8 +1084,10 @@ final class NativeCasePanelView: NativeSurfaceHostView {
 
     /// Место под счётчик справа от кнопок.
     private static let counterSlack: CGFloat = 26
-    /// Внутренние поля ряда из разметки панели.
-    private static let rowPadding: CGFloat = 6
+    /// Внутренние поля ряда из разметки панели. Ноль: поле вокруг панели даёт
+    /// сама шкатулка, и второе поле здесь складывалось с ним – над кнопкой
+    /// выходило 14 против 8 у карточек (приёмка 26.08.2026).
+    private static let rowPadding: CGFloat = 0
     /// Высота простора для замеров: заведомо больше пилюли с открытым меню.
     private static let measurementSlack: CGFloat = 400
 

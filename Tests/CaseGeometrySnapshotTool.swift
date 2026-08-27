@@ -17,8 +17,8 @@ import Foundation
 struct CaseGeometrySnapshotTool {
     /// Размер карточки ленты.
     private static let cardSize = NSSize(width: 168, height: 108)
-    /// Шаг между карточками в собранной ленте.
-    private static let cardStep: CGFloat = 118
+    /// Зазор между карточками – тот же, что в ленте (`ThumbStyle.gap`).
+    private static let cardGap: CGFloat = 12
     /// Поле вокруг шкатулки на кадре, чтобы её край был виден.
     private static let margin: CGFloat = 24
 
@@ -31,29 +31,57 @@ struct CaseGeometrySnapshotTool {
                 shoot(position: position, expanded: expanded, cards: 5, in: directory)
             }
         }
+        // Одна карточка: шкатулка узкая, и панель может оказаться ШИРЕ её
+        // содержимого – проверяем, что тогда делает ширина.
+        shoot(position: .bottomRight, expanded: false, cards: 1, in: directory, tag: "single")
+        shoot(position: .bottomRight, expanded: true, cards: 1, in: directory, tag: "single")
+        // Упор в строку меню: шкатулка сдвигается вниз, а карточки остаются
+        // на месте – видно, не наезжает ли панель на верхнюю карточку.
+        shoot(position: .topRight, expanded: true, cards: 5, in: directory,
+              tag: "ceiling", ceilingDrop: 80)
         print("снимки шкатулки записаны в \(directory)")
     }
 
     /// Один кадр: шкатулка в заданном углу, с собранным или раскрытым меню.
     private static func shoot(position: TrayPosition, expanded: Bool,
-                              cards: Int, in directory: String) {
+                              cards: Int, in directory: String,
+                              tag: String? = nil, ceilingDrop: CGFloat? = nil) {
         let panel = NativeCasePanelView(frame: .zero)
         panel.setCount(cards)
+        panel.setMenuAbove(!position.isTop)
         if expanded { panel.debugToggleCommands() }
         let panelSize = panel.fittingSize
 
         let frames = cardFrames(cards: cards, position: position)
         let contour = frames.dropFirst().reduce(frames[0]) { $0.union($1) }
-        let layout = trayCaseLayout(contour: contour,
-                                    panelSize: panelSize,
-                                    side: TrayCaseView.sidePadding,
-                                    gap: TrayCaseView.panelGap,
-                                    panelBelow: position.isTop,
-                                    ceiling: nil)
+        // Потолок задаётся как «опустить шкатулку на N», чтобы кадр не зависел
+        // от размера настоящего экрана.
+        let free = trayCaseLayout(contour: contour, panelSize: panelSize,
+                                  side: TrayCaseView.sidePadding,
+                                  cardGap: cardGap,
+                                  panelBelow: position.isTop, ceiling: nil)
+        // При упоре в строку меню панель уходит на другую сторону шкатулки –
+        // как в менеджере.
+        var layout = free
+        var below = position.isTop
+        if let drop = ceilingDrop {
+            let ceiling = free.caseRect.maxY - drop
+            layout = trayCaseLayout(contour: contour, panelSize: panelSize,
+                                    side: TrayCaseView.sidePadding, cardGap: cardGap,
+                                    panelBelow: below, ceiling: ceiling)
+            if layout.overflow > 0 {
+                let flipped = trayCaseLayout(contour: contour, panelSize: panelSize,
+                                             side: TrayCaseView.sidePadding, cardGap: cardGap,
+                                             panelBelow: !below, ceiling: ceiling)
+                if flipped.overflow < layout.overflow { below = !below; layout = flipped }
+            }
+            panel.setMenuAbove(!below)
+            panel.layoutSubtreeIfNeeded()
+        }
 
         // Кадр строится вокруг шкатулки: её рамка живёт в координатах экрана,
         // а рисуем мы в своём маленьком окне.
-        let canvas = layout.caseRect.insetBy(dx: -margin, dy: -margin)
+        let canvas = layout.caseRect.union(contour).insetBy(dx: -margin, dy: -margin)
         let shift = NSPoint(x: -canvas.minX, y: -canvas.minY)
         let root = FlatBackdrop(frame: NSRect(origin: .zero, size: canvas.size))
         let window = NSWindow(contentRect: root.bounds, styleMask: [.borderless],
@@ -73,7 +101,8 @@ struct CaseGeometrySnapshotTool {
         panel.needsLayout = true
         panel.layoutSubtreeIfNeeded()
 
-        let name = "case-\(position.rawValue)-\(expanded ? "expanded" : "collapsed")"
+        let suffix = tag.map { "-\($0)" } ?? ""
+        let name = "case-\(position.rawValue)-\(expanded ? "expanded" : "collapsed")\(suffix)"
         guard let rep = root.bitmapImageRepForCachingDisplay(in: root.bounds) else { return }
         root.cacheDisplay(in: root.bounds, to: rep)
         guard let data = rep.representation(using: .png, properties: [:]) else { return }
@@ -95,7 +124,7 @@ struct CaseGeometrySnapshotTool {
     private static func cardFrames(cards: Int, position: TrayPosition) -> [NSRect] {
         let anchor = NSPoint(x: 400, y: 400)
         return (0..<cards).map { index in
-            let offset = CGFloat(index) * cardStep
+            let offset = CGFloat(index) * (cardSize.height + cardGap)
             let y = position.isTop ? anchor.y - offset : anchor.y + offset
             return NSRect(x: anchor.x, y: y, width: cardSize.width, height: cardSize.height)
         }

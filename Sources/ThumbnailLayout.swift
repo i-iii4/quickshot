@@ -344,6 +344,14 @@ func thumbnailVisibleFrame(slot: ThumbnailLayoutSlot,
 struct TrayCaseLayout: Equatable {
     let caseRect: NSRect
     let panelRect: NSRect
+    /// Насколько шкатулка вылезла за строку меню, в точках. Ноль – влезла.
+    ///
+    /// Шкатулка обнимает содержимое вплотную, поэтому сдвинуть её вниз, не
+    /// выставив карточки и панель наружу, нельзя: до 26.08.2026 сдвиг был, и
+    /// при упоре верхняя карточка торчала из подложки. Конфликт решается
+    /// СОДЕРЖИМЫМ – лента обязана отступить от края экрана на полосу панели,
+    /// – а не подложкой. Здесь он только измеряется.
+    let overflow: CGFloat
 }
 
 /// Геометрия шкатулки по контуру карточек и размеру панели.
@@ -353,38 +361,48 @@ struct TrayCaseLayout: Equatable {
 /// видел построенных рамок, а единственным наблюдателем геометрии оставался
 /// человек со скриншотом. Числа обязаны проверяться числами.
 ///
+/// Сетка одна на всю шкатулку: `side` – поле от края до содержимого со всех
+/// сторон, `cardGap` – зазор МЕЖДУ элементами содержимого. До 26.08.2026 поле
+/// панели складывалось с зазором шкатулки, и над кнопкой выходило 14 против 8
+/// у карточек: значение получалось сложением независимых констант, а не
+/// решением.
+///
 /// - `contour` – объединённая рамка карточек ленты.
 /// - `panelSize` – измеренный размер панели, вместе с раскрытым меню.
-/// - `side` – поле подложки вокруг карточек.
-/// - `gap` – зазор вокруг панели: между нею и карточками, и до края.
+/// - `side` – поле подложки вокруг содержимого.
+/// - `cardGap` – зазор между панелью и карточками, тот же, что между
+///   карточками ленты.
 /// - `panelBelow` – панель у нижнего края шкатулки (стопка стоит у верха).
-/// - `ceiling` – граница строки меню: ниже неё шкатулка не поднимается.
+/// - `ceiling` – граница строки меню: выше неё шкатулка не поднимается.
 func trayCaseLayout(contour: NSRect,
                     panelSize: NSSize,
                     side: CGFloat,
-                    gap: CGFloat,
+                    cardGap: CGFloat,
                     panelBelow: Bool,
                     ceiling: CGFloat?) -> TrayCaseLayout {
-    // Полоса под панель считается по ПОЛНОМУ размеру панели: раскрытое меню
-    // живёт внутри шкатулки, и шкатулка растёт ровно на него.
-    let panelBand = gap + panelSize.height + gap
-    var caseRect = NSRect(x: contour.minX - side,
+    // Полоса под панель: поле от края шкатулки, сама панель, зазор до
+    // карточек. Раскрытое меню живёт ВНУТРИ шкатулки, и шкатулка растёт
+    // ровно на него.
+    let panelBand = side + panelSize.height + cardGap
+    let caseRect = NSRect(x: contour.minX - side,
                           y: contour.minY - (panelBelow ? panelBand : side),
                           width: max(contour.width + side * 2, panelSize.width + side * 2),
                           height: side + contour.height + panelBand)
-    // Шкатулка не заходит под строку меню. Потолок безусловен: положение
-    // собранной шкатулки зафиксировано, и перетяг её не двигает (`TR-42`).
-    if let ceiling, caseRect.maxY > ceiling {
-        caseRect.origin.y -= caseRect.maxY - ceiling
-    }
-    // Панель ставится по своему измеренному размеру: растянутая на всю ширину
-    // шкатулки, она рисовала ряд натуральной величины у левого края и
-    // скомканно (приёмка 19.08.2026).
+    let overflow = ceiling.map { max(0, caseRect.maxY - $0) } ?? 0
+    // Панель крепится к КАРТОЧКАМ, а не к краю шкатулки. Кнопка стоит в том
+    // конце панели, что ближе к карточкам, поэтому при раскрытии меню растёт
+    // наружу, а кнопка остаётся на месте. Прижатая к краю шкатулки, она
+    // уезжала вместе с ним – ровно та жалоба, с которой началась работа
+    // (приёмка 26.08.2026).
+    //
+    // Ширина – по содержимому шкатулки: измеренная по своему тексту, панель
+    // прижималась влево и оставляла справа дыру в 27 pt, а её подпись не была
+    // выровнена с карточками.
     let panelRect = NSRect(x: caseRect.minX + side,
                            y: panelBelow
-                               ? caseRect.minY + gap
-                               : caseRect.maxY - gap - panelSize.height,
-                           width: panelSize.width,
+                               ? contour.minY - cardGap - panelSize.height
+                               : contour.maxY + cardGap,
+                           width: caseRect.width - side * 2,
                            height: panelSize.height)
-    return TrayCaseLayout(caseRect: caseRect, panelRect: panelRect)
+    return TrayCaseLayout(caseRect: caseRect, panelRect: panelRect, overflow: overflow)
 }

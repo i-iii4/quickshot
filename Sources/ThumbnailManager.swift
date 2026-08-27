@@ -1231,12 +1231,32 @@ final class ThumbnailManager {
         }
         // `TR-42`: панель прижата к тому краю шкатулки, который дальше от
         // края экрана со стопкой. Стопка у верхнего края – панель снизу.
-        let layout = trayCaseLayout(contour: contour,
-                                    panelSize: casePanel.fittingSize,
-                                    side: TrayCaseView.sidePadding,
-                                    gap: TrayCaseView.panelGap,
-                                    panelBelow: TrayPosition.current.isTop,
-                                    ceiling: ceiling)
+        // `TR-42`: панель прижата к тому краю шкатулки, который дальше от края
+        // экрана со стопкой. Стопка у верхнего края – панель снизу.
+        //
+        // Если с этой стороны шкатулка не влезает под строку меню, панель
+        // уходит на противоположную. Подложку двигать нельзя: она обнимает
+        // содержимое вплотную, и сдвиг выставлял карточки наружу (приёмка
+        // 26.08.2026).
+        func build(panelBelow: Bool) -> TrayCaseLayout {
+            trayCaseLayout(contour: contour,
+                           panelSize: casePanel.fittingSize,
+                           side: TrayCaseView.sidePadding,
+                           cardGap: ThumbStyle.gap,
+                           panelBelow: panelBelow,
+                           ceiling: ceiling)
+        }
+        var panelBelow = TrayPosition.current.isTop
+        var layout = build(panelBelow: panelBelow)
+        if layout.overflow > 0 {
+            let flipped = build(panelBelow: !panelBelow)
+            if flipped.overflow < layout.overflow {
+                panelBelow = !panelBelow
+                layout = flipped
+            }
+        }
+        // Меню раскрывается прочь от карточек: панель снизу – меню вниз.
+        casePanel.setMenuAbove(!panelBelow)
         caseView.frame = layout.caseRect
         let panelRect = layout.panelRect
         if casePanel.frame != panelRect {

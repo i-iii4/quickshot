@@ -27,7 +27,11 @@ final class TrayCaseView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        material.material = .hudWindow
+        // Тон подложки задан тем, что внутри неё живут поверхности
+        // дизайн-системы: меню там на шаг СВЕТЛЕЕ фона темы. Светлый
+        // `hudWindow` был светлее меню, и меню читалось не слоем поверх, а
+        // вырезанной дырой (приёмка 26.08.2026).
+        material.material = .underWindowBackground
         material.blendingMode = .behindWindow
         // Пин активного вида: без него материал гаснет, когда окно не key.
         material.state = .active
