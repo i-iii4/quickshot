@@ -1024,13 +1024,21 @@ final class NativeCasePanelView: NativeSurfaceHostView {
         measuredPill = NSSize(width: pill.width, height: max(pill.height, NativeHubMetrics.height))
         if isExpanded {
             let rect = nativeView.measureSemanticContentRect(width: pill.width)
-            measured = NSSize(width: max(pill.width, rect.width), height: rect.height)
+            // Запас под ТЕНЬ меню: её рисует движок SDK за границами самой
+            // поверхности (`shadow.md`: смещение 8, размытие 24), и холст,
+            // обрезанный по содержимому, срезал её ровной линией.
+            measured = NSSize(width: max(pill.width, rect.width) + Self.shadowSlack * 2,
+                              height: rect.height + Self.shadowSlack)
         } else {
             measured = measuredPill
         }
         invalidateIntrinsicContentSize()
         redrawAtCurrentBounds()
     }
+
+    /// Поле холста под тень меню. `shadow.md` даёт смещение 8 и размытие 24
+    /// при сжатии -12, то есть заметный ореол снизу и по бокам.
+    private static let shadowSlack: CGFloat = 24
 
     /// Размер одной пилюли – для подложки шкатулки.
     var pillSize: NSSize { measuredPill }

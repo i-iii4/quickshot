@@ -23,7 +23,7 @@
           <stack label="Case">
             <button size="sm" variant="secondary" icon="app:more" icon-placement="trailing" label="Screenshot count" on-press="case_more">{countLabel}</button>
             <if test="{caseExpanded}">
-              <dropdown-menu anchor="below" anchor-alignment="stretch" on-dismiss="case_dismiss">
+              <dropdown-menu anchor="below" on-dismiss="case_dismiss">
                 <menu-item icon="copy" on-press="copy_all">Copy</menu-item>
                 <menu-item icon="download" on-press="save_as">Download</menu-item>
                 <separator />

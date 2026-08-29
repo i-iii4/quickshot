@@ -492,10 +492,6 @@ pub fn mobileOptions() App.Options {
     };
 }
 
-/// Радиус всех скруглений QuickShot: одна ступень на весь интерфейс.
-/// Значение из шкалы Mine (`--radius-1`).
-const mine_radius: f32 = 3;
-
 /// Отступ оболочки панели редактора. Раньше выводился из разницы ступеней
 /// радиуса (`xl - md`), и единый радиус обнулил бы его. Отступ и скругление –
 /// разные величины, их связь была случайной (приёмка 27.08.2026).
@@ -509,14 +505,11 @@ const shell_inset: f32 = 6;
 /// теперь нечему, и белая линия в 10% лишь мутила бы заливку.
 fn mineTokens(opts: canvas.ThemeOptions) canvas.DesignTokens {
     var tokens = canvas.DesignTokens.theme(opts);
-    // Радиус наших КОНТРОЛОВ – одна ступень. Ступень `lg` не трогаем: на ней
-    // сидят всплывающие поверхности дизайн-системы (`dropdown_menu`,
-    // `menu_surface`, `card`, `panel`), и подменив её, мы отбирали у штатного
-    // меню его собственный вид – оно становилось нашей квадратной плашкой
-    // (приёмка 29.08.2026).
-    tokens.radius.sm = mine_radius;
-    tokens.radius.md = mine_radius;
-    tokens.radius.xl = mine_radius;
+    // Радиусы SDK НЕ переопределяются вовсе. Меню, его пункты и подсветка
+    // наведения берут радиус из разных ступеней, и подменяя любую из них, мы
+    // отбираем у штатного компонента его вид: то плашка становится квадратной,
+    // то квадратным становится ховер пункта (приёмка 29.08.2026). Наши 3 pt
+    // живут там, где рисуем мы сами – шкатулка, карточки, бейдж в AppKit.
     // Лестница поверхностей Mine, шаг L 0.03.
     tokens.colors.background = canvas.Color.rgb8(9, 9, 9); // --background oklch(0.14)
     // В SDK `surface` – один токен на карточку и всплывающую поверхность. В
@@ -540,6 +533,22 @@ fn mineTokens(opts: canvas.ThemeOptions) canvas.DesignTokens {
 }
 
 fn designTokens(model: *const Model) canvas.DesignTokens {
+    // Поверхность шкатулки целиком – ШТАТНЫЕ токены дизайн-системы. В ней
+    // живут пилюля и всплывающее меню, и любое наше переопределение бьёт по
+    // меню: радиус ломает его форму, `surface_subtle` гасит подсветку пункта
+    // до неразличимой (наш #161616 против штатного #262626), и компонент
+    // перестаёт выглядеть собой (приёмка 29.08.2026).
+    if (model.surface == .case_panel) {
+        var house = canvas.DesignTokens.theme(.{
+            .pack = .house,
+            .color_scheme = .dark,
+            .contrast = if (model.high_contrast) .high else .standard,
+            .reduce_motion = model.reduce_motion,
+        });
+        // Поверхность лежит на подложке шкатулки: собственного фона у неё нет.
+        house.colors.background = canvas.Color.rgba8(0, 0, 0, 0);
+        return house;
+    }
     var tokens = mineTokens(.{
         .pack = .house,
         .color_scheme = .dark,

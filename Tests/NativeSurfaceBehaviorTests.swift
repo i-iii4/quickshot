@@ -26,23 +26,23 @@ struct NativeSurfaceBehaviorTests {
         }
     }
 
-    /// Метрики приходят из Native SDK, а не зашиты в Swift. Радиус и отступ
-    /// оболочки закреплены на значениях QuickShot, а не House: интерфейс
-    /// переведён на дизайн-систему Mine, где скругление одно на всё –
-    /// `--radius-1` = 3 (приёмка 27.08.2026). Отступ оболочки развязан с
-    /// радиусом: раньше он выводился как `radius.xl - radius.md`, и единый
-    /// радиус обнулил бы его.
+    /// Метрики приходят из Native SDK, а не зашиты в Swift. Радиусы – ШТАТНЫЕ
+    /// House: подменяя их, мы отбирали у компонентов дизайн-системы их
+    /// собственный вид, вплоть до квадратной подсветки пунктов меню (приёмка
+    /// 29.08.2026). Наши 3 pt живут только там, где рисует AppKit. Отступ
+    /// оболочки развязан с радиусом: раньше он выводился как
+    /// `radius.xl - radius.md`.
     private static func testHouseMetrics() throws {
         let expected: [(NativeSDKMetric, CGFloat)] = [
             (.controlHeight, 28),
-            (.controlRadius, 3),
+            (.controlRadius, 8),
             (.controlInset, 10),
             (.iconSide, 16),
             (.iconGap, 6),
             (.buttonFontSize, 14),
             (.groupGap, 8),
             (.shellInset, 6),
-            (.bubbleRadius, 3),
+            (.bubbleRadius, 14),
             (.animationDurationMilliseconds, 120),
             (.reducedAnimationDurationMilliseconds, 0),
         ]

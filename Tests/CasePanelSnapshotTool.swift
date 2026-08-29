@@ -21,6 +21,13 @@ struct CasePanelSnapshotTool {
         panel.debugToggleCommands()
         shoot(panel, name: "case-pill-expanded", in: directory)
 
+        // Подсветка наведения – часть штатного компонента: её скругление
+        // проверяется кадром, а не рассуждением.
+        panel.frame = NSRect(origin: .zero, size: panel.fittingSize)
+        panel.layoutSubtreeIfNeeded()
+        panel.debugHoverButton(title: "Download")
+        shoot(panel, name: "case-menu-hover", in: directory)
+
         // Выравнивание корня привязано к поверхности: трей обязан остаться
         // центрованным. Проверяется кадром, а не рассуждением.
         let copyButton = NativeThumbnailButtonView(kind: .copy)
