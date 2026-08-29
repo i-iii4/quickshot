@@ -528,6 +528,18 @@ fn mineTokens(opts: canvas.ThemeOptions) canvas.DesignTokens {
 }
 
 fn designTokens(model: *const Model) canvas.DesignTokens {
+    // Меню шкатулки – ШТАТНЫЙ компонент дизайн-системы в своём окне, и берёт
+    // он штатные токены House: наши переопределения (радиус 3, палитра Mine)
+    // ломали его собственный вид – скругление, тон поверхности, тон линий.
+    // Здесь нужен компонент как есть, без правок (`TR-45`).
+    if (model.surface == .case_menu) {
+        return canvas.DesignTokens.theme(.{
+            .pack = .house,
+            .color_scheme = .dark,
+            .contrast = if (model.high_contrast) .high else .standard,
+            .reduce_motion = model.reduce_motion,
+        });
+    }
     var tokens = mineTokens(.{
         .pack = .house,
         .color_scheme = .dark,
