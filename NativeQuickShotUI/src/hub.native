@@ -1,4 +1,4 @@
-<row gap="8" cross="center" padding="0" label="QuickShot controls">
+<row gap="8" cross="{crossAlign}" padding="0" label="QuickShot controls">
         <if test="{thumbnailCopySurface}">
           <row label="Copy screenshot action">
             <if test="{compact}">
@@ -17,23 +17,23 @@
         </if>
         <else>
         <if test="{casePanelSurface}">
-          <button size="sm" variant="secondary" icon="app:more" icon-placement="trailing" label="Screenshot count" on-press="case_more">{countLabel}</button>
+          <!-- Штатный паттерн дизайн-системы, один в один с каталогом
+               (`catalog.native`, тайл Dropdown Menu): триггер и якорная
+               поверхность в одном `stack`, состояние держит модель. -->
+          <stack label="Case">
+            <button size="sm" variant="secondary" icon="app:more" icon-placement="trailing" label="Screenshot count" on-press="case_more">{countLabel}</button>
+            <if test="{caseExpanded}">
+              <dropdown-menu anchor="below" anchor-alignment="stretch" on-dismiss="case_dismiss">
+                <menu-item icon="copy" on-press="copy_all">Copy</menu-item>
+                <menu-item icon="download" on-press="save_as">Download</menu-item>
+                <separator />
+                <menu-item icon="x" on-press="delete">Clear all</menu-item>
+              </dropdown-menu>
+            </if>
+          </stack>
         </if>
         <else>
-        <if test="{caseMenuSurface}">
-          <!-- Меню шкатулки живёт в СВОЁМ окне, поэтому объявлено БЕЗ `anchor`:
-               с ним поверхность становится плавающей и зажимается в границы
-               холста, а здесь холст окна и есть само меню. Компоненты те же,
-               что и раньше: `dropdown-menu`, `menu-item`, `separator`. -->
-          <dropdown-menu on-dismiss="case_dismiss">
-            <menu-item icon="copy" on-press="copy_all">Copy</menu-item>
-            <menu-item icon="download" on-press="save_as">Download</menu-item>
-            <separator />
-            <menu-item icon="x" on-press="delete">Clear all</menu-item>
-          </dropdown-menu>
-        </if>
-        <else>
-          <if test="{annotationToolbarSurface}">
+                <if test="{annotationToolbarSurface}">
             <column gap="6" padding="6" label="Annotation toolbar">
               <if test="{toolbarCompact}">
                 <row gap="8" cross="center" label="Tools row">
@@ -163,7 +163,6 @@
               <if test="{pinnedSurface}">
                 <button size="sm" variant="secondary" icon="{copyIcon}" label="{copyLabel}" on-press="copy">{copyText}</button>
               </if>
-  </else>
   </else>
   </else>
   </else>

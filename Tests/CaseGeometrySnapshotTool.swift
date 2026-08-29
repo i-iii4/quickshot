@@ -53,13 +53,14 @@ struct CaseGeometrySnapshotTool {
                               tag: String? = nil, ceilingDrop: CGFloat? = nil) {
         let panel = NativeCasePanelView(frame: .zero)
         panel.setCount(cards)
+        if expanded { panel.debugToggleCommands() }
         let panelSize = panel.fittingSize
 
         let frames = cardFrames(cards: cards, position: position)
         let contour = frames.dropFirst().reduce(frames[0]) { $0.union($1) }
         // Потолок задаётся как «опустить шкатулку на N», чтобы кадр не зависел
         // от размера настоящего экрана.
-        let free = trayCaseLayout(contour: contour, panelSize: panelSize,
+        let free = trayCaseLayout(contour: contour, pillSize: panel.pillSize, panelSize: panelSize,
                                   side: TrayCaseView.sidePadding,
                                   cardGap: cardGap,
                                   panelBelow: position.isTop, ceiling: nil)
@@ -69,11 +70,11 @@ struct CaseGeometrySnapshotTool {
         var below = position.isTop
         if let drop = ceilingDrop {
             let ceiling = free.caseRect.maxY - drop
-            layout = trayCaseLayout(contour: contour, panelSize: panelSize,
+            layout = trayCaseLayout(contour: contour, pillSize: panel.pillSize, panelSize: panelSize,
                                     side: TrayCaseView.sidePadding, cardGap: cardGap,
                                     panelBelow: below, ceiling: ceiling)
             if layout.overflow > 0 {
-                let flipped = trayCaseLayout(contour: contour, panelSize: panelSize,
+                let flipped = trayCaseLayout(contour: contour, pillSize: panel.pillSize, panelSize: panelSize,
                                              side: TrayCaseView.sidePadding, cardGap: cardGap,
                                              panelBelow: !below, ceiling: ceiling)
                 if flipped.overflow < layout.overflow { below = !below; layout = flipped }
@@ -101,20 +102,6 @@ struct CaseGeometrySnapshotTool {
         panel.frame = shifted(layout.panelRect, by: shift)
         root.addSubview(panel)
 
-        // `TR-45`: меню живёт в СВОЁМ окне поверх трея. В кадре оно рисуется
-        // тем же слоем поверх шкатулки, на своём месте относительно пилюли:
-        // геометрию проверяем целиком, а не по частям.
-        if expanded {
-            let menu = NativeCaseMenuView(frame: .zero)
-            let size = menu.fittingSize
-            let pill = shifted(layout.panelRect, by: shift)
-            let above = !position.isTop
-            let y = above ? pill.maxY + menuGap : pill.minY - menuGap - size.height
-            menu.frame = NSRect(x: pill.minX, y: y, width: size.width, height: size.height)
-            root.addSubview(menu)
-            menu.needsLayout = true
-            menu.layoutSubtreeIfNeeded()
-        }
         root.layoutSubtreeIfNeeded()
         panel.needsLayout = true
         panel.layoutSubtreeIfNeeded()

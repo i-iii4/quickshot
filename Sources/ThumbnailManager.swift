@@ -128,11 +128,6 @@ final class ThumbnailManager {
     /// ней. Видима строго когда лента защёлкнута.
     private let caseView = TrayCaseView(frame: .zero)
     private let casePanel = NativeCasePanelView(frame: .zero)
-    /// Меню команд шкатулки: своё окно поверх трея (`TR-45`).
-    private let caseMenu = CaseMenuWindow()
-    /// Мониторы клика мимо меню. Нужны оба: глобальный не видит событий
-    /// своего приложения, локальный — чужих.
-    private var caseMenuClickMonitors: [Any] = []
     private var caseVisible = false
     /// Поколение отложенного возврата из-за края: новое событие жеста
     /// обесценивает ранее запланированный возврат.
@@ -176,12 +171,11 @@ final class ThumbnailManager {
         // Шкатулка (`TR-30`): подложка ЗА карточками, панель — НАД ними.
         caseView.isHidden = true
         casePanel.isHidden = true
-        casePanel.onMenuRequested = { [weak self] in self?.toggleCaseMenu() }
-        // Команды выполняет меню: пилюля их больше не содержит.
-        caseMenu.onDeleteAll = { [weak self] in self?.runCaseCommand { $0.deleteAll() } }
-        caseMenu.onCopyAll = { [weak self] in self?.runCaseCommand { $0.copyAll() } }
-        caseMenu.onSaveAll = { [weak self] in self?.runCaseCommand { $0.saveAllAs() } }
-        caseMenu.onDismiss = { [weak self] in self?.hideCaseMenu() }
+        casePanel.onDeleteAll = { [weak self] in self?.deleteAll() }
+        casePanel.onCopyAll = { [weak self] in self?.copyAll() }
+        casePanel.onSaveAll = { [weak self] in self?.saveAllAs() }
+        // Меню открылось или закрылось: панель меняет размер, подложка нет.
+        casePanel.onExpandedChanged = { [weak self] in self?.updateCase() }
         hostContent.addSubview(caseView)
         // `TR-43`: ряд команд меняет высоту шкатулки.
         hostContent.addSubview(casePanel)
@@ -281,16 +275,11 @@ final class ThumbnailManager {
         let live = { (view: NSView) -> NSRect? in
             !view.isHidden && view.alphaValue > 0.01 ? view.frame : nil
         }
-        var island = trayIslandRects(cardRects: rects,
-                                     caseRect: live(caseView),
-                                     panelRect: live(casePanel))
-        // Окно меню лежит ВНЕ хоста, и без него движение мыши с пилюли на
-        // пункт читалось бы как уход с трея: трей свернулся бы под курсором.
-        let menu = caseMenu.menuFrame
-        if !menu.isNull {
-            island.append(NSRect(origin: toLocal(menu.origin), size: menu.size))
-        }
-        return island
+        // Панель входит в остров целиком, вместе со всплывшим меню: иначе
+        // движение мыши с пилюли на пункт читается как уход с трея.
+        return trayIslandRects(cardRects: rects,
+                               caseRect: live(caseView),
+                               panelRect: live(casePanel))
     }
 
     /// Указатель над содержимым трея? Ответ решает, принимает ли полноэкранный
@@ -388,8 +377,8 @@ final class ThumbnailManager {
     private func endTrayHoverSession() {
         guard trayHoverActive else { return }
         trayHoverActive = false
-        // `TR-45`: курсор ушёл со шкатулки — меню закрывается вместе с ней.
-        hideCaseMenu()
+        // Курсор ушёл со шкатулки — меню закрывается вместе с ней.
+        casePanel.collapseCommands()
         guard collapsed, let screen = anchorScreen ?? NSScreen.main else { return }
         finishCollectionMotion()
         runTrayTransition(to: 1, on: screen)
@@ -407,68 +396,6 @@ final class ThumbnailManager {
     }
 
     /// Глобальная точка экрана → координаты хоста.
-    // MARK: меню шкатулки (`TR-45`)
-
-    /// Нажали пилюлю: меню открывается или закрывается.
-    private func toggleCaseMenu() {
-        if caseMenu.isVisible { hideCaseMenu() } else { showCaseMenu() }
-    }
-
-    private func showCaseMenu() {
-        guard !casePanel.isHidden, capturePresentationSessions.isEmpty else { return }
-        // Экранная рамка пилюли: окно меню живёт в координатах экрана.
-        let anchor = casePanel.frame.offsetBy(dx: host.frame.minX, dy: host.frame.minY)
-        // Панель стоит у дальнего от карточек края шкатулки. Меню уходит
-        // прочь от них: панель сверху – меню вверх, панель снизу – вниз.
-        let preferAbove = !TrayPosition.current.isTop
-        caseMenu.show(anchor: anchor, preferAbove: preferAbove, on: anchorScreen ?? NSScreen.main)
-        installCaseMenuClickMonitors()
-    }
-
-    private func hideCaseMenu() {
-        removeCaseMenuClickMonitors()
-        caseMenu.hide()
-    }
-
-    /// Команда меню: сначала закрыть окно, потом выполнить. Меню, оставшееся
-    /// висеть над исчезнувшей шкатулкой, – самый заметный вид рассинхрона.
-    private func runCaseCommand(_ body: (ThumbnailManager) -> Void) {
-        hideCaseMenu()
-        body(self)
-    }
-
-    /// Клик мимо меню закрывает его. Рамка пилюли исключена: иначе монитор
-    /// закрыл бы меню, а следом нажатие пилюли открыло бы его снова, и меню
-    /// стало бы незакрываемым.
-    private func installCaseMenuClickMonitors() {
-        guard caseMenuClickMonitors.isEmpty else { return }
-        let events: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
-        let global = NSEvent.addGlobalMonitorForEvents(matching: events, handler: { [weak self] _ in
-            self?.dismissCaseMenuIfPointerOutside()
-        })
-        if let global { caseMenuClickMonitors.append(global) }
-        let local = NSEvent.addLocalMonitorForEvents(matching: events, handler: { [weak self] event in
-            self?.dismissCaseMenuIfPointerOutside()
-            return event
-        })
-        if let local { caseMenuClickMonitors.append(local) }
-    }
-
-    private func removeCaseMenuClickMonitors() {
-        for monitor in caseMenuClickMonitors { NSEvent.removeMonitor(monitor) }
-        caseMenuClickMonitors.removeAll()
-    }
-
-    private func dismissCaseMenuIfPointerOutside() {
-        guard caseMenu.isVisible else { return }
-        // Координаты глобального монитора относятся к чужому окну, поэтому
-        // положение берётся у самой мыши.
-        let point = NSEvent.mouseLocation
-        let pill = casePanel.frame.offsetBy(dx: host.frame.minX, dy: host.frame.minY)
-        guard !caseMenu.menuFrame.contains(point), !pill.contains(point) else { return }
-        hideCaseMenu()
-    }
-
     private func toLocal(_ g: NSPoint) -> NSPoint {
         NSPoint(x: g.x - host.frame.minX, y: g.y - host.frame.minY)
     }
@@ -521,10 +448,8 @@ final class ThumbnailManager {
         let inserted = capturePresentationSessions.insert(sessionID).inserted
         guard inserted, capturePresentationSessions.count == 1 else { return }
         host.level = CaptureWindowLevels.protectedInterface
-        // Меню закрывается на время съёмки: иначе оно попадёт в кадр или
-        // окажется под шторкой захвата.
-        hideCaseMenu()
-        caseMenu.setElevated(true)
+        // Меню закрывается на время съёмки.
+        casePanel.collapseCommands()
         if host.isVisible { host.orderFrontRegardless() }
         refreshHostPointerRouting()
     }
@@ -533,7 +458,6 @@ final class ThumbnailManager {
         guard capturePresentationSessions.remove(sessionID) != nil,
               capturePresentationSessions.isEmpty else { return }
         host.level = Self.restingHostLevel
-        caseMenu.setElevated(false)
         if host.isVisible { host.orderFrontRegardless() }
         refreshHostPointerRouting()
     }
@@ -1320,6 +1244,7 @@ final class ThumbnailManager {
         // 26.08.2026).
         func build(panelBelow: Bool) -> TrayCaseLayout {
             trayCaseLayout(contour: contour,
+                           pillSize: casePanel.pillSize,
                            panelSize: casePanel.fittingSize,
                            side: TrayCaseView.sidePadding,
                            cardGap: ThumbStyle.gap,

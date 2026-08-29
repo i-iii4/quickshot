@@ -374,7 +374,13 @@ struct TrayCaseLayout: Equatable {
 ///   карточками ленты.
 /// - `panelBelow` – панель у нижнего края шкатулки (стопка стоит у верха).
 /// - `ceiling` – граница строки меню: выше неё шкатулка не поднимается.
+/// - `pillSize` – размер СВЁРНУТОЙ панели, одна пилюля. По нему строится
+///   подложка: открытие меню её не трогает.
+/// - `panelSize` – размер панели целиком, вместе со всплывшим меню. Панель
+///   выходит за подложку, потому что меню обязано быть вне шкатулки
+///   (`TR-45`).
 func trayCaseLayout(contour: NSRect,
+                    pillSize: NSSize,
                     panelSize: NSSize,
                     side: CGFloat,
                     cardGap: CGFloat,
@@ -383,10 +389,11 @@ func trayCaseLayout(contour: NSRect,
     // Полоса под панель: поле от края шкатулки, сама панель, зазор до
     // карточек. Раскрытое меню живёт ВНУТРИ шкатулки, и шкатулка растёт
     // ровно на него.
-    let panelBand = side + panelSize.height + cardGap
+    // Полоса подложки – по ПИЛЮЛЕ: шкатулка не растёт под открытое меню.
+    let panelBand = side + pillSize.height + cardGap
     let caseRect = NSRect(x: contour.minX - side,
                           y: contour.minY - (panelBelow ? panelBand : side),
-                          width: max(contour.width + side * 2, panelSize.width + side * 2),
+                          width: max(contour.width + side * 2, pillSize.width + side * 2),
                           height: side + contour.height + panelBand)
     let overflow = ceiling.map { max(0, caseRect.maxY - $0) } ?? 0
     // Панель крепится к КАРТОЧКАМ, а не к краю шкатулки. Кнопка стоит в том
@@ -398,11 +405,15 @@ func trayCaseLayout(contour: NSRect,
     // Ширина – по содержимому шкатулки: измеренная по своему тексту, панель
     // прижималась влево и оставляла справа дыру в 27 pt, а её подпись не была
     // выровнена с карточками.
+    // Кнопка прижата к ВЕРХУ панели (`crossAlign`), а меню всплывает под ней.
+    // Значит панель крепится верхом к месту кнопки и растёт вниз: кнопка
+    // стоит на месте, меню уходит наружу. Прижатая низом, панель уносила
+    // кнопку вверх вместе с собой (приёмка 29.08.2026).
+    let pillTop = panelBelow ? caseRect.minY + side + pillSize.height
+                             : caseRect.maxY - side
     let panelRect = NSRect(x: caseRect.minX + side,
-                           y: panelBelow
-                               ? contour.minY - cardGap - panelSize.height
-                               : contour.maxY + cardGap,
-                           width: caseRect.width - side * 2,
+                           y: pillTop - panelSize.height,
+                           width: max(caseRect.width - side * 2, panelSize.width),
                            height: panelSize.height)
     return TrayCaseLayout(caseRect: caseRect, panelRect: panelRect, overflow: overflow)
 }

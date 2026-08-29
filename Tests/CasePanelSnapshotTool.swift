@@ -17,10 +17,9 @@ struct CasePanelSnapshotTool {
         panel.setCount(5)
         shoot(panel, name: "case-pill", in: directory)
 
-        // `TR-45`: меню – отдельная поверхность своего окна, поэтому и
-        // снимается отдельно.
-        let menu = NativeCaseMenuView(frame: .zero)
-        shoot(menu, name: "case-menu", in: directory)
+        panel.frame = NSRect(origin: .zero, size: panel.fittingSize)
+        panel.debugToggleCommands()
+        shoot(panel, name: "case-pill-expanded", in: directory)
 
         // Выравнивание корня привязано к поверхности: трей обязан остаться
         // центрованным. Проверяется кадром, а не рассуждением.

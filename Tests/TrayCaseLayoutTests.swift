@@ -11,7 +11,7 @@ import Darwin
 struct TrayCaseLayoutTests {
     static func main() {
         run("case wraps the card contour", testWrapsContour)
-        run("case grows exactly by the panel", testGrowsByPanel)
+        run("case ignores the open menu", testCaseIgnoresMenu)
         run("panel stays inside the case", testPanelInside)
         run("panel hugs the far edge of the case", testPanelEdge)
         run("menu bar ceiling is measured, not forced", testCeiling)
@@ -35,7 +35,7 @@ struct TrayCaseLayoutTests {
     private static func layout(panel: NSSize = pill,
                                panelBelow: Bool = false,
                                ceiling: CGFloat? = nil) -> TrayCaseLayout {
-        trayCaseLayout(contour: contour, panelSize: panel, side: side, cardGap: cardGap,
+        trayCaseLayout(contour: contour, pillSize: pill, panelSize: panel, side: side, cardGap: cardGap,
                        panelBelow: panelBelow, ceiling: ceiling)
     }
 
@@ -54,37 +54,39 @@ struct TrayCaseLayoutTests {
                "полоса панели снизу: \(top.caseRect.minY)")
     }
 
-    /// Шкатулка растёт ровно на прирост панели – не больше и не меньше.
-    private static func testGrowsByPanel() {
+    /// Подложка НЕ меняется от того, открыто меню или нет: её строит размер
+    /// пилюли. Меню обязано быть вне шкатулки, и шкатулка о нём не знает
+    /// (`TR-45`).
+    private static func testCaseIgnoresMenu() {
         let collapsed = layout()
         let expanded = layout(panel: tallPanel)
-        let grown = expanded.caseRect.height - collapsed.caseRect.height
-        expect(grown == tallPanel.height - pill.height,
-               "прирост шкатулки обязан равняться приросту панели: \(grown)")
+        expect(collapsed.caseRect == expanded.caseRect,
+               "подложка обязана остаться прежней: \(collapsed.caseRect) → \(expanded.caseRect)")
         expect(expanded.panelRect.height == tallPanel.height,
                "панель обязана быть своего измеренного размера: \(expanded.panelRect.height)")
+        expect(expanded.panelRect.height > expanded.caseRect.height * 0.1,
+               "панель с меню обязана выходить за подложку")
     }
 
-    /// Панель целиком внутри подложки, полем `side` от края.
+    /// СВЁРНУТАЯ панель целиком внутри подложки, полем `side` от края.
+    /// Раскрытая выходит за неё – там всплывшее меню.
     private static func testPanelInside() {
         for below in [false, true] {
-            for panel in [pill, tallPanel] {
-                let result = layout(panel: panel, panelBelow: below)
-                expect(result.caseRect.contains(result.panelRect),
-                       "панель обязана быть внутри шкатулки: \(result.panelRect) в \(result.caseRect)")
-                expect(result.panelRect.minX - result.caseRect.minX == side,
-                       "поле слева: \(result.panelRect.minX - result.caseRect.minX)")
-            }
+            let result = layout(panelBelow: below)
+            expect(result.caseRect.contains(result.panelRect),
+                   "пилюля обязана быть внутри шкатулки: \(result.panelRect) в \(result.caseRect)")
+            expect(result.panelRect.minX - result.caseRect.minX == side,
+                   "поле слева: \(result.panelRect.minX - result.caseRect.minX)")
         }
     }
 
     /// Панель прижата к тому краю шкатулки, который дальше от карточек.
     private static func testPanelEdge() {
-        let bottom = layout(panel: tallPanel)
+        let bottom = layout()
         expect(bottom.caseRect.maxY - bottom.panelRect.maxY == side,
                "у нижнего угла панель сверху: \(bottom.caseRect.maxY - bottom.panelRect.maxY)")
 
-        let top = layout(panel: tallPanel, panelBelow: true)
+        let top = layout(panelBelow: true)
         expect(top.panelRect.minY - top.caseRect.minY == side,
                "у верхнего угла панель снизу: \(top.panelRect.minY - top.caseRect.minY)")
     }
@@ -92,21 +94,22 @@ struct TrayCaseLayoutTests {
     /// Упор в строку меню измеряется, но подложку не калечит: шкатулка
     /// обнимает содержимое вплотную, и сдвиг выставил бы карточки наружу.
     private static func testCeiling() {
-        let free = layout(panel: tallPanel)
+        let free = layout()
         expect(free.overflow == 0, "без потолка переполнения нет: \(free.overflow)")
 
-        let capped = layout(panel: tallPanel, ceiling: free.caseRect.maxY - 60)
+        let capped = layout(ceiling: free.caseRect.maxY - 60)
         expect(capped.overflow == 60, "переполнение обязано измеряться: \(capped.overflow)")
         expect(capped.caseRect == free.caseRect,
                "потолок не двигает подложку: \(capped.caseRect)")
         expect(capped.caseRect.contains(capped.panelRect),
-               "панель обязана остаться внутри: \(capped.panelRect)")
+               "свёрнутая панель обязана остаться внутри: \(capped.panelRect)")
     }
 
     /// Панель шире карточек расширяет шкатулку, а не вылезает из неё.
     private static func testWidePanel() {
-        let wide = NSSize(width: contour.width + 60, height: 147)
-        let result = layout(panel: wide)
+        let wide = NSSize(width: contour.width + 60, height: 40)
+        let result = trayCaseLayout(contour: contour, pillSize: wide, panelSize: wide,
+                                    side: side, cardGap: cardGap, panelBelow: false, ceiling: nil)
         expect(result.caseRect.width == wide.width + side * 2,
                "шкатулка обязана расшириться под панель: \(result.caseRect.width)")
         expect(result.caseRect.contains(result.panelRect),
@@ -128,33 +131,25 @@ struct TrayCaseLayoutTests {
     /// Карточки внутри подложки при любом упоре: подложка от потолка не
     /// двигается, и выставить их наружу больше нечем.
     private static func testCeilingKeepsCardsInside() {
-        let free = layout(panel: tallPanel)
+        let free = layout()
         for drop in [CGFloat(20), 80, 400] {
-            let capped = layout(panel: tallPanel, ceiling: free.caseRect.maxY - drop)
+            let capped = layout(ceiling: free.caseRect.maxY - drop)
             expect(capped.caseRect.contains(contour),
                    "карточки обязаны остаться внутри при упоре \(drop): \(capped.caseRect)")
             expect(capped.overflow == drop, "переполнение при упоре \(drop): \(capped.overflow)")
         }
     }
 
-    /// Край панели, обращённый к карточкам, стоит на месте: кнопка живёт
-    /// именно там, и меню растёт в другую сторону. Прижатая к краю шкатулки
-    /// панель уезжала вместе с ним, и кнопка прыгала при каждом открытии –
-    /// жалоба, с которой началась работа (приёмка 26.08.2026).
+    /// Место КНОПКИ не меняется при открытии меню: она прижата к верху панели,
+    /// панель крепится верхом к её месту и растёт вниз. Прижатая иначе, панель
+    /// уносила кнопку вместе с собой – жалоба, с которой всё началось.
     private static func testButtonStaysPut() {
-        let collapsedTop = layout()
-        let expandedTop = layout(panel: tallPanel)
-        expect(collapsedTop.panelRect.minY == expandedTop.panelRect.minY,
-               "у нижнего угла нижний край панели обязан стоять: \(collapsedTop.panelRect.minY) → \(expandedTop.panelRect.minY)")
-        expect(collapsedTop.panelRect.minY - contour.maxY == cardGap,
-               "и отстоять от карточек на зазор ленты: \(collapsedTop.panelRect.minY - contour.maxY)")
-
-        let collapsedBottom = layout(panelBelow: true)
-        let expandedBottom = layout(panel: tallPanel, panelBelow: true)
-        expect(collapsedBottom.panelRect.maxY == expandedBottom.panelRect.maxY,
-               "у верхнего угла верхний край панели обязан стоять: \(collapsedBottom.panelRect.maxY) → \(expandedBottom.panelRect.maxY)")
-        expect(contour.minY - collapsedBottom.panelRect.maxY == cardGap,
-               "и отстоять от карточек на зазор ленты: \(contour.minY - collapsedBottom.panelRect.maxY)")
+        for below in [false, true] {
+            let collapsed = layout(panelBelow: below)
+            let expanded = layout(panel: tallPanel, panelBelow: below)
+            expect(collapsed.panelRect.maxY == expanded.panelRect.maxY,
+                   "верх панели обязан стоять: \(collapsed.panelRect.maxY) → \(expanded.panelRect.maxY)")
+        }
     }
 
     private static func expect(_ condition: Bool, _ message: String) {

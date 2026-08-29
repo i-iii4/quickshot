@@ -100,6 +100,9 @@ pub const Model = struct {
     retention: Retention = .week,
     autosave: bool = true,
     high_contrast: bool = false,
+    /// Меню шкатулки раскрыто. Состояние держит модель: `dropdown-menu` –
+    /// штатная всплывающая поверхность, и открывает её вёрстка, а не Swift.
+    case_expanded: bool = false,
     reduce_motion: bool = false,
 
     pub const view_unbound = .{ "last_action", "high_contrast", "reduce_motion" };
@@ -144,12 +147,19 @@ pub const Model = struct {
         return model.surface == .thumbnail_dismiss;
     }
 
-    pub fn casePanelSurface(model: *const Model) bool {
-        return model.surface == .case_panel;
+    pub fn caseExpanded(model: *const Model) bool { return model.case_expanded; }
+
+    /// Поперечное выравнивание корня. Панель шкатулки прижимает содержимое к
+    /// верху: меню всплывает ПОД кнопкой и в поток не входит, поэтому при
+    /// центровке позиция кнопки зависит от простора, а меню уезжает за край
+    /// холста и обрезается (приёмка 24.08.2026). Остальные поверхности –
+    /// ряд контролов в одну строку, там центр верен.
+    pub fn crossAlign(model: *const Model) []const u8 {
+        return if (model.surface == .case_panel) "start" else "center";
     }
 
-    pub fn caseMenuSurface(model: *const Model) bool {
-        return model.surface == .case_menu;
+    pub fn casePanelSurface(model: *const Model) bool {
+        return model.surface == .case_panel;
     }
 
     pub fn pinnedSurface(model: *const Model) bool {
@@ -249,9 +259,6 @@ pub const Surface = enum {
     thumbnail_dismiss,
     /// Панель шкатулки (`TR-30`): пилюля со счётчиком.
     case_panel,
-    /// Меню команд шкатулки. Живёт в СВОЁМ окне: внутри одной поверхности
-    /// меню зажимается её границами и упирается в край шкатулки (`TR-45`).
-    case_menu,
     pinned,
     settings,
     annotation_toolbar,
@@ -414,6 +421,7 @@ pub const Msg = union(enum) {
     set_bubble_width: f32,
     set_actions_after: bool,
     set_surface: Surface,
+    set_case_expanded: bool,
     set_compact: bool,
     set_copied: bool,
     set_position: TrayPosition,
@@ -445,6 +453,7 @@ const command_core_width_prefix = "hub.core_width:";
 const command_bubble_width_prefix = "hub.bubble_width:";
 const command_actions_after_prefix = "hub.actions_after:";
 const command_surface_prefix = "surface:";
+const command_case_expanded_prefix = "case.expanded:";
 const command_compact_prefix = "control.compact:";
 const command_copied_prefix = "control.copied:";
 const command_position_prefix = "settings.position:";
@@ -500,10 +509,13 @@ const shell_inset: f32 = 6;
 /// теперь нечему, и белая линия в 10% лишь мутила бы заливку.
 fn mineTokens(opts: canvas.ThemeOptions) canvas.DesignTokens {
     var tokens = canvas.DesignTokens.theme(opts);
-    // Одна ступень радиуса на весь интерфейс.
+    // Радиус наших КОНТРОЛОВ – одна ступень. Ступень `lg` не трогаем: на ней
+    // сидят всплывающие поверхности дизайн-системы (`dropdown_menu`,
+    // `menu_surface`, `card`, `panel`), и подменив её, мы отбирали у штатного
+    // меню его собственный вид – оно становилось нашей квадратной плашкой
+    // (приёмка 29.08.2026).
     tokens.radius.sm = mine_radius;
     tokens.radius.md = mine_radius;
-    tokens.radius.lg = mine_radius;
     tokens.radius.xl = mine_radius;
     // Лестница поверхностей Mine, шаг L 0.03.
     tokens.colors.background = canvas.Color.rgb8(9, 9, 9); // --background oklch(0.14)
@@ -528,18 +540,6 @@ fn mineTokens(opts: canvas.ThemeOptions) canvas.DesignTokens {
 }
 
 fn designTokens(model: *const Model) canvas.DesignTokens {
-    // Меню шкатулки – ШТАТНЫЙ компонент дизайн-системы в своём окне, и берёт
-    // он штатные токены House: наши переопределения (радиус 3, палитра Mine)
-    // ломали его собственный вид – скругление, тон поверхности, тон линий.
-    // Здесь нужен компонент как есть, без правок (`TR-45`).
-    if (model.surface == .case_menu) {
-        return canvas.DesignTokens.theme(.{
-            .pack = .house,
-            .color_scheme = .dark,
-            .contrast = if (model.high_contrast) .high else .standard,
-            .reduce_motion = model.reduce_motion,
-        });
-    }
     var tokens = mineTokens(.{
         .pack = .house,
         .color_scheme = .dark,
@@ -628,8 +628,14 @@ fn update(model: *Model, msg: Msg) void {
         // `TR-45`: меню шкатулки живёт в отдельном окне, поэтому состояние
         // «открыто» держит Swift – он владеет окном. Пилюля только СООБЩАЕТ о
         // нажатии, модель ничего не переключает.
-        .case_more => model.last_action = .case_more,
-        .case_dismiss => model.last_action = .case_dismiss,
+        .case_more => {
+            model.case_expanded = !model.case_expanded;
+            model.last_action = .case_more;
+        },
+        .case_dismiss => {
+            model.case_expanded = false;
+            model.last_action = .case_dismiss;
+        },
         .tool_select => { model.tool = .select; model.last_action = .tool_select; },
         .tool_crop => { model.tool = .crop; model.last_action = .tool_crop; },
         .tool_arrow => { model.tool = .arrow; model.last_action = .tool_arrow; },
@@ -676,6 +682,7 @@ fn update(model: *Model, msg: Msg) void {
         .set_bubble_width => |width| model.bubble_width = @max(0, width),
         .set_actions_after => |actions_after| model.actions_after = actions_after,
         .set_surface => |surface| model.surface = surface,
+        .set_case_expanded => |expanded| model.case_expanded = expanded,
         .set_compact => |compact| model.compact = compact,
         .set_copied => |copied| model.copied = copied,
         .set_position => |position| model.position = position,
@@ -730,11 +737,13 @@ fn onCommand(name: []const u8) ?Msg {
         if (std.mem.eql(u8, raw, "thumbnail_dismiss")) return .{ .set_surface = .thumbnail_dismiss };
 
         if (std.mem.eql(u8, raw, "case_panel")) return .{ .set_surface = .case_panel };
-        if (std.mem.eql(u8, raw, "case_menu")) return .{ .set_surface = .case_menu };
         if (std.mem.eql(u8, raw, "pinned")) return .{ .set_surface = .pinned };
         if (std.mem.eql(u8, raw, "settings")) return .{ .set_surface = .settings };
         if (std.mem.eql(u8, raw, "annotation_toolbar")) return .{ .set_surface = .annotation_toolbar };
         return null;
+    }
+    if (std.mem.startsWith(u8, name, command_case_expanded_prefix)) {
+        return .{ .set_case_expanded = parseBool(name[command_case_expanded_prefix.len..]) orelse return null };
     }
     if (std.mem.startsWith(u8, name, command_compact_prefix)) {
         return .{ .set_compact = parseBool(name[command_compact_prefix.len..]) orelse return null };
