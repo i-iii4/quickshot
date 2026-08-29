@@ -92,12 +92,6 @@ pub const Model = struct {
     toolbar_compact: bool = false,
     /// `TR-43`: ряд команд шкатулки открыт. Свёрнутая показывает только
     /// пилюлю со счётчиком.
-    case_expanded: bool = false,
-    /// Меню шкатулки раскрывается ВВЕРХ. Панель стоит у того края шкатулки,
-    /// который дальше от карточек, и меню обязано уходить прочь от них:
-    /// у нижнего угла экрана панель сверху – меню вверх, у верхнего угла
-    /// панель снизу – меню вниз (`TR-43`).
-    case_menu_above: bool = false,
     /// Есть ли что настраивать: контролы стиля появляются только при
     /// выделенном объекте, иначе панель превращается в свалку.
     has_selection: bool = false,
@@ -154,6 +148,10 @@ pub const Model = struct {
         return model.surface == .case_panel;
     }
 
+    pub fn caseMenuSurface(model: *const Model) bool {
+        return model.surface == .case_menu;
+    }
+
     pub fn pinnedSurface(model: *const Model) bool {
         return model.surface == .pinned;
     }
@@ -182,21 +180,7 @@ pub const Model = struct {
         return std.fmt.bufPrint(&count_buffer, "{d}", .{model.count}) catch "0";
     }
 
-    pub fn caseExpanded(model: *const Model) bool { return model.case_expanded; }
-    pub fn caseMenuAbove(model: *const Model) bool { return model.case_menu_above; }
-    pub fn caseMenuBelow(model: *const Model) bool { return !model.case_menu_above; }
 
-    /// `TR-43`: поперечное выравнивание корня. Панель шкатулки прижимает
-    /// пилюлю к верху – всплывающее меню висит НИЖЕ неё и в поток раскладки
-    /// не входит, поэтому центрованная пилюля уводила меню за нижний край
-    /// поверхности, и оно ужималось. Остальные поверхности – ряд кнопок в
-    /// одну строку, там центр по-прежнему верен.
-    pub fn crossAlign(model: *const Model) []const u8 {
-        if (model.surface != .case_panel) return "center";
-        // Кнопка стоит в том конце панели, что ближе к карточкам: меню
-        // раскрывается прочь от них, и кнопка при этом не двигается.
-        return if (model.case_menu_above) "end" else "start";
-    }
 
     var count_label_buffer: [32]u8 = undefined;
 
@@ -263,8 +247,11 @@ pub const Surface = enum {
     // поверхности, иначе их не поставить в противоположные углы одним рядом.
     thumbnail_copy,
     thumbnail_dismiss,
-    /// Панель шкатулки (`TR-30`): закрыть, копировать, счётчик.
+    /// Панель шкатулки (`TR-30`): пилюля со счётчиком.
     case_panel,
+    /// Меню команд шкатулки. Живёт в СВОЁМ окне: внутри одной поверхности
+    /// меню зажимается её границами и упирается в край шкатулки (`TR-45`).
+    case_menu,
     pinned,
     settings,
     annotation_toolbar,
@@ -430,8 +417,6 @@ pub const Msg = union(enum) {
     set_compact: bool,
     set_copied: bool,
     set_position: TrayPosition,
-    set_case_expanded: bool,
-    set_case_menu_above: bool,
     set_retention: Retention,
     set_tool: AnnotationTool,
     set_can_undo: bool,
@@ -462,8 +447,6 @@ const command_actions_after_prefix = "hub.actions_after:";
 const command_surface_prefix = "surface:";
 const command_compact_prefix = "control.compact:";
 const command_copied_prefix = "control.copied:";
-const command_case_expanded_prefix = "case.expanded:";
-const command_case_menu_above_prefix = "case.menu_above:";
 const command_position_prefix = "settings.position:";
 const command_retention_prefix = "settings.retention:";
 const command_tool_prefix = "editor.tool:";
@@ -630,19 +613,11 @@ fn update(model: *Model, msg: Msg) void {
             model.last_action = .autosave_off;
         },
         .open_folder => model.last_action = .open_folder,
-        // `TR-43`: пилюля только СООБЩАЕТ о нажатии. Состояние ряда держит
-        // Swift и присылает его командой: два источника истины расходились —
-        // модель раскрывалась, а панель об этом не знала и не меняла высоту.
-        // Нажатие пилюли переключает меню здесь же: Swift синхронизирует своё
-        // состояние по тому же событию, а не отправкой команды обратно.
-        .case_more => {
-            model.case_expanded = !model.case_expanded;
-            model.last_action = .case_more;
-        },
-        .case_dismiss => {
-            model.case_expanded = false;
-            model.last_action = .case_dismiss;
-        },
+        // `TR-45`: меню шкатулки живёт в отдельном окне, поэтому состояние
+        // «открыто» держит Swift – он владеет окном. Пилюля только СООБЩАЕТ о
+        // нажатии, модель ничего не переключает.
+        .case_more => model.last_action = .case_more,
+        .case_dismiss => model.last_action = .case_dismiss,
         .tool_select => { model.tool = .select; model.last_action = .tool_select; },
         .tool_crop => { model.tool = .crop; model.last_action = .tool_crop; },
         .tool_arrow => { model.tool = .arrow; model.last_action = .tool_arrow; },
@@ -692,8 +667,6 @@ fn update(model: *Model, msg: Msg) void {
         .set_compact => |compact| model.compact = compact,
         .set_copied => |copied| model.copied = copied,
         .set_position => |position| model.position = position,
-        .set_case_expanded => |expanded| model.case_expanded = expanded,
-        .set_case_menu_above => |above| model.case_menu_above = above,
         .set_retention => |retention| model.retention = retention,
         .set_tool => |tool| model.tool = tool,
         .set_can_undo => |value| model.can_undo = value,
@@ -745,6 +718,7 @@ fn onCommand(name: []const u8) ?Msg {
         if (std.mem.eql(u8, raw, "thumbnail_dismiss")) return .{ .set_surface = .thumbnail_dismiss };
 
         if (std.mem.eql(u8, raw, "case_panel")) return .{ .set_surface = .case_panel };
+        if (std.mem.eql(u8, raw, "case_menu")) return .{ .set_surface = .case_menu };
         if (std.mem.eql(u8, raw, "pinned")) return .{ .set_surface = .pinned };
         if (std.mem.eql(u8, raw, "settings")) return .{ .set_surface = .settings };
         if (std.mem.eql(u8, raw, "annotation_toolbar")) return .{ .set_surface = .annotation_toolbar };
@@ -755,12 +729,6 @@ fn onCommand(name: []const u8) ?Msg {
     }
     if (std.mem.startsWith(u8, name, command_copied_prefix)) {
         return .{ .set_copied = parseBool(name[command_copied_prefix.len..]) orelse return null };
-    }
-    if (std.mem.startsWith(u8, name, command_case_expanded_prefix)) {
-        return .{ .set_case_expanded = parseBool(name[command_case_expanded_prefix.len..]) orelse return null };
-    }
-    if (std.mem.startsWith(u8, name, command_case_menu_above_prefix)) {
-        return .{ .set_case_menu_above = parseBool(name[command_case_menu_above_prefix.len..]) orelse return null };
     }
     if (std.mem.startsWith(u8, name, command_position_prefix)) {
         return .{ .set_position = parsePosition(name[command_position_prefix.len..]) orelse return null };

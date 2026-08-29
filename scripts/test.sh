@@ -644,6 +644,7 @@ xcrun swiftc \
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
   Sources/TrayPosition.swift \
+  Sources/CaseMenuWindow.swift \
   Sources/ThumbnailManager.swift \
   Sources/TrayGestureCore.swift \
   Sources/TrayCaseView.swift \
@@ -849,6 +850,7 @@ xcrun swiftc \
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
   Sources/TrayPosition.swift \
+  Sources/CaseMenuWindow.swift \
   Sources/ThumbnailManager.swift \
   Sources/TrayGestureCore.swift \
   Sources/TrayCaseView.swift \
@@ -936,6 +938,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
   Sources/TrayPosition.swift \
+  Sources/CaseMenuWindow.swift \
   Sources/ThumbnailManager.swift \
   Sources/TrayGestureCore.swift \
   Sources/TrayCaseView.swift \
@@ -1025,6 +1028,7 @@ if [ "${QUICKSHOT_RUN_LIVE_UI_TESTS:-0}" = "1" ]; then
   Sources/SettingsWindow.swift \
   Sources/TrayScrollModel.swift \
   Sources/TrayPosition.swift \
+  Sources/CaseMenuWindow.swift \
   Sources/ThumbnailManager.swift \
   Sources/TrayGestureCore.swift \
   Sources/TrayCaseView.swift \

@@ -19,8 +19,13 @@ struct CaseGeometrySnapshotTool {
     private static let cardSize = NSSize(width: 168, height: 108)
     /// Зазор между карточками – тот же, что в ленте (`ThumbStyle.gap`).
     private static let cardGap: CGFloat = 12
-    /// Поле вокруг шкатулки на кадре, чтобы её край был виден.
+    /// Поле вокруг шкатулки на кадре, чтобы её край был виден. С открытым
+    /// меню оно больше: меню выходит за шкатулку, и без запаса кадр обрежет
+    /// ровно то, ради чего меню и вынесли в своё окно.
     private static let margin: CGFloat = 24
+    private static let marginWithMenu: CGFloat = 150
+    /// Зазор между пилюлей и меню – тот же, что в `CaseMenuWindow`.
+    private static let menuGap: CGFloat = 6
 
     static func main() {
         NSApplication.shared.setActivationPolicy(.accessory)
@@ -48,8 +53,6 @@ struct CaseGeometrySnapshotTool {
                               tag: String? = nil, ceilingDrop: CGFloat? = nil) {
         let panel = NativeCasePanelView(frame: .zero)
         panel.setCount(cards)
-        panel.setMenuAbove(!position.isTop)
-        if expanded { panel.debugToggleCommands() }
         let panelSize = panel.fittingSize
 
         let frames = cardFrames(cards: cards, position: position)
@@ -75,13 +78,13 @@ struct CaseGeometrySnapshotTool {
                                              panelBelow: !below, ceiling: ceiling)
                 if flipped.overflow < layout.overflow { below = !below; layout = flipped }
             }
-            panel.setMenuAbove(!below)
             panel.layoutSubtreeIfNeeded()
         }
 
         // Кадр строится вокруг шкатулки: её рамка живёт в координатах экрана,
         // а рисуем мы в своём маленьком окне.
-        let canvas = layout.caseRect.union(contour).insetBy(dx: -margin, dy: -margin)
+        let pad = expanded ? marginWithMenu : margin
+        let canvas = layout.caseRect.union(contour).insetBy(dx: -pad, dy: -pad)
         let shift = NSPoint(x: -canvas.minX, y: -canvas.minY)
         let root = FlatBackdrop(frame: NSRect(origin: .zero, size: canvas.size))
         let window = NSWindow(contentRect: root.bounds, styleMask: [.borderless],
@@ -97,6 +100,21 @@ struct CaseGeometrySnapshotTool {
         }
         panel.frame = shifted(layout.panelRect, by: shift)
         root.addSubview(panel)
+
+        // `TR-45`: меню живёт в СВОЁМ окне поверх трея. В кадре оно рисуется
+        // тем же слоем поверх шкатулки, на своём месте относительно пилюли:
+        // геометрию проверяем целиком, а не по частям.
+        if expanded {
+            let menu = NativeCaseMenuView(frame: .zero)
+            let size = menu.fittingSize
+            let pill = shifted(layout.panelRect, by: shift)
+            let above = !position.isTop
+            let y = above ? pill.maxY + menuGap : pill.minY - menuGap - size.height
+            menu.frame = NSRect(x: pill.minX, y: y, width: size.width, height: size.height)
+            root.addSubview(menu)
+            menu.needsLayout = true
+            menu.layoutSubtreeIfNeeded()
+        }
         root.layoutSubtreeIfNeeded()
         panel.needsLayout = true
         panel.layoutSubtreeIfNeeded()

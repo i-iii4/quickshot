@@ -95,6 +95,7 @@ private enum NativeControlSurface: String {
     case thumbnailCopy = "thumbnail_copy"
     case thumbnailDismiss = "thumbnail_dismiss"
     case casePanel = "case_panel"
+    case caseMenu = "case_menu"
     case pinned
     case settings
     case annotationToolbar = "annotation_toolbar"
@@ -932,16 +933,11 @@ final class NativeThumbnailButtonView: NativeSurfaceHostView {
 /// Рисуется нативной поверхностью `case_panel`, фон прозрачный — подложку даёт
 /// сама шкатулка.
 final class NativeCasePanelView: NativeSurfaceHostView {
-    var onDeleteAll: (() -> Void)?
-    var onCopyAll: (() -> Void)?
-    var onSaveAll: (() -> Void)?
-    /// Ряд команд открылся или закрылся: шкатулка обязана пересчитать высоту
-    /// (`TR-43`).
-    var onExpandedChanged: (() -> Void)?
+    /// Нажата пилюля: меню открывает и закрывает шкатулка – окно принадлежит
+    /// ей (`TR-45`).
+    var onMenuRequested: (() -> Void)?
 
     private var measured = NSSize(width: 120, height: 28)
-    private var menuAbove = false
-    private(set) var isExpanded = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -949,12 +945,7 @@ final class NativeCasePanelView: NativeSurfaceHostView {
         nativeView.setSurface(.casePanel)
         nativeView.onButtonPressed = { [weak self] pressed in
             switch pressed {
-            case .caseMore: self?.toggleExpanded()
-            case .caseDismiss: self?.collapseCommands()
-            // `TR-43`: команда выполняется и сворачивает ряд.
-            case .delete: self?.collapseAndRun { self?.onDeleteAll?() }
-            case .copyAll: self?.collapseAndRun { self?.onCopyAll?() }
-            case .saveAs: self?.collapseAndRun { self?.onSaveAll?() }
+            case .caseMore: self?.onMenuRequested?()
             default: break
             }
         }
@@ -963,52 +954,6 @@ final class NativeCasePanelView: NativeSurfaceHostView {
 
     // Требование языка: подкласс со своим инициализатором обязан объявить и этот.
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    /// Клик по пилюле открывает и закрывает ряд команд (`TR-43`).
-    private func toggleExpanded() {
-        syncExpanded(!isExpanded)
-    }
-
-    /// Ряд сворачивается и выполняет команду: свёрнутое состояние —
-    /// исходное, возвращаться к нему должен сам интерфейс.
-    private func collapseAndRun(_ action: @escaping () -> Void) {
-        setExpanded(false)
-        action()
-    }
-
-    /// Свернуть ряд команд, если он открыт: уход курсора со шкатулки.
-    func collapseCommands() {
-        setExpanded(false)
-    }
-
-#if TESTING
-    /// Переключение меню без мыши: доставку клика проверяют другие наборы, а
-    /// здесь важны состояние и размеры. Идёт полным путём, с командой в
-    /// вёрстку: иначе меняется только состояние Swift, а меню не рисуется.
-    func debugToggleCommands() { setExpanded(!isExpanded) }
-
-    /// Роли и рамки всех семантических узлов: без этого не видно, какие узлы
-    /// замер отбрасывает фильтром.
-
-#endif
-
-    /// Состояние меню держит вёрстка: нажатие пилюли переключает его внутри,
-    /// а Swift лишь идёт следом – пересчитывает размер и сообщает шкатулке.
-    /// Отправка команды обратно приводила к двум источникам истины.
-    private func syncExpanded(_ expanded: Bool) {
-        guard expanded != isExpanded else { return }
-        isExpanded = expanded
-        remeasure()
-        onExpandedChanged?()
-    }
-
-    /// Принудительное сворачивание извне: курсор ушёл со шкатулки.
-    private func setExpanded(_ expanded: Bool) {
-        guard expanded != isExpanded else { return }
-        nativeView.setSurface(.casePanel)
-        nativeView.sendCaseExpanded(expanded)
-        syncExpanded(expanded)
-    }
 
     func setCount(_ count: Int) {
         guard count != lastCount else { return }
@@ -1026,45 +971,15 @@ final class NativeCasePanelView: NativeSurfaceHostView {
         remeasure()
     }
 
-    /// Меню раскрывается вверх (панель стоит у ВЕРХНЕГО края шкатулки).
-    func setMenuAbove(_ above: Bool) {
-        guard menuAbove != above else { return }
-        menuAbove = above
-        nativeView.setMenuAbove(above)
-        remeasure()
-    }
-
-    /// Замер под текущее содержимое: пилюля или пилюля с открытым меню.
+    /// Замер пилюли.
     ///
-    /// Размер берётся у самой вёрстки, а не считается по числу рядов:
-    /// арифметика давала почти двойную высоту и кнопки посреди пустоты
-    /// (приёмка 24.08.2026).
+    /// Размер берётся у самой вёрстки, а не считается арифметикой: она давала
+    /// почти двойную высоту и кнопку посреди пустоты (приёмка 24.08.2026).
+    /// Меню в замер больше не входит – оно живёт в своём окне (`TR-45`).
     private func remeasure() {
-        // Открытое меню — всплывающий слой: его пункты не попадают в список
-        // кнопок, поэтому обычный замер видит только пилюлю и высота не
-        // растёт. Пока меню открыто, размер берётся по семантике вёрстки,
-        // которая знает и о нём.
-        // Ширину задаёт пилюля, а не простор замера: при 800 подложка
-        // растягивалась на весь экран, карточка жалась к краю, а между ней и
-        // меню зияла пустота (приёмка 24.08.2026).
-        // Простор замера должен вмещать и раскрытое меню: в тесной высоте
-        // SDK ужимает его и печатает переполнение оси. На РАЗМЕР пилюли
-        // высота простора не влияет – только на её место в нём.
-        let pill = nativeView.measureButtonContentSize(
-            height: isExpanded ? Self.measurementSlack : NativeHubMetrics.height)
-        let content: NSSize
-        if isExpanded {
-            // Ширину берёт ПИЛЮЛЯ, высоту – рамка содержимого вместе с
-            // меню. Меню растягивается до простора, в котором его мерят,
-            // поэтому ширина по нему сама себя разгоняет: 152 → 172 → …
-            // и рамка панели не сходится (приёмка 24.08.2026).
-            let rect = nativeView.measureSemanticContentRect(width: pill.width + Self.rowPadding * 2)
-            content = NSSize(width: pill.width, height: rect.height)
-        } else {
-            content = pill
-        }
-        measured = NSSize(width: content.width + Self.rowPadding * 2,
-                          height: max(content.height, NativeHubMetrics.height) + Self.rowPadding * 2)
+        let pill = nativeView.measureButtonContentSize()
+        measured = NSSize(width: pill.width + Self.rowPadding * 2,
+                          height: max(pill.height, NativeHubMetrics.height) + Self.rowPadding * 2)
         invalidateIntrinsicContentSize()
         redrawAtCurrentBounds()
     }
@@ -1122,6 +1037,70 @@ final class NativeCasePanelView: NativeSurfaceHostView {
 
     #if TESTING
     #endif
+}
+
+/// Поверхность меню команд шкатулки (`TR-45`).
+///
+/// Живёт в отдельном окне (`CaseMenuWindow`), поэтому в разметке её
+/// `dropdown-menu` объявлен БЕЗ `anchor`: с ним поверхность становится
+/// плавающей и зажимается в границы холста, а здесь холст окна и есть само
+/// меню.
+final class NativeCaseMenuView: NativeSurfaceHostView {
+    var onDeleteAll: (() -> Void)?
+    var onCopyAll: (() -> Void)?
+    var onSaveAll: (() -> Void)?
+    /// Меню попросило закрыться само (`on-dismiss` в разметке).
+    var onDismiss: (() -> Void)?
+
+    private var measured = NSSize(width: 160, height: 100)
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        addSubview(nativeView)
+        nativeView.setSurface(.caseMenu)
+        nativeView.onButtonPressed = { [weak self] pressed in
+            switch pressed {
+            case .delete: self?.onDeleteAll?()
+            case .copyAll: self?.onCopyAll?()
+            case .saveAs: self?.onSaveAll?()
+            case .caseDismiss: self?.onDismiss?()
+            default: break
+            }
+        }
+        remeasure()
+    }
+
+    // Требование языка: подкласс со своим инициализатором обязан объявить и этот.
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    /// Размер меню по его содержимому. Пункты несут свою роль, отличную от
+    /// кнопки, поэтому берётся рамка семантики целиком, а не полоса кнопок.
+    private func remeasure() {
+        nativeView.setSurface(.caseMenu)
+        let rect = nativeView.measureSemanticContentRect(width: Self.measurementWidth,
+                                                         height: Self.measurementHeight)
+        measured = NSSize(width: max(rect.width, Self.minimumWidth),
+                          height: max(rect.height, NativeHubMetrics.height))
+        invalidateIntrinsicContentSize()
+    }
+
+    /// Простор замера: заведомо больше меню, чтобы SDK не ужимал его.
+    private static let measurementWidth: CGFloat = 320
+    private static let measurementHeight: CGFloat = 400
+    /// Меню не уже пилюли: узкое меню под широкой кнопкой выглядит обрубком.
+    private static let minimumWidth: CGFloat = 140
+
+    override var fittingSize: NSSize { measured }
+    override var intrinsicContentSize: NSSize { measured }
+
+    override func layout() {
+        super.layout()
+        nativeView.frame = bounds
+        nativeView.setSurface(.caseMenu)
+        nativeView.renderNow()
+    }
 }
 
 final class NativePinnedCopyButtonView: NativeSurfaceHostView {

@@ -11,6 +11,7 @@ struct NativeSurfaceBehaviorTests {
         run("floating surfaces have transparent canvas gaps", testFloatingSurfaceTransparency)
         run("thumbnail controls fit, hover, and click", testThumbnailControls)
         run("case panel lays out without overlap", testCasePanelLayout)
+        run("case menu surface exposes its commands", testCaseMenuSurface)
         run("pinned copy control fits, hovers, and clicks", testPinnedControl)
         run("settings controls fit, hover, and dispatch", testSettingsControls)
 
@@ -139,62 +140,52 @@ struct NativeSurfaceBehaviorTests {
                     "Dismiss click dispatched the wrong thumbnail action")
     }
 
-    /// Панель шкатулки (`TR-43`): свёрнутая – одна пилюля со счётчиком,
-    /// раскрытая – пилюля и три команды, без наложений и целиком внутри
-    /// измеренного размера. Растянутая на всю ширину панель рисовала ряд у
-    /// левого края и сминала кнопки – приёмка 19.08.2026.
+    /// Панель шкатулки (`TR-45`): пилюля со счётчиком и НИЧЕГО больше. Меню
+    /// команд переехало в своё окно, потому что внутри поверхности оно
+    /// зажималось её границами и упиралось в край шкатулки.
     private static func testCasePanelLayout() throws {
         let panel = NativeCasePanelView(frame: .zero)
         panel.setCount(4)
         let size = panel.fittingSize
         panel.frame = NSRect(origin: .zero, size: size)
         _ = Host(view: panel, size: size)
-        // `TR-43`: свёрнутая панель показывает только пилюлю со счётчиком.
-        let collapsed = panel.debugButtons()
-        try require(collapsed.count == 1,
-                    "свёрнутая панель обязана показывать одну пилюлю: \(collapsed.map(\.title))")
-        try require(collapsed[0].identifier == "Screenshot count",
-                    "пилюля обязана быть счётчиком: \(collapsed[0].identifier)")
-        try requireContainedAndSeparated(collapsed, in: panel.bounds, context: "case pill")
 
-        // Клик по пилюле открывает ряд команд и растит панель по высоте.
-        panel.debugToggleCommands()
-        let expandedSize = panel.fittingSize
-        try require(expandedSize.height > size.height,
-                    "раскрытая панель обязана быть выше свёрнутой: \(size.height) → \(expandedSize.height)")
-        try require(expandedSize.height > size.height * 1.5,
-                    "панель обязана вместить меню: \(size.height) → \(expandedSize.height)")
+        let buttons = panel.debugButtons()
+        try require(buttons.map(\.title) == ["Screenshot count"],
+                    "панель обязана показывать одну пилюлю: \(buttons.map(\.title))")
+        try requireContainedAndSeparated(buttons, in: panel.bounds, context: "case pill")
 
-        // Меню обязано ЛОВИТЬ МЫШЬ. Пункт меню несёт свою роль, отличную от
-        // кнопки, и фильтр по одной роли кнопки оставлял его вне попадания:
-        // меню рисовалось, но не нажималось.
-        panel.frame = NSRect(origin: .zero, size: expandedSize)
-        let host = Host(view: panel, size: expandedSize)
-        // Рамка выросла – вёрстка обязана лечь в неё до того, как с неё
-        // снимают кнопки: иначе они берутся от прежнего, тесного размера.
-        // Шкатулка ставит `needsLayout` вместе с рамкой – здесь так же.
-        panel.needsLayout = true
-        panel.layoutSubtreeIfNeeded()
-        let expanded = panel.debugButtons()
-        try require(expanded.map(\.title) == ["Screenshot count", "Copy", "Download", "Clear all"],
-                    "раскрытая панель обязана отдать пилюлю и три команды: \(expanded.map(\.title))")
-        try requireContainedAndSeparated(expanded, in: panel.bounds, context: "case menu",
+        // Нажатие пилюли НЕ меняет её размера: окно меню принадлежит шкатулке,
+        // а панель о нём не знает.
+        var requested = 0
+        panel.onMenuRequested = { requested += 1 }
+        try require(panel.fittingSize == size,
+                    "размер пилюли обязан быть постоянным: \(size) → \(panel.fittingSize)")
+    }
+
+    /// Меню шкатулки как отдельная поверхность (`TR-45`): три команды, каждая
+    /// нажимается и сообщает наружу.
+    private static func testCaseMenuSurface() throws {
+        let menu = NativeCaseMenuView(frame: .zero)
+        let size = menu.fittingSize
+        menu.frame = NSRect(origin: .zero, size: size)
+        let host = Host(view: menu, size: size)
+        menu.needsLayout = true
+        menu.layoutSubtreeIfNeeded()
+
+        let items = menu.debugButtons()
+        try require(items.map(\.title) == ["Copy", "Download", "Clear all"],
+                    "меню обязано отдать три команды: \(items.map(\.title))")
+        try requireContainedAndSeparated(items, in: menu.bounds, context: "case menu",
                                          buttonRegister: false)
 
         var copied = 0
-        panel.onCopyAll = { copied += 1 }
-        guard let copyItem = expanded.first(where: { $0.title == "Copy" }) else {
+        menu.onCopyAll = { copied += 1 }
+        guard let copyItem = items.first(where: { $0.title == "Copy" }) else {
             throw Failure("пункт Copy не найден")
         }
-        host.clickDirectly(copyItem.frame, in: panel)
+        try host.click(copyItem.frame, in: menu)
         try require(copied == 1, "клик по пункту меню обязан сработать: \(copied)")
-
-        // Выбор команды сам закрывает меню: держать его открытым после
-        // выполненного действия незачем, и панель возвращается к пилюле.
-        try require(panel.fittingSize.height == size.height,
-                    "после команды панель обязана вернуться к прежней высоте: \(panel.fittingSize.height)")
-        try require(panel.debugButtons().map(\.title) == ["Screenshot count"],
-                    "после команды обязана остаться одна пилюля: \(panel.debugButtons().map(\.title))")
     }
 
     private static func testPinnedControl() throws {

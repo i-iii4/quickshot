@@ -15,13 +15,12 @@ struct CasePanelSnapshotTool {
 
         let panel = NativeCasePanelView(frame: .zero)
         panel.setCount(5)
-        shoot(panel, name: "case-panel-collapsed", in: directory)
+        shoot(panel, name: "case-pill", in: directory)
 
-        // Панель в приложении к моменту нажатия уже стоит в своей рамке.
-        // Пустая рамка – артефакт инструмента, и SDK на ней ругается.
-        panel.frame = NSRect(origin: .zero, size: panel.fittingSize)
-        panel.debugToggleCommands()
-        shoot(panel, name: "case-panel-expanded", in: directory)
+        // `TR-45`: меню – отдельная поверхность своего окна, поэтому и
+        // снимается отдельно.
+        let menu = NativeCaseMenuView(frame: .zero)
+        shoot(menu, name: "case-menu", in: directory)
 
         // Выравнивание корня привязано к поверхности: трей обязан остаться
         // центрованным. Проверяется кадром, а не рассуждением.
