@@ -1482,10 +1482,14 @@ if rg -F -q "NSVisualEffectView(" Sources/*.swift; then
 fi
 rg -F -q "fill.backgroundColor = QS.Color.surface.cgColor" Sources/TrayCaseView.swift
 rg -F -q "borderLayer.strokeColor = QS.Color.border.cgColor" Sources/TrayCaseView.swift
-# Единственный радиус проекта: скругления не расходятся по файлам.
+# Концентричные углы: внешний по окнам macOS 27, внутренний = внешний минус
+# поле между контурами. Числа живут только в `QS`, по файлам не расходятся.
+rg -F -q "static let radiusOuter: CGFloat = 16" Sources/Theme.swift
+rg -F -q "static let radiusInner: CGFloat = 12" Sources/Theme.swift
+rg -F -q "static let inset: CGFloat = 4" Sources/Theme.swift
 rg -F -q "static let radius: CGFloat = 3" Sources/Theme.swift
 if rg -n "cornerRadius = [0-9]" Sources/*.swift | rg -v "cornerRadius = 0" | rg -v "QS.radius"; then
-  echo "Radius regression: скругление задано числом мимо QS.radius." >&2
+  echo "Radius regression: скругление задано числом мимо QS." >&2
   exit 1
 fi
 

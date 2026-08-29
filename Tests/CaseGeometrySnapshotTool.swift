@@ -156,7 +156,7 @@ struct CaseGeometrySnapshotTool {
             // Заливка изображает светлый снимок; скругление и обводка – те же
             // токены, что у настоящей карточки, иначе кадр врёт о геометрии.
             layer?.backgroundColor = NSColor(calibratedWhite: 0.62, alpha: 1).cgColor
-            layer?.cornerRadius = QS.radius
+            layer?.cornerRadius = QS.radiusInner
             layer?.borderWidth = QS.hairline
             layer?.borderColor = QS.Color.border.cgColor
         }

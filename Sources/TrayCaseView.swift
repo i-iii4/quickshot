@@ -14,13 +14,13 @@ import AppKit
 /// подложкой и панелью. Порядок слоёв задаёт менеджер.
 @MainActor
 final class TrayCaseView: NSView {
-    /// Отступ подложки от карточки ПО БОКАМ. Снизу подложка идёт вровень с
-    /// карточкой, сверху место занимает панель кнопок (`TR-30`).
-    static let sidePadding: CGFloat = 8
+    /// Отступ подложки от карточки ПО БОКАМ. Он же – расстояние между внешним
+    /// и внутренним контуром, из которого выведен внутренний радиус.
+    static let sidePadding: CGFloat = QS.inset
     /// Зазор вокруг панели кнопок: между карточкой и панелью, и над панелью.
     static let panelGap: CGFloat = 8
-    /// Скругление контура шкатулки – единственный радиус проекта.
-    static let cornerRadius: CGFloat = QS.radius
+    /// Скругление контура шкатулки – внешнее, по окнам macOS 27.
+    static let cornerRadius: CGFloat = QS.radiusOuter
 
     private let fill = CALayer()
     private let borderLayer = CAShapeLayer()

@@ -23,7 +23,9 @@ struct TrayCaseLayoutTests {
     }
 
     private static let contour = NSRect(x: 400, y: 300, width: 168, height: 580)
-    private static let side: CGFloat = 8
+    /// Поле подложки вокруг содержимого – оно же расстояние между внешним
+    /// и внутренним контуром (`QS.inset`).
+    private static let side: CGFloat = 4
     private static let cardGap: CGFloat = 12
     private static let pill = NSSize(width: 140, height: 40)
     private static let withMenu = NSSize(width: 140, height: 147)

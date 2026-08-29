@@ -102,7 +102,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         super.init(frame: .zero)
 
         wantsLayer = true
-        layer?.cornerRadius = QS.radius
+        layer?.cornerRadius = QS.radiusInner
         layer?.masksToBounds = true
         // Единственная обводка проекта: 1px `--border` шкалы Mine. Она несёт
         // край карточки на светлом снимке, где белое поле кадра иначе сливается
@@ -188,7 +188,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     func layoutContents() {
         topIsCovered = false
         displayView.frame = bounds
-        layer?.cornerRadius = QS.radius
+        layer?.cornerRadius = QS.radiusInner
         layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner,
                                 .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
         layer?.borderWidth = QS.hairline
@@ -722,8 +722,8 @@ final class ThumbnailWindow {
         view.layoutContents()
         positionHandle()
         positionEditedBadge()
-        container.layer?.shadowPath = CGPath(roundedRect: view.frame, cornerWidth: QS.radius,
-                                             cornerHeight: QS.radius, transform: nil)
+        container.layer?.shadowPath = CGPath(roundedRect: view.frame, cornerWidth: QS.radiusInner,
+                                             cornerHeight: QS.radiusInner, transform: nil)
     }
 
     func setCollapsed(_ b: Bool) { view.collapsed = b }
@@ -847,7 +847,7 @@ final class ThumbnailWindow {
                                           height: cardHeight * scale),
                          vertical: vertical,
                          cardStartOffset: cardStartOffset,
-                         cornerRadius: QS.radius * scale,
+                         cornerRadius: QS.radiusInner * scale,
                          topCovered: topCovered)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -861,7 +861,7 @@ final class ThumbnailWindow {
         // её настоящих краях, срезы прямые. Прямоугольная тень с клампованным
         // радиусом обводила кромку тёмной рамкой — глаз читал её как
         // квадратную обрезку.
-        let shadowRadius = QS.radius * scale
+        let shadowRadius = QS.radiusInner * scale
         let corners: (bl: Bool, br: Bool, tl: Bool, tr: Bool) = vertical
             ? (roundsStart, roundsStart, roundsEnd, roundsEnd)
             : (roundsEnd, roundsStart, roundsEnd, roundsStart)
