@@ -102,8 +102,13 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         super.init(frame: .zero)
 
         wantsLayer = true
-        layer?.cornerRadius = QS.radiusCard
+        layer?.cornerRadius = QS.radius
         layer?.masksToBounds = true
+        // Единственная обводка проекта: 1px `--border` шкалы Mine. Она несёт
+        // край карточки на светлом снимке, где белое поле кадра иначе сливается
+        // с чем угодно под треем (приёмка 27.08.2026).
+        layer?.borderWidth = QS.hairline
+        layer?.borderColor = QS.Color.border.cgColor
 
         // Картинкой владеет сам NSImageView. Ручной `layer.contents` у этого
         // класса не живёт дольше одного прохода отрисовки: контрол рисует себя
@@ -183,11 +188,13 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     func layoutContents() {
         topIsCovered = false
         displayView.frame = bounds
-        layer?.cornerRadius = QS.radiusCard
+        layer?.cornerRadius = QS.radius
         layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner,
                                 .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        layer?.borderWidth = QS.hairline
         displayView.layer?.cornerRadius = 0
         displayView.layer?.masksToBounds = false
+        displayView.layer?.borderWidth = 0
         updateDisplayImage()
         layoutControls()
     }
@@ -238,8 +245,13 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         // изображения, радиус — в масштабе глубины.
         layer?.cornerRadius = 0
         layer?.maskedCorners = []
+        // Обводка едет вслед за радиусом: на срезанном вью она обвела бы
+        // прямоугольник вместо видимой части карточки.
+        layer?.borderWidth = 0
         displayView.layer?.cornerRadius = cornerRadius
         displayView.layer?.masksToBounds = true
+        displayView.layer?.borderWidth = QS.hairline
+        displayView.layer?.borderColor = QS.Color.border.cgColor
         updateDisplayImage()
         topIsCovered = topCovered
         layoutControls()
@@ -710,8 +722,8 @@ final class ThumbnailWindow {
         view.layoutContents()
         positionHandle()
         positionEditedBadge()
-        container.layer?.shadowPath = CGPath(roundedRect: view.frame, cornerWidth: QS.radiusCard,
-                                             cornerHeight: QS.radiusCard, transform: nil)
+        container.layer?.shadowPath = CGPath(roundedRect: view.frame, cornerWidth: QS.radius,
+                                             cornerHeight: QS.radius, transform: nil)
     }
 
     func setCollapsed(_ b: Bool) { view.collapsed = b }
@@ -835,7 +847,7 @@ final class ThumbnailWindow {
                                           height: cardHeight * scale),
                          vertical: vertical,
                          cardStartOffset: cardStartOffset,
-                         cornerRadius: QS.radiusCard * scale,
+                         cornerRadius: QS.radius * scale,
                          topCovered: topCovered)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -849,7 +861,7 @@ final class ThumbnailWindow {
         // её настоящих краях, срезы прямые. Прямоугольная тень с клампованным
         // радиусом обводила кромку тёмной рамкой — глаз читал её как
         // квадратную обрезку.
-        let shadowRadius = QS.radiusCard * scale
+        let shadowRadius = QS.radius * scale
         let corners: (bl: Bool, br: Bool, tl: Bool, tr: Bool) = vertical
             ? (roundsStart, roundsStart, roundsEnd, roundsEnd)
             : (roundsEnd, roundsStart, roundsEnd, roundsStart)

@@ -3,11 +3,12 @@ import AppKit
 /// Шкатулка (`TR-30`, `TR-31`): подложка с обводкой, в которую упакована
 /// собранная защёлкой стопка, плюс панель кнопок над карточками.
 ///
-/// Подложка — системный материал с ПИНОМ активного вида
-/// (`NSVisualEffectView`, `state = .active`): просвечивающее размытие, не
-/// зависящее от того, ключевое окно или нет. Liquid Glass здесь запрещён —
-/// его вид гаснет вне фокуса, а трей почти всегда не в фокусе (сага в DEVLOG
-/// за июнь 2026). Системное «Понизить прозрачность» материал уважает сам.
+/// Подложка — СПЛОШНАЯ заливка со ступени поверхностей Mine (`QS.Color`),
+/// без системных материалов. Псевдостекло убрано целиком (приёмка
+/// 27.08.2026): просвечивающий `NSVisualEffectView` брал тон у того, что под
+/// окном, поэтому его нельзя было согласовать ни с одним токеном — меню
+/// дизайн-системы читалось на нём вырезанной дырой. Заодно снимается вся сага
+/// с Liquid Glass и пином активного вида: гаснуть больше нечему.
 ///
 /// Карточки внутрь НЕ переносятся: они остаются сабвью хоста и лежат между
 /// подложкой и панелью. Порядок слоёв задаёт менеджер.
@@ -18,32 +19,28 @@ final class TrayCaseView: NSView {
     static let sidePadding: CGFloat = 8
     /// Зазор вокруг панели кнопок: между карточкой и панелью, и над панелью.
     static let panelGap: CGFloat = 8
-    /// Скругление контура шкатулки.
-    static let cornerRadius: CGFloat = 18
+    /// Скругление контура шкатулки – единственный радиус проекта.
+    static let cornerRadius: CGFloat = QS.radius
 
-    private let material = NSVisualEffectView(frame: .zero)
+    private let fill = CALayer()
     private let borderLayer = CAShapeLayer()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        // Тон подложки задан тем, что внутри неё живут поверхности
-        // дизайн-системы: меню там на шаг СВЕТЛЕЕ фона темы. Светлый
-        // `hudWindow` был светлее меню, и меню читалось не слоем поверх, а
-        // вырезанной дырой (приёмка 26.08.2026).
-        material.material = .underWindowBackground
-        material.blendingMode = .behindWindow
-        // Пин активного вида: без него материал гаснет, когда окно не key.
-        material.state = .active
-        material.appearance = NSAppearance(named: .darkAqua)
-        material.wantsLayer = true
-        material.layer?.cornerRadius = Self.cornerRadius
-        material.layer?.masksToBounds = true
-        addSubview(material)
+        // Сплошная заливка со ступени поверхностей Mine вместо системного
+        // материала. Псевдостекло убрано целиком: `NSVisualEffectView`
+        // просвечивал рабочий стол, и тон подложки зависел от того, что под
+        // ней, — с ним нельзя было согласовать ни один токен (приёмка
+        // 27.08.2026).
+        fill.backgroundColor = QS.Color.surface.cgColor
+        fill.cornerRadius = Self.cornerRadius
+        fill.masksToBounds = true
+        layer?.addSublayer(fill)
 
         borderLayer.fillColor = nil
-        borderLayer.strokeColor = NSColor(white: 1, alpha: 0.14).cgColor
-        borderLayer.lineWidth = 1
+        borderLayer.strokeColor = QS.Color.border.cgColor
+        borderLayer.lineWidth = QS.hairline
         layer?.addSublayer(borderLayer)
     }
 
@@ -51,12 +48,17 @@ final class TrayCaseView: NSView {
 
     override func layout() {
         super.layout()
-        material.frame = bounds
+        // Слои без обёртки анимируют смену рамки сами, и подложка тянулась бы
+        // за шкатулкой с отставанием в четверть секунды.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fill.frame = bounds
         let inset = borderLayer.lineWidth / 2
         borderLayer.path = CGPath(roundedRect: bounds.insetBy(dx: inset, dy: inset),
                                   cornerWidth: Self.cornerRadius,
                                   cornerHeight: Self.cornerRadius,
                                   transform: nil)
+        CATransaction.commit()
     }
 
     /// Подложка ловит мышь на всей своей площади: клики по шкатулке не

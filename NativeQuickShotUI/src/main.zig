@@ -500,8 +500,52 @@ pub fn mobileOptions() App.Options {
     };
 }
 
+/// Радиус всех скруглений QuickShot: одна ступень на весь интерфейс.
+/// Значение из шкалы Mine (`--radius-1`).
+const mine_radius: f32 = 3;
+
+/// Отступ оболочки панели редактора. Раньше выводился из разницы ступеней
+/// радиуса (`xl - md`), и единый радиус обнулил бы его. Отступ и скругление –
+/// разные величины, их связь была случайной (приёмка 27.08.2026).
+const shell_inset: f32 = 6;
+
+/// Токены House, приведённые к дизайн-системе Mine
+/// (`/Users/i_iii/Проекты/local-arena/src/styles/global.css`, тёмная тема).
+///
+/// Значения переведены из oklch в sRGB. Псевдостекла в QuickShot больше нет,
+/// поэтому граница – сплошной цвет, а не полупрозрачная белая: просвечивать
+/// теперь нечему, и белая линия в 10% лишь мутила бы заливку.
+fn mineTokens(opts: canvas.ThemeOptions) canvas.DesignTokens {
+    var tokens = canvas.DesignTokens.theme(opts);
+    // Одна ступень радиуса на весь интерфейс.
+    tokens.radius.sm = mine_radius;
+    tokens.radius.md = mine_radius;
+    tokens.radius.lg = mine_radius;
+    tokens.radius.xl = mine_radius;
+    // Лестница поверхностей Mine, шаг L 0.03.
+    tokens.colors.background = canvas.Color.rgb8(9, 9, 9); // --background oklch(0.14)
+    // В SDK `surface` – один токен на карточку и всплывающую поверхность. В
+    // QuickShot из них рисуется только меню шкатулки, а шкатулка под ним –
+    // это `--card` (#0F0F0F) в AppKit. Поэтому здесь ступень `--popover`
+    // oklch(0.14): в Mine всплывающая поверхность ТЕМНЕЕ карточки, и меню
+    // отделяется от подложки тоном, а не одной лишь обводкой.
+    tokens.colors.surface = canvas.Color.rgb8(9, 9, 9); // --popover oklch(0.14)
+    tokens.colors.surface_subtle = canvas.Color.rgb8(22, 22, 22); // --secondary oklch(0.2)
+    tokens.colors.disabled = canvas.Color.rgb8(22, 22, 22);
+    tokens.colors.text = canvas.Color.rgb8(250, 250, 250); // --foreground oklch(0.985)
+    tokens.colors.text_muted = canvas.Color.rgb8(154, 154, 154); // --muted-foreground oklch(0.6862)
+    // Единственная обводка проекта: 1px сплошной --border oklch(0.26).
+    tokens.colors.border = canvas.Color.rgb8(36, 36, 36);
+    tokens.colors.accent = canvas.Color.rgb8(228, 228, 228); // --primary oklch(0.9189)
+    tokens.colors.accent_text = canvas.Color.rgb8(23, 23, 23); // --primary-foreground oklch(0.205)
+    tokens.colors.focus_ring = canvas.Color.rgb8(136, 136, 136); // --ring oklch(0.6268)
+    // --destructive oklch(0.704 0.191 22.216) – совпадает со ступенью House.
+    tokens.colors.destructive = canvas.Color.rgb8(255, 100, 103);
+    return tokens;
+}
+
 fn designTokens(model: *const Model) canvas.DesignTokens {
-    var tokens = canvas.DesignTokens.theme(.{
+    var tokens = mineTokens(.{
         .pack = .house,
         .color_scheme = .dark,
         .contrast = if (model.high_contrast) .high else .standard,
@@ -516,8 +560,8 @@ fn designTokens(model: *const Model) canvas.DesignTokens {
     // состояния заданы цветом, а не альфой: непрозрачность сохранена, отклик
     // на курсор — тоже.
     if (model.surface == .thumbnail_copy) {
-        tokens.controls.button_secondary.background = canvas.Color.rgb8(38, 38, 38);
-        tokens.controls.button_secondary.hover_background = canvas.Color.rgb8(64, 64, 64);
+        tokens.controls.button_secondary.background = canvas.Color.rgb8(22, 22, 22);
+        tokens.controls.button_secondary.hover_background = canvas.Color.rgb8(36, 36, 36);
         tokens.controls.button_secondary.active_background = canvas.Color.rgb8(82, 82, 82);
         tokens.controls.button_secondary.pressed_background = canvas.Color.rgb8(82, 82, 82);
     }
@@ -526,8 +570,8 @@ fn designTokens(model: *const Model) canvas.DesignTokens {
         // иконкой. Сплошная красная заливка вместо неё превращала кнопку в
         // красный блок. Здесь тот же тихий характер, но непрозрачный: фон
         // как у копирования, красным остаётся сама иконка.
-        tokens.controls.button_destructive.background = canvas.Color.rgb8(38, 38, 38);
-        tokens.controls.button_destructive.hover_background = canvas.Color.rgb8(64, 64, 64);
+        tokens.controls.button_destructive.background = canvas.Color.rgb8(22, 22, 22);
+        tokens.controls.button_destructive.hover_background = canvas.Color.rgb8(36, 36, 36);
         tokens.controls.button_destructive.active_background = canvas.Color.rgb8(82, 82, 82);
         tokens.controls.button_destructive.pressed_background = canvas.Color.rgb8(82, 82, 82);
     }
@@ -948,7 +992,9 @@ pub export fn quickshot_native_ui_metric(raw_metric: c_int) callconv(.c) f32 {
     if (raw_metric < @intFromEnum(Metric.control_height) or
         raw_metric > @intFromEnum(Metric.reduced_animation_duration_ms)) return 0;
     const metric: Metric = @enumFromInt(raw_metric);
-    const tokens = canvas.DesignTokens.theme(.{ .pack = .house, .color_scheme = .dark });
+    // Те же токены, что у отрисовки: считая метрики из чистой темы, Swift
+    // получал бы радиус 8 там, где SDK уже рисует 3.
+    const tokens = mineTokens(.{ .pack = .house, .color_scheme = .dark });
     return switch (metric) {
         .control_height => tokens.metrics.control_height_sm,
         .control_radius => tokens.radius.md,
@@ -957,10 +1003,10 @@ pub export fn quickshot_native_ui_metric(raw_metric: c_int) callconv(.c) f32 {
         .icon_gap => tokens.metrics.button_icon_gap,
         .button_font_size => tokens.typography.button_size,
         .group_gap => tokens.spacing.sm,
-        .shell_inset => tokens.radius.xl - tokens.radius.md,
+        .shell_inset => shell_inset,
         .bubble_radius => tokens.radius.xl,
         .animation_duration_ms => @floatFromInt(tokens.motion.fast_ms),
-        .reduced_animation_duration_ms => @floatFromInt(canvas.DesignTokens.theme(.{
+        .reduced_animation_duration_ms => @floatFromInt(mineTokens(.{
             .pack = .house,
             .color_scheme = .dark,
             .reduce_motion = true,

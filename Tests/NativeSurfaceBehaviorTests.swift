@@ -26,17 +26,23 @@ struct NativeSurfaceBehaviorTests {
         }
     }
 
+    /// Метрики приходят из Native SDK, а не зашиты в Swift. Радиус и отступ
+    /// оболочки закреплены на значениях QuickShot, а не House: интерфейс
+    /// переведён на дизайн-систему Mine, где скругление одно на всё –
+    /// `--radius-1` = 3 (приёмка 27.08.2026). Отступ оболочки развязан с
+    /// радиусом: раньше он выводился как `radius.xl - radius.md`, и единый
+    /// радиус обнулил бы его.
     private static func testHouseMetrics() throws {
         let expected: [(NativeSDKMetric, CGFloat)] = [
             (.controlHeight, 28),
-            (.controlRadius, 8),
+            (.controlRadius, 3),
             (.controlInset, 10),
             (.iconSide, 16),
             (.iconGap, 6),
             (.buttonFontSize, 14),
             (.groupGap, 8),
             (.shellInset, 6),
-            (.bubbleRadius, 14),
+            (.bubbleRadius, 3),
             (.animationDurationMilliseconds, 120),
             (.reducedAnimationDurationMilliseconds, 0),
         ]
@@ -51,7 +57,11 @@ struct NativeSurfaceBehaviorTests {
         let copyView = NativeThumbnailButtonView(kind: .copy)
         _ = Host(view: copyView, size: copyView.fittingSize)
         let copyButtons = copyView.debugButtons()
-        try require(alpha(copyView.debugPixel(at: NSPoint(x: 1, y: 1))) == 0,
+        // Проба в САМОМ углу холста. Радиус скругления – 3 (`--radius-1`
+        // шкалы Mine), и при нём вырез занимает около пикселя: точка (1,1)
+        // лежит уже внутри кнопки. С прежним радиусом 8 она попадала в вырез
+        // (приёмка 27.08.2026).
+        try require(alpha(copyView.debugPixel(at: NSPoint(x: 0, y: 0))) == 0,
                     "Thumbnail canvas corner must be transparent")
         try require(alpha(copyView.debugPixel(at: center(of: copyButtons[0].frame))) > 0,
                     "Thumbnail button pixels must remain visible")
@@ -59,14 +69,14 @@ struct NativeSurfaceBehaviorTests {
         let dismissView = NativeThumbnailButtonView(kind: .dismiss)
         _ = Host(view: dismissView, size: dismissView.fittingSize)
         let dismissButtons = dismissView.debugButtons()
-        try require(alpha(dismissView.debugPixel(at: NSPoint(x: 1, y: 1))) == 0,
+        try require(alpha(dismissView.debugPixel(at: NSPoint(x: 0, y: 0))) == 0,
                     "Dismiss canvas corner must be transparent")
         try require(alpha(dismissView.debugPixel(at: center(of: dismissButtons[0].frame))) > 0,
                     "Dismiss button pixels must remain visible")
 
         let pinned = NativePinnedCopyButtonView(frame: .zero)
         _ = Host(view: pinned, size: pinned.fittingSize)
-        try require(alpha(pinned.debugPixel(at: NSPoint(x: 1, y: 1))) == 0,
+        try require(alpha(pinned.debugPixel(at: NSPoint(x: 0, y: 0))) == 0,
                     "Pinned-control canvas corner must be transparent")
         try require(alpha(pinned.debugPixel(at: center(of: pinned.debugButtons()[0].frame))) > 0,
                     "Pinned button pixels must remain visible")

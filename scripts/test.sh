@@ -1473,9 +1473,21 @@ rg -F -q "min(viewportLength, farPark + e * CGFloat(depth) + e * phase)" Sources
 # прокрутки: клик по кнопке ведёт по ступеням.
 rg -F -q "detent.settleTarget(for: scrollModel)" Sources/ThumbnailManager.swift
 
-# `TR-31`: подложка шкатулки — системный материал с пином активного вида.
-rg -F -q "NSVisualEffectView" Sources/TrayCaseView.swift
-rg -F -q "state = .active" Sources/TrayCaseView.swift
+# `TR-31`: подложка шкатулки — СПЛОШНАЯ заливка со ступени поверхностей Mine.
+# Псевдостекло убрано целиком (приёмка 27.08.2026): материал брал тон у того,
+# что под окном, и его нельзя было согласовать ни с одним токеном.
+if rg -F -q "NSVisualEffectView(" Sources/*.swift; then
+  echo "Glass regression: псевдостекло вернулось в интерфейс." >&2
+  exit 1
+fi
+rg -F -q "fill.backgroundColor = QS.Color.surface.cgColor" Sources/TrayCaseView.swift
+rg -F -q "borderLayer.strokeColor = QS.Color.border.cgColor" Sources/TrayCaseView.swift
+# Единственный радиус проекта: скругления не расходятся по файлам.
+rg -F -q "static let radius: CGFloat = 3" Sources/Theme.swift
+if rg -n "cornerRadius = [0-9]" Sources/*.swift | rg -v "cornerRadius = 0" | rg -v "QS.radius"; then
+  echo "Radius regression: скругление задано числом мимо QS.radius." >&2
+  exit 1
+fi
 
 # `TR-32` НЕ РЕАЛИЗОВАНО: шкатулка появляется мгновенно, через `isHidden`, а
 # требование описывает растекание маски из центра стопки. Проверки нет

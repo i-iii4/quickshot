@@ -140,8 +140,10 @@ struct CaseGeometrySnapshotTool {
         override init(frame frameRect: NSRect) {
             super.init(frame: frameRect)
             wantsLayer = true
-            layer?.backgroundColor = NSColor(calibratedRed: 0.18, green: 0.20,
-                                             blue: 0.24, alpha: 1).cgColor
+            // Рабочий стол под треем: нейтральный тон, отличный от палитры
+            // интерфейса, чтобы край шкатулки был виден на кадре.
+            layer?.backgroundColor = NSColor(calibratedRed: 0.28, green: 0.30,
+                                             blue: 0.34, alpha: 1).cgColor
         }
         required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     }
@@ -151,10 +153,12 @@ struct CaseGeometrySnapshotTool {
         override init(frame frameRect: NSRect) {
             super.init(frame: frameRect)
             wantsLayer = true
+            // Заливка изображает светлый снимок; скругление и обводка – те же
+            // токены, что у настоящей карточки, иначе кадр врёт о геометрии.
             layer?.backgroundColor = NSColor(calibratedWhite: 0.62, alpha: 1).cgColor
-            layer?.cornerRadius = 10
-            layer?.borderWidth = 1
-            layer?.borderColor = NSColor(calibratedWhite: 0.85, alpha: 1).cgColor
+            layer?.cornerRadius = QS.radius
+            layer?.borderWidth = QS.hairline
+            layer?.borderColor = QS.Color.border.cgColor
         }
         required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     }

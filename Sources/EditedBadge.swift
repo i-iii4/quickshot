@@ -16,7 +16,7 @@ final class EditedBadgeView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.cornerRadius = 4
+        layer?.cornerRadius = QS.radius
         layer?.backgroundColor = NSColor(srgbRed: 0.16, green: 0.17, blue: 0.19, alpha: 0.92).cgColor
         label.font = .systemFont(ofSize: 10, weight: .medium)
         label.textColor = .white

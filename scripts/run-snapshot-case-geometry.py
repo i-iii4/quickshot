@@ -18,8 +18,9 @@ block = [b for b in text.split('xcrun swiftc') if 'Tests/NativeSurfaceBehaviorTe
 files = [f for f in re.findall(r'(Sources/\S+\.swift|Tests/\S+\.swift)', block)
          if 'NativeSurfaceBehaviorTests' not in f]
 # Геометрия шкатулки живёт в этих трёх файлах; менеджер тянуть незачем.
-for extra in ['Sources/TrayScrollModel.swift', 'Sources/ThumbnailLayout.swift',
-              'Sources/TrayPosition.swift', 'Sources/TrayCaseView.swift']:
+for extra in ['Sources/Theme.swift', 'Sources/TrayScrollModel.swift',
+              'Sources/ThumbnailLayout.swift', 'Sources/TrayPosition.swift',
+              'Sources/TrayCaseView.swift']:
     if extra not in files:
         files.append(extra)
 files.append('Tests/CaseGeometrySnapshotTool.swift')
